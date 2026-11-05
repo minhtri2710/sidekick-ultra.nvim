@@ -3,9 +3,9 @@ local M = {}
 
 local BACKENDS = { "herdr", "rex" }
 
----Validate the options, register the enabled and available backends, and create `:SidekickUltra`.
----Raises an error naming the key path when the options are invalid. Calling it again first detaches every attached
----session (the detach events fire) and starts from a clean state.
+---Validate the options, register the enabled and available backends, create `:SidekickUltra` and define the default
+---keymaps. Raises an error naming the key path when the options are invalid. Calling it again first detaches every
+---attached session (the detach events fire), replaces the keymaps and starts from a clean state.
 ---@param opts? table see `sidekick_ultra.Config`
 function M.setup(opts)
   local cfg = require("sidekick-ultra.config").setup(opts)
@@ -23,6 +23,7 @@ function M.setup(opts)
     end
   end
   require("sidekick-ultra.command").setup()
+  require("sidekick-ultra.keys").setup(cfg.keys)
   require("sidekick-ultra.status").setup()
 end
 

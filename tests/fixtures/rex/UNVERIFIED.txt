@@ -1,6 +1,6 @@
-These fixtures are partly verified. The delivery-3 live run (2026-11-05, main 65ba6a5) read a private rex server with
-stub agents. The CLI reported version 0.0.1793377904-ge6592f (Rex Beta build 1696). Field names and nesting follow
-what that run printed; ids, pids, paths and the user are placeholders.
+These fixtures are partly verified. The delivery-3 live runs (2026-11-05: run 2 on main 65ba6a5, run 3 on main
+faa1286) read a private rex server with stub agents. The CLI reported version 0.0.1793377904-ge6592f (Rex Beta build
+1696). Field names and nesting follow what those runs printed; ids, pids, paths and the user are placeholders.
 
 Verified live:
   ls.json, ls_empty.json   `rex ls --json` -> .sessions[].{session_id,label}
@@ -17,6 +17,10 @@ Verified live:
                            Code block is firstmate's finding, not seen live.
   process_bad.json         a deliberately malformed reply (string pid), not a rex shape.
   status_empty.json        `rex block call ... program_status` -> {"records":[]}
+  `rex send -- TEXT` without Enter
+                           run 3 (faa1286): the driver sent text with no newline. After send, both blocks showed the
+                           text and no `got:` line; after submit, each showed exactly one `got: <text>`. So send does
+                           not press Enter.
   `whoami` and `api call server.stop` worked as the live script uses them (the backend calls neither). The `split` and
   `focus` flags from `--help` worked as the backend uses them.
 
@@ -33,7 +37,3 @@ Still unverified:
   split.json               the raw `rex split --json` reply. The live run only parsed it (start succeeded and read
                            .block_ids[0]); it was never dumped. The key holding the original block is not known and
                            is left out.
-  `rex send -- TEXT` without Enter
-                           the first run sent text with a trailing newline, which hides whether send presses Enter.
-                           The driver now sends without one and captures the screen before and after submit; the
-                           next live run settles it.

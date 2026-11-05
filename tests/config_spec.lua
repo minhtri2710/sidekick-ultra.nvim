@@ -18,9 +18,29 @@ describe("config", function()
       prompts = {},
       context = {},
       watch = true,
+      keys = { prefix = "<leader>A" },
       herdr = { enabled = true },
       rex = { enabled = true },
     })
+  end)
+
+  it("accepts keys as a prefix or false, and keeps the default prefix for an empty table", function()
+    expect.equality(config.validate({ keys = { prefix = "<leader>S" } }).keys, { prefix = "<leader>S" })
+    expect.equality(config.validate({ keys = false }).keys, false)
+    expect.equality(config.validate({ keys = {} }).keys, { prefix = "<leader>A" })
+  end)
+
+  it("rejects a bad keys option, naming keys", function()
+    expect.equality(path_of({ keys = "<leader>A" }), "keys")
+    expect.equality(path_of({ keys = true }), "keys")
+    expect.equality(path_of({ keys = { prefix = "" } }), "keys.prefix")
+    expect.equality(path_of({ keys = { prefix = 1 } }), "keys.prefix")
+    expect.equality(path_of({ keys = { prefix = false } }), "keys.prefix")
+    expect.equality(path_of({ keys = { nope = 1 } }), "keys.nope")
+    local _, err = config.validate({ keys = true })
+    expect.equality(err.msg, "keys: expected table or false, got boolean")
+    _, err = config.validate({ keys = { nope = 1 } })
+    expect.equality(err.msg:find("allowed: prefix", 1, true) ~= nil, true)
   end)
 
   it("accepts a full valid configuration", function()
@@ -82,7 +102,7 @@ describe("config", function()
 
   it("lists the allowed keys, sorted, in an unknown-key error", function()
     local _, err = config.validate({ nope = 1 })
-    expect.equality(err.msg:find("allowed: context, herdr, prompts, rex, tools, watch", 1, true) ~= nil, true)
+    expect.equality(err.msg:find("allowed: context, herdr, keys, prompts, rex, tools, watch", 1, true) ~= nil, true)
     _, err = config.validate({ rex = { nope = 1 } })
     expect.equality(err.msg:find("allowed: bin, enabled, server", 1, true) ~= nil, true)
     _, err = config.validate({ tools = { claude = { nope = 1 } } })

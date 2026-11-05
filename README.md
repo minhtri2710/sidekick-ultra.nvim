@@ -15,12 +15,13 @@ This is a standalone rewrite, not a fork. It takes its workflow and vocabulary f
 
 ```lua
 {
-  "sidekick-ultra.nvim",
+  "minhtri2710/sidekick-ultra.nvim",
+  cmd = "SidekickUltra",
   opts = {},
 }
 ```
 
-or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the options, registers every enabled backend whose binary is found, and creates `:SidekickUltra`. An invalid option raises an error that names its key path, for example `tools.claude.cmd`.
+or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the options, registers every enabled backend whose binary is found, creates `:SidekickUltra` and defines the default keymaps. An invalid option raises an error that names its key path, for example `tools.claude.cmd`.
 
 ### Options
 
@@ -28,6 +29,8 @@ or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the 
 {
   -- Reload files the agent edits while a session is attached.
   watch = true,
+  -- Default keymaps under `prefix` (see Keymaps); `false` defines none.
+  keys = { prefix = "<leader>A" },
   herdr = { enabled = true },
   rex = {
     enabled = true,
@@ -57,6 +60,34 @@ or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the 
 Tool fields: `cmd` (non-empty list), `env`, `url`, `is_proc` (Vim regex or a function of `{pid, cmd}`; the default matches the command name as a word), `mux_focus` (send a focus-in event before input), `location` (`plain`, `claude` or `escaped`: how file locations are written in sent text).
 
 Built-in tools: aider, amazon_q, claude, codex, copilot, crush, cursor, gemini, grok, opencode, pi, qwen.
+
+## Keymaps
+
+`setup()` defines these global maps under `keys.prefix` (default `<leader>A`). Each calls the Lua API. The prefix itself carries the description `+sidekick-ultra` for which-key style menus.
+
+| Keys | Modes | Does |
+|---|---|---|
+| `<leader>As` | n | `select()`: pick a session or tool |
+| `<leader>At` | n, x | `send({ msg = "{this}" })` |
+| `<leader>Af` | n | `send({ msg = "{file}" })` |
+| `<leader>Av` | x | `send({ msg = "{selection}" })` |
+| `<leader>Ap` | n, x | `prompt()`: pick a prompt |
+| `<leader>Ao` | n | `focus()` |
+| `<leader>Ad` | n | `close()`: detach (the tool keeps running) |
+
+`keys = { prefix = "<leader>S" }` moves them all. `keys = false` defines none. A second `setup()` removes the maps the first one defined, and never a map you set yourself. `prefix` must be a non-empty string, and `keys` accepts no other key.
+
+With lazy.nvim the keys exist before the plugin loads, even with only `cmd = "SidekickUltra"` and `opts = {}`:
+
+```lua
+{
+  "minhtri2710/sidekick-ultra.nvim",
+  cmd = "SidekickUltra",
+  opts = {},
+}
+```
+
+lazy.nvim reads the `lazy.lua` at the repository root when it installs or updates the plugin. It adds the same keys, from your merged `opts.keys`, as triggers without a right-hand side. Pressing one loads the plugin, `setup()` defines the real map, and lazy.nvim replays the key. `keys = false` adds no triggers.
 
 ## Commands
 
