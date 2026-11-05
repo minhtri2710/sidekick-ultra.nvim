@@ -18,7 +18,7 @@ describe("config", function()
       prompts = {},
       context = {},
       watch = true,
-      keys = { prefix = "<leader>A" },
+      keys = { prefix = "<leader>a" },
       herdr = { enabled = true },
       rex = { enabled = true },
     })
@@ -27,11 +27,11 @@ describe("config", function()
   it("accepts keys as a prefix or false, and keeps the default prefix for an empty table", function()
     expect.equality(config.validate({ keys = { prefix = "<leader>S" } }).keys, { prefix = "<leader>S" })
     expect.equality(config.validate({ keys = false }).keys, false)
-    expect.equality(config.validate({ keys = {} }).keys, { prefix = "<leader>A" })
+    expect.equality(config.validate({ keys = {} }).keys, { prefix = "<leader>a" })
   end)
 
   it("rejects a bad keys option, naming keys", function()
-    expect.equality(path_of({ keys = "<leader>A" }), "keys")
+    expect.equality(path_of({ keys = "<leader>a" }), "keys")
     expect.equality(path_of({ keys = true }), "keys")
     expect.equality(path_of({ keys = { prefix = "" } }), "keys.prefix")
     expect.equality(path_of({ keys = { prefix = 1 } }), "keys.prefix")

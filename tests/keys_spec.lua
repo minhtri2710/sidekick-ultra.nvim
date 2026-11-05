@@ -67,7 +67,7 @@ describe("keys", function()
       for _, row in ipairs(TABLE) do
         local suffix, modes, desc, action, args = unpack(row)
         for _, mode in ipairs(modes) do
-          local m = map(mode, "<leader>A" .. suffix)
+          local m = map(mode, "<leader>a" .. suffix)
           expect.equality(m.desc, desc)
           calls = {}
           m.callback()
@@ -79,10 +79,10 @@ describe("keys", function()
     it("defines the prefix with its desc and no action, and nothing else", function()
       sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
       for _, mode in ipairs({ "n", "x" }) do
-        expect.equality(map(mode, "<leader>A").desc, PREFIX_DESC)
+        expect.equality(map(mode, "<leader>a").desc, PREFIX_DESC)
       end
       calls = {}
-      map("n", "<leader>A").callback()
+      map("n", "<leader>a").callback()
       expect.equality(calls, {})
       expect.equality(#ours(), 11)
     end)
@@ -92,11 +92,11 @@ describe("keys", function()
       for _, row in ipairs(TABLE) do
         for _, mode in ipairs(row[2]) do
           expect.equality(map(mode, "<leader>S" .. row[1]).desc, row[3])
-          expect.equality(map(mode, "<leader>A" .. row[1]), {})
+          expect.equality(map(mode, "<leader>a" .. row[1]), {})
         end
       end
       expect.equality(map("n", "<leader>S").desc, PREFIX_DESC)
-      expect.equality(map("n", "<leader>A"), {})
+      expect.equality(map("n", "<leader>a"), {})
       expect.equality(#ours(), 11)
     end)
 
@@ -111,7 +111,7 @@ describe("keys", function()
       sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
       sidekick.setup({ keys = { prefix = "<leader>S" }, herdr = { enabled = false }, rex = { enabled = false } })
       expect.equality(#ours(), 11)
-      expect.equality(map("n", "<leader>As"), {})
+      expect.equality(map("n", "<leader>as"), {})
       expect.equality(map("n", "<leader>Ss").desc, "Select Session")
       expect.equality(map("n", "<leader>Zz").callback == mine, true)
       vim.keymap.del("n", "<leader>Zz")
@@ -120,17 +120,17 @@ describe("keys", function()
     it("does not delete a plugin map the user has replaced", function()
       local mine = function() end
       sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
-      vim.keymap.set("n", "<leader>As", mine, { desc = "mine" })
+      vim.keymap.set("n", "<leader>as", mine, { desc = "mine" })
       sidekick.setup({ keys = false, herdr = { enabled = false }, rex = { enabled = false } })
-      expect.equality(map("n", "<leader>As").callback == mine, true)
-      expect.equality(map("n", "<leader>At"), {})
-      vim.keymap.del("n", "<leader>As")
+      expect.equality(map("n", "<leader>as").callback == mine, true)
+      expect.equality(map("n", "<leader>at"), {})
+      vim.keymap.del("n", "<leader>as")
     end)
 
     it("keeps the previous maps when the options are invalid", function()
       sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
       expect.equality(pcall(sidekick.setup, { keys = { prefix = "" } }), false)
-      expect.equality(map("n", "<leader>As").desc, "Select Session")
+      expect.equality(map("n", "<leader>as").desc, "Select Session")
     end)
   end)
 
@@ -164,14 +164,14 @@ describe("keys", function()
     it("lists the triggers for the default prefix: lhs, mode, desc", function()
       local list = triggers({})
       expect.equality(list, {
-        { lhs = "<leader>A", mode = { "n", "x" }, desc = PREFIX_DESC },
-        { lhs = "<leader>As", mode = { "n" }, desc = "Select Session" },
-        { lhs = "<leader>At", mode = { "n", "x" }, desc = "Send This" },
-        { lhs = "<leader>Af", mode = { "n" }, desc = "Send File" },
-        { lhs = "<leader>Av", mode = { "x" }, desc = "Send Selection" },
-        { lhs = "<leader>Ap", mode = { "n", "x" }, desc = "Select Prompt" },
-        { lhs = "<leader>Ao", mode = { "n" }, desc = "Focus Session" },
-        { lhs = "<leader>Ad", mode = { "n" }, desc = "Detach Session" },
+        { lhs = "<leader>a", mode = { "n", "x" }, desc = PREFIX_DESC },
+        { lhs = "<leader>as", mode = { "n" }, desc = "Select Session" },
+        { lhs = "<leader>at", mode = { "n", "x" }, desc = "Send This" },
+        { lhs = "<leader>af", mode = { "n" }, desc = "Send File" },
+        { lhs = "<leader>av", mode = { "x" }, desc = "Send Selection" },
+        { lhs = "<leader>ap", mode = { "n", "x" }, desc = "Select Prompt" },
+        { lhs = "<leader>ao", mode = { "n" }, desc = "Focus Session" },
+        { lhs = "<leader>ad", mode = { "n" }, desc = "Detach Session" },
       })
     end)
 

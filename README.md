@@ -30,7 +30,7 @@ or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the 
   -- Reload files the agent edits while a session is attached.
   watch = true,
   -- Default keymaps under `prefix` (see Keymaps); `false` defines none.
-  keys = { prefix = "<leader>A" },
+  keys = { prefix = "<leader>a" },
   herdr = { enabled = true },
   rex = {
     enabled = true,
@@ -63,17 +63,17 @@ Built-in tools: aider, amazon_q, claude, codex, copilot, crush, cursor, gemini, 
 
 ## Keymaps
 
-`setup()` defines these global maps under `keys.prefix` (default `<leader>A`). Each calls the Lua API. The prefix itself carries the description `+sidekick-ultra` for which-key style menus.
+`setup()` defines these global maps under `keys.prefix` (default `<leader>a`). Each calls the Lua API. The prefix itself carries the description `+sidekick-ultra` for which-key style menus.
 
 | Keys | Modes | Does |
 |---|---|---|
-| `<leader>As` | n | `select()`: pick a session or tool |
-| `<leader>At` | n, x | `send({ msg = "{this}" })` |
-| `<leader>Af` | n | `send({ msg = "{file}" })` |
-| `<leader>Av` | x | `send({ msg = "{selection}" })` |
-| `<leader>Ap` | n, x | `prompt()`: pick a prompt |
-| `<leader>Ao` | n | `focus()` |
-| `<leader>Ad` | n | `close()`: detach (the tool keeps running) |
+| `<leader>as` | n | `select()`: pick a session or tool |
+| `<leader>at` | n, x | `send({ msg = "{this}" })` |
+| `<leader>af` | n | `send({ msg = "{file}" })` |
+| `<leader>av` | x | `send({ msg = "{selection}" })` |
+| `<leader>ap` | n, x | `prompt()`: pick a prompt |
+| `<leader>ao` | n | `focus()` |
+| `<leader>ad` | n | `close()`: detach (the tool keeps running) |
 
 `keys = { prefix = "<leader>S" }` moves them all. `keys = false` defines none. A second `setup()` removes the maps the first one defined, and never a map you set yourself. `prefix` must be a non-empty string, and `keys` accepts no other key.
 

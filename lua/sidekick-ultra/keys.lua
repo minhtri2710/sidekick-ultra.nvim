@@ -2,7 +2,7 @@
 ---(`triggers`). It has no top-level `require`, so `lazy.lua` can `dofile` it before the plugin is on the runtimepath.
 local M = {}
 
-M.DEFAULT_PREFIX = "<leader>A"
+M.DEFAULT_PREFIX = "<leader>a"
 
 local function api()
   return require("sidekick-ultra")
