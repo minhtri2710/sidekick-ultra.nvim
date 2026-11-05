@@ -1,5 +1,5 @@
-%0	58000	/private/tmp/sku-live-tmux/work	main	@0	0
-%1	58100	/private/tmp/sku-live-tmux/work	main	@0	0
-%2	58200	/private/tmp/sku-live-tmux/work	other	@1	0
-%3	58300	/private/tmp/sku-live-tmux/work	other	@1	1
-%4	58400	/private/tmp/sku-live-tmux/proj b	other	@2	0
+%0	58000	main	@0	0	/private/tmp/sku-live-tmux/work
+%1	58100	main	@0	0	/private/tmp/sku-live-tmux/work
+%2	58200	other	@1	0	/private/tmp/sku-live-tmux/work
+%3	58300	other	@1	1	/private/tmp/sku-live-tmux/work
+%4	58400	other	@2	0	/private/tmp/sku-live-tmux/proj b

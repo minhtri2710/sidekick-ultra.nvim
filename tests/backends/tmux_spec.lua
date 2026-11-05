@@ -10,7 +10,9 @@ local tools = require("sidekick-ultra.tools")
 local expect = MiniTest.expect
 
 local FIXTURES = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/fixtures/tmux/"
-local LIST_FORMAT = "#{pane_id}\t#{pane_pid}\t#{pane_current_path}\t#{session_name}\t#{window_id}\t#{pane_dead}"
+-- The working directory is the last field, and falls back to the start path when tmux has no current path.
+local LIST_FORMAT = "#{pane_id}\t#{pane_pid}\t#{session_name}\t#{window_id}\t#{pane_dead}\t"
+  .. "#{?pane_current_path,#{pane_current_path},#{pane_start_path}}"
 local WORK = "/private/tmp/sku-live-tmux/work"
 
 ---@param name string
@@ -107,6 +109,17 @@ describe("tmux backend", function()
     )
   end
 
+  ---Install a fake process table (replacing any earlier one); returns the visit counts.
+  ---@param table_ table
+  local function use_procs(table_)
+    if restore_procs then
+      restore_procs()
+    end
+    local restore, visits = fake_procs(table_)
+    restore_procs = restore
+    return visits
+  end
+
   before_each(function()
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
@@ -114,6 +127,8 @@ describe("tmux backend", function()
       env[var] = vim.env[var]
     end
     setup()
+    -- Every pid is unreadable unless a case installs a table: no case depends on the host's process table.
+    use_procs({})
   end)
 
   after_each(function()
@@ -136,12 +151,15 @@ describe("tmux backend", function()
     expect.equality(backend.check(tmux), true)
     expect.equality(tmux.name, "tmux")
     expect.equality(tmux.is_running, nil)
+    -- paste-buffer -S, which send needs, arrived in tmux 3.7; health warns below this.
+    expect.equality(tmux.MIN_VERSION, { 3, 7 })
   end)
 
   describe("available", function()
     it("is the tmux found on PATH, with PATH as its source", function()
       local bin = dir .. "/tmux"
-      vim.fn.writefile({ "#!/bin/sh" }, bin)
+      -- Never run (available() only looks the name up), but if it ever is, it leaves the marker minit fails on.
+      vim.fn.writefile({ "#!/bin/sh", 'echo "stub reached" >&2', ': > "$HOME/.sku-stub-reached"', "exit 97" }, bin)
       vim.uv.fs_chmod(bin, 493)
       vim.env.PATH = dir
       expect.equality({ tmux.available() }, { true, vim.fn.exepath(bin), "PATH" })
@@ -209,6 +227,7 @@ describe("tmux backend", function()
       setup({ socket = "/tmp/sku.sock" })
       rec = record({
         ["list-panes"] = fixture("list_panes_empty"),
+        ["display-message"] = "0\n",
         ["send-keys"] = "",
         ["load-buffer"] = "",
         ["paste-buffer"] = "",
@@ -222,11 +241,15 @@ describe("tmux backend", function()
       for _, argv in ipairs(rec.argvs()) do
         expect.equality(vim.list_slice(argv, 1, 3), { "tmux", "-S", "/tmp/sku.sock" })
       end
-      expect.equality(#rec.calls, 5)
+      -- list; send: mode check, load, paste; submit: mode check, send-keys; focus.
+      expect.equality(#rec.calls, 7)
     end)
 
     it("maps a non-zero exit to backend_error carrying the first stderr line", function()
-      rec = record({ ["send-keys"] = bad(fixture("stderr_missing_pane") .. "second line\n") })
+      rec = record({
+        ["display-message"] = "0\n",
+        ["send-keys"] = bad(fixture("stderr_missing_pane") .. "second line\n"),
+      })
       local res, err = tmux.submit({ pane = "%99" })
       expect.equality(res, nil)
       expect.equality(err.id, "backend_error")
@@ -261,7 +284,7 @@ describe("tmux backend", function()
 
     it("keeps live panes whose process tree runs a tool, with one list-panes call and no other command", function()
       rec = record({ ["list-panes"] = fixture("list_panes") })
-      restore_procs = fake_procs(TREE)
+      use_procs(TREE)
       local list, err = tmux.list(tools.all())
       expect.equality(err, nil)
       expect.equality(list, {
@@ -291,18 +314,9 @@ describe("tmux backend", function()
       expect.equality(#rec.calls, 1)
     end)
 
-    it("skips a dead pane even when its old process tree still matches", function()
-      rec = record({ ["list-panes"] = fixture("list_panes") })
-      restore_procs = fake_procs(TREE)
-      local ids = vim.tbl_map(function(s)
-        return s.id
-      end, tmux.list(tools.all()))
-      expect.equality(vim.tbl_contains(ids, "tmux:%3"), false)
-    end)
-
     it("lists no pane for a tool that is not configured", function()
       rec = record({ ["list-panes"] = fixture("list_panes") })
-      restore_procs = fake_procs(TREE)
+      use_procs(TREE)
       local list = tmux.list({ codex = tools.get("codex") })
       expect.equality(
         vim.tbl_map(function(s)
@@ -314,7 +328,7 @@ describe("tmux backend", function()
 
     it("walks the tree breadth-first: the shallowest tool wins over deeper ones on either side", function()
       rec = record({ ["list-panes"] = fixture("list_panes") })
-      restore_procs = fake_procs({
+      use_procs({
         [58100] = { name = "zsh", kids = { 1, 2, 3 } },
         [1] = { name = "bash", kids = { 11 } },
         [11] = { name = "node", kids = { 111 } },
@@ -330,13 +344,6 @@ describe("tmux backend", function()
       expect.equality({ list[1].tool, list[1].pid, list[1].proc_name }, { "codex", 22, "codex" })
     end)
 
-    it("matches the pane's own root process", function()
-      rec = record({ ["list-panes"] = fixture("list_panes") })
-      restore_procs = fake_procs({ [58200] = { name = "codex" } })
-      local list = tmux.list(tools.all())
-      expect.equality({ list[1].id, list[1].pid }, { "tmux:%2", 58200 })
-    end)
-
     it("reads each process once, so a cycle ends, and skips an unreadable process", function()
       rec = record({ ["list-panes"] = fixture("list_panes") })
       local procs = {
@@ -344,16 +351,15 @@ describe("tmux backend", function()
         [8] = { name = "claude", kids = { 58100 } },
       }
       local visits
-      restore_procs, visits = fake_procs(procs)
+      visits = use_procs(procs)
       local list = tmux.list(tools.all())
       expect.equality({ #list, list[1].pid }, { 1, 8 })
       expect.equality(visits[58100], 1)
       rec.restore()
       -- No tool anywhere: the walk still ends, having read each process once.
       rec = record({ ["list-panes"] = fixture("list_panes") })
-      restore_procs()
       procs[8].name = "sh"
-      restore_procs, visits = fake_procs(procs)
+      visits = use_procs(procs)
       expect.equality({ tmux.list(tools.all()) }, { {} })
       expect.equality({ visits[58100], visits[8] }, { 1, 1 })
     end)
@@ -367,7 +373,7 @@ describe("tmux backend", function()
         end,
       })
       rec = record({ ["list-panes"] = fixture("list_panes") })
-      restore_procs = fake_procs(TREE)
+      use_procs(TREE)
       local list = tmux.list({ claude = claude })
       expect.equality(
         vim.tbl_filter(function(proc)
@@ -376,6 +382,14 @@ describe("tmux backend", function()
         { { pid = 58100, cmd = "zsh" }, { pid = 58101, cmd = "claude" } }
       )
       expect.equality({ #list, list[1].pid, list[1].proc_name }, { 1, 58101, "claude" })
+    end)
+
+    it("keeps a working directory that holds a tab whole, because it is the last field", function()
+      rec = record({ ["list-panes"] = fixture("list_panes_tab_in_path") })
+      use_procs({ [58100] = { name = "claude" } })
+      local list, err = tmux.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(list[1].cwd, "/private/tmp/sku-live-tmux/a\tb")
     end)
 
     it("lists nothing for an empty server", function()
@@ -400,7 +414,7 @@ describe("tmux backend", function()
     end)
 
     it("fails closed on a row with the wrong shape", function()
-      for _, name in ipairs({ "list_panes_bad_fields", "list_panes_bad_id" }) do
+      for _, name in ipairs({ "list_panes_bad_fields", "list_panes_bad_id", "list_panes_bad_pid" }) do
         rec = record({ ["list-panes"] = fixture(name) })
         local list, err = tmux.list(tools.all())
         expect.equality({ list, err.id }, { nil, "backend_error" })
@@ -411,7 +425,7 @@ describe("tmux backend", function()
 
     it("fails when a matched pane has no working directory", function()
       rec = record({ ["list-panes"] = fixture("list_panes_no_cwd") })
-      restore_procs = fake_procs({ [58100] = { name = "claude" } })
+      use_procs({ [58100] = { name = "claude" } })
       local list, err = tmux.list(tools.all())
       expect.equality({ list, err.id }, { nil, "backend_error" })
       expect.equality(err.msg:find("%1", 1, true) ~= nil, true)
@@ -421,14 +435,14 @@ describe("tmux backend", function()
   describe("start", function()
     local OPTS_ENV = {}
 
-    ---A start whose new pane's root process is this nvim (a real pid that is not a tool).
+    ---The new pane's root process is pid 58500 (tests/fixtures/tmux/split_window.txt), a shell that is not a tool.
     local function split_route()
-      local pid = fake.self_proc()
-      return "%5\t" .. pid .. "\n"
+      return fixture("split_window")
     end
 
     before_each(function()
       vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
+      use_procs({ [58500] = { name = "sh" } })
     end)
 
     it("splits right of nvim's pane without focus, with cwd, sorted env, and the command as argv", function()
@@ -487,33 +501,36 @@ describe("tmux backend", function()
 
     it("returns a session that counts as running at once, and does not focus", function()
       rec = record({ ["split-window"] = split_route() })
-      local pid, name = fake.self_proc()
       local session = tmux.start(tools.get("claude"), { cwd = "/work/dir", env = OPTS_ENV })
       expect.equality(session, {
         id = "tmux:%5",
         backend = "tmux",
         tool = "claude",
         cwd = "/work/dir",
-        pid = pid,
-        proc_name = name,
+        pid = 58500,
+        proc_name = "sh",
         pane = "%5",
       })
+      -- registry.is_running reads the process through nvim: the record matches what nvim reports now, not later.
       expect.equality(registry.is_running(session), true)
+      use_procs({ [58500] = { name = "other" } })
+      expect.equality(registry.is_running(session), false)
       expect.equality(#rec.calls, 1)
     end)
 
     it("records the tool's own process when the tree already runs it", function()
-      rec = record({ ["split-window"] = fixture("split_window") })
-      restore_procs = fake_procs({ [58500] = { name = "zsh", kids = { 58501 } }, [58501] = { name = "claude" } })
+      rec = record({ ["split-window"] = split_route() })
+      use_procs({ [58500] = { name = "zsh", kids = { 58501 } }, [58501] = { name = "claude" } })
       local session = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
       expect.equality({ session.pid, session.proc_name }, { 58501, "claude" })
-      rec.restore()
-      -- Only the started tool counts: a codex in the tree is not this session.
-      rec = record({ ["split-window"] = fixture("split_window") })
-      restore_procs()
-      restore_procs = fake_procs({ [58500] = { name = "codex" } })
-      session = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
-      expect.equality({ session.pid, session.proc_name }, { 58500, "codex" })
+    end)
+
+    it("records the pane's root process, not another tool's, when the started tool is not up yet", function()
+      rec = record({ ["split-window"] = split_route() })
+      -- A codex below the shell is not this claude session: only the started tool counts.
+      use_procs({ [58500] = { name = "zsh", kids = { 58501 } }, [58501] = { name = "codex" } })
+      local session = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+      expect.equality({ session.pid, session.proc_name }, { 58500, "zsh" })
     end)
 
     it("returns the tmux error and creates nothing else when split-window fails", function()
@@ -523,14 +540,25 @@ describe("tmux backend", function()
       expect.equality(#rec.calls, 1)
     end)
 
-    it("fails when tmux prints no pane id", function()
-      rec = record({ ["split-window"] = "\n" })
-      local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
-      expect.equality({ session, err.id }, { nil, "backend_error" })
+    it("takes the id and pid from the printed line, with or without its final newline", function()
+      rec = record({ ["split-window"] = "%5\t58500" })
+      local session = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+      expect.equality({ session.id, session.pid }, { "tmux:%5", 58500 })
+    end)
+
+    it("fails when tmux prints no pane id, or more than one line", function()
+      for _, out in ipairs({ "\n", "%5\n", "%5\t58500 extra\n", "%5\t58500\n%6\t58600\n", "5\t58500\n", "x%5\t58500\n" }) do
+        rec = record({ ["split-window"] = out })
+        local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+        expect.equality({ session, err.id }, { nil, "backend_error" })
+        rec.restore()
+      end
+      rec = nil
     end)
 
     it("fails, naming the pane left open, when its process is not visible to this nvim", function()
-      rec = record({ ["split-window"] = "%5\t" .. (2 ^ 22 + 12345) .. "\n" })
+      rec = record({ ["split-window"] = split_route() })
+      use_procs({})
       local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
       expect.equality({ session, err.id }, { nil, "backend_error" })
       expect.equality(err.msg:find("%5", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
@@ -539,52 +567,89 @@ describe("tmux backend", function()
 
   describe("send", function()
     it(
-      "loads the text from stdin into a named buffer, then pastes it raw into the pane and deletes the buffer",
+      "checks the pane's mode, loads the text from stdin into a named buffer, pastes it raw and deletes the buffer",
       function()
-        rec = record({ ["load-buffer"] = "", ["paste-buffer"] = "" })
+        rec = record({ ["display-message"] = "0\n", ["load-buffer"] = "", ["paste-buffer"] = "" })
         local text = "line one\nline two\n  indented"
         expect.equality(tmux.send({ pane = "%2" }, text), true)
-        local load, paste = rec.argvs()[1], rec.argvs()[2]
+        local mode, load, paste = rec.argvs()[1], rec.argvs()[2], rec.argvs()[3]
         local buffer = load[4]
         expect.equality(buffer:match("^sku%-%d+%-%d+$") ~= nil, true)
+        expect.equality(mode, { "tmux", "display-message", "-p", "-t", "%2", "#{pane_in_mode}" })
         expect.equality(load, { "tmux", "load-buffer", "-b", buffer, "-" })
-        expect.equality(paste, { "tmux", "paste-buffer", "-b", buffer, "-d", "-r", "-t", "%2" })
-        expect.equality(rec.calls[1].opts.stdin, text)
-        expect.equality(#rec.calls, 2)
+        expect.equality(paste, { "tmux", "paste-buffer", "-b", buffer, "-d", "-r", "-S", "-t", "%2" })
+        expect.equality(rec.calls[2].opts.stdin, text)
+        -- Nothing else: no copy-mode call for a pane in no mode, and no key, so no Enter.
+        expect.equality(#rec.calls, 3)
       end
     )
 
-    it("presses no Enter and sends no key", function()
-      rec = record({ ["load-buffer"] = "", ["paste-buffer"] = "" })
-      tmux.send({ pane = "%2" }, "hi")
-      for _, argv in ipairs(rec.argvs()) do
-        expect.equality(vim.tbl_contains(argv, "send-keys"), false)
-        expect.equality(vim.tbl_contains(argv, "Enter"), false)
+    it("leaves copy mode (or any mode) before it loads and pastes", function()
+      for _, count in ipairs({ "1\n", "2\n" }) do
+        rec = record({
+          ["display-message"] = count,
+          ["copy-mode"] = "",
+          ["load-buffer"] = "",
+          ["paste-buffer"] = "",
+        })
+        expect.equality(tmux.send({ pane = "%2" }, "x"), true)
+        local subs = vim.tbl_map(function(argv)
+          return argv[2]
+        end, rec.argvs())
+        expect.equality(subs, { "display-message", "copy-mode", "load-buffer", "paste-buffer" })
+        expect.equality(rec.argvs()[2], { "tmux", "copy-mode", "-q", "-t", "%2" })
+        rec.restore()
       end
+      rec = nil
+    end)
+
+    it("sends nothing when the mode cannot be read or left", function()
+      for _, routes in ipairs({
+        { ["display-message"] = bad(fixture("stderr_missing_pane")) },
+        { ["display-message"] = "\n" },
+        { ["display-message"] = "yes\n" },
+        { ["display-message"] = "1\n", ["copy-mode"] = bad("pane is busy\n") },
+      }) do
+        rec = record(routes)
+        local res, err = tmux.send({ pane = "%2" }, "x")
+        expect.equality({ res, err.id }, { nil, "backend_error" })
+        expect.equality(
+          vim.tbl_contains(
+            vim.tbl_map(function(argv)
+              return argv[2]
+            end, rec.argvs()),
+            "load-buffer"
+          ),
+          false
+        )
+        rec.restore()
+      end
+      rec = nil
     end)
 
     it("uses a different buffer for each send", function()
-      rec = record({ ["load-buffer"] = "", ["paste-buffer"] = "" })
+      rec = record({ ["display-message"] = "0\n", ["load-buffer"] = "", ["paste-buffer"] = "" })
       tmux.send({ pane = "%2" }, "a")
       tmux.send({ pane = "%2" }, "b")
-      expect.no_equality(rec.argvs()[1][4], rec.argvs()[3][4])
+      expect.no_equality(rec.argvs()[2][4], rec.argvs()[5][4])
     end)
 
-    it("sends nothing for an empty text", function()
+    it("sends nothing for an empty text, not even the mode check", function()
       rec = record({})
       expect.equality(tmux.send({ pane = "%2" }, ""), true)
       expect.equality(rec.calls, {})
     end)
 
     it("stops when the buffer cannot be loaded, without pasting", function()
-      rec = record({ ["load-buffer"] = bad("no server running\n") })
+      rec = record({ ["display-message"] = "0\n", ["load-buffer"] = bad("no server running\n") })
       local res, err = tmux.send({ pane = "%2" }, "x")
       expect.equality({ res, err.id, err.cmd }, { nil, "backend_error", "load-buffer" })
-      expect.equality(#rec.calls, 1)
+      expect.equality(#rec.calls, 2)
     end)
 
     it("deletes the buffer and reports the pane error when the paste fails", function()
       rec = record({
+        ["display-message"] = "0\n",
         ["load-buffer"] = "",
         ["paste-buffer"] = bad(fixture("stderr_missing_pane")),
         ["delete-buffer"] = "",
@@ -592,16 +657,52 @@ describe("tmux backend", function()
       local res, err = tmux.send({ pane = "%99" }, "x")
       expect.equality({ res, err.id, err.cmd }, { nil, "backend_error", "paste-buffer" })
       expect.equality(err.msg, "tmux exited with 1: can't find pane: %99")
-      local buffer = rec.argvs()[1][4]
-      expect.equality(rec.argvs()[3], { "tmux", "delete-buffer", "-b", buffer })
+      local buffer = rec.argvs()[2][4]
+      expect.equality(rec.argvs()[4], { "tmux", "delete-buffer", "-b", buffer })
     end)
   end)
 
   describe("submit", function()
-    it("sends Enter to the pane", function()
-      rec = record({ ["send-keys"] = "" })
+    it("checks the pane's mode, then sends Enter to the pane", function()
+      rec = record({ ["display-message"] = "0\n", ["send-keys"] = "" })
       expect.equality(tmux.submit({ pane = "%2" }), true)
-      expect.equality(rec.argvs(), { { "tmux", "send-keys", "-t", "%2", "Enter" } })
+      expect.equality(rec.argvs(), {
+        { "tmux", "display-message", "-p", "-t", "%2", "#{pane_in_mode}" },
+        { "tmux", "send-keys", "-t", "%2", "Enter" },
+      })
+    end)
+
+    it("leaves copy mode before Enter, because in a mode Enter would go to the mode", function()
+      rec = record({ ["display-message"] = "1\n", ["copy-mode"] = "", ["send-keys"] = "" })
+      expect.equality(tmux.submit({ pane = "%2" }), true)
+      expect.equality(rec.argvs(), {
+        { "tmux", "display-message", "-p", "-t", "%2", "#{pane_in_mode}" },
+        { "tmux", "copy-mode", "-q", "-t", "%2" },
+        { "tmux", "send-keys", "-t", "%2", "Enter" },
+      })
+    end)
+
+    it("presses no Enter when the mode cannot be read or left", function()
+      for _, routes in ipairs({
+        { ["display-message"] = bad(fixture("stderr_missing_pane")) },
+        { ["display-message"] = "?\n" },
+        { ["display-message"] = "1\n", ["copy-mode"] = bad("pane is busy\n") },
+      }) do
+        rec = record(routes)
+        local res, err = tmux.submit({ pane = "%2" })
+        expect.equality({ res, err.id }, { nil, "backend_error" })
+        expect.equality(
+          vim.tbl_contains(
+            vim.tbl_map(function(argv)
+              return argv[2]
+            end, rec.argvs()),
+            "send-keys"
+          ),
+          false
+        )
+        rec.restore()
+      end
+      rec = nil
     end)
   end)
 

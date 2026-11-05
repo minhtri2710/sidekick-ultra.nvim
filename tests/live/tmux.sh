@@ -75,9 +75,11 @@ cleanup() {
   status=$?
   trap - EXIT INT TERM
   if [ "$CREATED" = 1 ]; then
+    # The server exists from the first new-session, before SERVER_PID is recorded, so ask it to exit whenever the root
+    # was made. With no server this only prints an error. The recorded pid is the fallback.
+    tm kill-server 2>/dev/null || true
+    sleep 1
     if [ -n "$SERVER_PID" ]; then
-      tm kill-server 2>/dev/null || true
-      sleep 1
       if kill -0 "$SERVER_PID" 2>/dev/null; then
         say kill "$SERVER_PID"
         kill "$SERVER_PID" 2>/dev/null || true
@@ -245,6 +247,43 @@ local function run()
 
     ok, err = backend.send(claude, "")
     check("an empty send is a no-op", ok == true, err)
+
+    -- A pane scrolled back into copy mode takes keys and pastes for the mode, not for the program: send and submit
+    -- must leave the mode first. Enter the mode before each call, so each path is checked on its own.
+    local _, mode_code = tmux("copy-mode", "-t", claude_pane)
+    check("the claude pane enters copy mode", mode_code == 0 and format(claude_pane, "#{pane_in_mode}") == "1", mode_code)
+    ok, err = backend.send(claude, "mode-live")
+    check("send succeeds on a pane in copy mode", ok == true, err)
+    vim.wait(800)
+    check("send left copy mode", format(claude_pane, "#{pane_in_mode}") == "0", format(claude_pane, "#{pane_in_mode}"))
+    check("the text reaches the program once", count(claude_pane, "mode-live") == 1, screen(claude_pane))
+    _, mode_code = tmux("copy-mode", "-t", claude_pane)
+    check("the claude pane enters copy mode again", mode_code == 0 and format(claude_pane, "#{pane_in_mode}") == "1", mode_code)
+    ok, err = backend.submit(claude)
+    check("submit succeeds on a pane in copy mode", ok == true, err)
+    vim.wait(800)
+    check("submit left copy mode", format(claude_pane, "#{pane_in_mode}") == "0", format(claude_pane, "#{pane_in_mode}"))
+    check("the line is echoed by the program", count(claude_pane, "mode-live") == 2, screen(claude_pane))
+    check("no paste buffer is left after the mode checks", tmux("list-buffers") == "", tmux("list-buffers"))
+
+    -- Raw bytes: tmux 3.7+ passes a pasted buffer through vis(3) unless paste-buffer has -S, which turns an ESC byte
+    -- into visible characters (\033 or \^[). The text holds ESC [ 0 m (an SGR reset: harmless) between two printable
+    -- markers. The pane's tty echoes a raw ESC as "^[" (echoctl); vis text would be echoed with a backslash. After
+    -- Enter, cat prints the line back: a raw ESC [ 0 m is a complete sequence that the terminal consumes, so the markers touch;
+    -- vis text would be printed as visible characters.
+    ok, err = backend.send(claude, "esc-live-\27[0m-end")
+    check("send of a text with an ESC byte succeeds", ok == true, err)
+    vim.wait(800)
+    check("the tty echoes the ESC byte as ^[", count(claude_pane, "esc-live-^[[0m-end") == 1, screen(claude_pane))
+    check("no vis-escaped ESC reached the program", screen(claude_pane):find("esc-live-\\", 1, true) == nil, screen(claude_pane))
+    ok, err = backend.submit(claude)
+    check("submit of the ESC line succeeds", ok == true, err)
+    vim.wait(800)
+    check(
+      "the program printed the raw ESC sequence (consumed by the terminal)",
+      count(claude_pane, "esc-live--end") == 1 and count(claude_pane, "esc-live-^[[0m-end") == 1,
+      screen(claude_pane)
+    )
 
     local gone = vim.tbl_extend("force", claude, { pane = "%999", id = "tmux:%999" })
     ok, err = backend.send(gone, "nope-live")

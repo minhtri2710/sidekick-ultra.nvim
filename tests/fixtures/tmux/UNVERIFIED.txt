@@ -14,24 +14,46 @@ What the probe saw (and the fixtures copy):
                             made %1 the active pane.
   a bare `tmux` inside a pane reached that pane's server.
 
-Not seen by the probe; the live run (tests/live/tmux.sh) must settle:
-  list_panes.txt            the probe listed with a different format string (`#{pane_id} #{pane_pid} ... #{pane_dead}`
-                            order and fields differed). This six-field row with `#{session_name}` and `#{window_id}`
-                            is the backend's own format and has not been printed by a real tmux. The format separates
-                            fields with a real TAB character, not the two characters backslash-t.
+Settled by the live run at 24c6bd1 (reviews/d8-tmux-24c6bd1.log, 42 checks passed, private server, symlinked /bin/cat
+stubs named claude and codex):
   stub agents through the process-tree walk
-                            the probe ran `cat` and `sleep`, never an AI CLI. Whether `nvim_get_proc(pid).name` is
-                            "claude" / "codex" for a stub, and whether the stub sits at depth 0 (argv command) or
-                            below a shell (typed command), is not confirmed. Real Claude Code (a version string as
-                            name on rex) is not covered.
-  stderr_no_server.txt, stderr_no_socket.txt
-                            the text and exit code of `list-panes -a` with no server running. The probe never
-                            stopped its server before listing. The backend treats exit != 0 with a first stderr line
-                            of `no server running ...` or `error connecting to ... (No such file or directory)` as an
-                            empty list; any other failure is a backend_error.
+                            discovery found the stub claude typed into a shell (depth 1) and the stub codex as the
+                            pane's own process in a second session (depth 0); nvim_get_proc reported "claude" and
+                            "codex" for the symlinks. A real AI CLI was not run, so what nvim reads as the name of
+                            Claude Code, or of a tool installed as a node script, is still not confirmed.
+  stderr_missing_pane.txt   `tmux exited with 1: can't find pane: %999` for a paste to a missing pane, as the probe saw.
+  no server                 `list-panes -a` against a socket path with no server returned an empty list and notified
+                            nothing. The log does not record which of the two accepted first stderr lines tmux
+                            printed. stderr_no_server.txt (`no server running on ...`, a socket nobody answers) and
+                            stderr_no_socket.txt (`error connecting to ... (No such file or directory)`) are both
+                            hand-written; the first has not been seen from a real tmux.
+  paste buffers             none were left in the server after a send, or after a failed paste.
+  start                     split-window printed the id and pid; the new pane sat in nvim's window and was focused
+                            afterwards (D7); the one-element command ran through the shell as a quoted word.
+
+Not settled; a live run must still show:
+  list_panes.txt            the field order and the working-directory fallback. The live run above used the earlier
+                            order (pane id, pid, current path, session, window, dead). The current format is
+                            pane id, pane pid, session name, window id, dead flag, then the working directory LAST as
+                            `#{?pane_current_path,#{pane_current_path},#{pane_start_path}}` (the start path when tmux
+                            cannot read the current one), so a path that holds a tab stays whole. Fields are
+                            separated by a real TAB character. This format has not been run against a real tmux.
   display_session.txt       `display-message -p -t $TMUX_PANE '#{session_name}'` output, and `switch-client -t %N`
-                            from a pane in another session. The probe checked focus only inside one session.
-  the one-element command shell-escaped (`'claude'`)
-                            only `sleep` ran through `sh -c` in the probe.
-  buffer names `sku-<pid>-<n>`
-                            the probe used a fixed buffer name.
+                            from a pane in another session. No client is attached to the private server, so the live
+                            run logged UNVERIFIABLE; the probe checked focus only inside one session.
+  a pane in copy mode       `send` and `submit` first read `#{pane_in_mode}` (display-message -p -t %N) and run
+                            `copy-mode -q -t %N` only when it is above zero, because in a mode keys and pastes go to the
+                            mode (Enter would end copy mode and never reach the tool). The man page does not say
+                            whether `copy-mode -q` is harmless on a pane in no mode, so it is never run then. The live
+                            script checks, on the stub claude pane, that after `copy-mode -t %N` the mode count is 1,
+                            that send and submit succeed, leave the mode (count 0) and deliver the text and then the
+                            echoed line. Not yet run against a real tmux; how `paste-buffer` behaves in a mode, which
+                            is why the mode is left first, is not observed either.
+  control characters in a paste
+                            tmux 3.7 made `paste-buffer` pass the buffer through vis(3) unless `-S` is given (CHANGES FROM
+                            3.6b TO 3.7, in the 3.8 install's CHANGES; the man page repeats it). The backend passes `-S`,
+                            so tmux 3.7 is the floor (README, `MIN_VERSION`, health warning). The probe pasted only
+                            printable text and LF. The live script now sends `esc-live-<ESC>[0m-end`: a raw ESC is
+                            echoed by the pane's tty as `^[` (echoctl) and, after Enter, printed by cat as an SGR reset
+                            the terminal consumes (`esc-live--end`); vis text would show a backslash form. Not yet run
+                            against a real tmux, so ECHOCTL on the pane's tty and the exact screen text are assumed.

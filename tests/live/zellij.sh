@@ -3,11 +3,13 @@
 # Written, not run, by the D8 Engineer. The Lead sends this recipe to the Supervisor before the first run.
 #
 # What it does: creates a background zellij session under the literal root /tmp/sku-live-zellij (own HOME, XDG dirs,
-# config dir, data dir and ZELLIJ_SOCKET_DIR), adds three stub-agent panes (claude, codex, and a claude that exits on
-# `Q`), and drives headless nvim with the plugin:
+# config dir, data dir and ZELLIJ_SOCKET_DIR), adds stub-agent panes (claude, codex, a claude that exits on its first
+# byte, and a /bin/sh pane that has the claude stub typed into it), and drives headless nvim with the plugin:
 #   outside the mux: discover, attach, send (no Enter), submit, focus, the gone-pane guard, the not_in_mux start refusal;
 #   inside the mux (nvim typed into the session's first pane): inside(), discover, start through registry.start (the new
-#                    pane is focused per D7, with a tool env), running at once, rediscovery, send, submit.
+#                    pane is focused per D7, beside nvim's pane and in its tab, with a tool env), running within 3 s,
+#                    rediscovery, send, submit. The call of `new-pane` is observed: exit code, stdout, stderr first line,
+#                    time and pane counts before and after (never a command line).
 # Then it tears everything down: `kill-session` of the one session it made, and `rm -rf` of the root.
 #
 # It never lists or touches another session: every zellij call runs under `env -i` with ZELLIJ_SOCKET_DIR under the
@@ -97,30 +99,28 @@ mkdir "$R/bin" "$R/home" "$R/tmp" "$R/work" "$R/out" "$R/sock" "$R/config" "$R/d
 ln -s "$ZBIN" "$R/bin/zellij"
 printf 'show_startup_tips false\nshow_release_notes false\n' >"$R/config/config.kdl"
 
-# Stub agent CLIs. The backend identifies a tool from the first word of the pane's command line, so each stub re-execs
-# bash under its own name with `exec -a`. The stub puts its tty in raw mode and appends every byte it receives to
-# $R/out/<name>-<pane number>.bytes, so a spec can tell text from Enter (CR). `Q` makes it exit. SKU_LIVE_ENV is written
-# to <name>-<pane number>.env, to show that a tool env reaches the process.
-make_stub() { # <name>
+# Stub agent CLIs. The backend identifies a tool from the first word of the pane's command line, so each stub ends in
+# `exec -a <name> /bin/dd`: the process is dd, named <name>. dd is the byte recorder of the probe (raw tty, bs=1): it
+# appends every byte it receives to $R/out/<name>-<pane number>.bytes exactly as the tty delivers it, so a check can tell
+# text from Enter (CR). bash's own `read` is not used, because it puts the tty in a mode that turns CR into LF. SKU_LIVE_ENV
+# is written to <name>-<pane number>.env first, to show that a tool env reaches the process. The `gone` stub is the same
+# but dd stops after its first byte, which ends the pane (the shell sends `Q`).
+make_stub() { # <file> <argv0> <dd arguments>
   cat >"$R/bin/$1" <<EOF
 #!/bin/bash
-if [ "\${SKU_STUB:-}" != "$1" ]; then
-  SKU_STUB=$1 exec -a $1 /bin/bash "\$0" "\$@"
-fi
-base="$R/out/$1-\${ZELLIJ_PANE_ID:-x}"
+base="$R/out/$2-\${ZELLIJ_PANE_ID:-x}"
 printf '%s' "\${SKU_LIVE_ENV:-unset}" >"\$base.env"
-: >"\$base.bytes"
 stty raw -echo 2>/dev/null
-echo "SKU-STUB $1 ready"
-while IFS= read -r -n1 c; do
-  printf '%s' "\$c" >>"\$base.bytes"
-  [ "\$c" = Q ] && exit 0
-done
+echo "SKU-STUB $2 ready"
+exec -a $2 /bin/dd bs=1 $3 2>/dev/null
 EOF
   chmod +x "$R/bin/$1"
 }
-make_stub claude
-make_stub codex
+# shellcheck disable=SC2016
+make_stub claude claude 'of="$base.bytes"'
+# shellcheck disable=SC2016
+make_stub codex codex 'of="$base.bytes"'
+make_stub gone claude 'count=1 of=/dev/null'
 
 # Stub preflight: under the exact isolated PATH, claude and codex must resolve to the files written above. Nothing is
 # executed. `registry.start` runs the bare name `claude`, so a missing stub would run a real CLI.
@@ -156,7 +156,7 @@ EOF
 
 cat >"$R/drive.lua" <<'EOF'
 -- Driver run by headless nvim. Environment: SKU_REPO, SKU_OUT, SKU_PHASE, SKU_CWD, SKU_OUTDIR, SKU_SESSION (outside
--- phase), SKU_CLAUDE_PANE, SKU_CODEX_PANE, SKU_GONE_PANE (pane numbers).
+-- phase), SKU_CLAUDE_PANE, SKU_CODEX_PANE, SKU_GONE_PANE, SKU_SHELL_PANE (pane numbers).
 local repo, out, phase = os.getenv("SKU_REPO"), os.getenv("SKU_OUT"), os.getenv("SKU_PHASE")
 local outdir = os.getenv("SKU_OUTDIR")
 vim.opt.rtp:prepend(repo)
@@ -246,6 +246,8 @@ local function run()
     check("session is running", registry.is_running(claude), claude)
     observe("claude session", claude)
     observe("codex session", codex)
+    local typed = find(sessions, ("zellij:%s:terminal_%s"):format(session_name, os.getenv("SKU_SHELL_PANE")))
+    observe("claude stub typed into a /bin/sh pane is discovered", typed ~= nil)
 
     check("attach", registry.attach(claude) == true)
     check("attached() keeps it", #registry.attached() == 1)
@@ -298,19 +300,48 @@ local function run()
     local listed = registry.discover()
     check("discover lists the stub panes of nvim's own session", find(listed, ("zellij:%s:terminal_%s"):format(session_name, a)) ~= nil, listed)
     local before = #terminals(session_name)
+    -- Observe the call of new-pane at the exec seam: the result only (its stdout is a pane id), never the command line.
+    local exec = require("sidekick-ultra.exec")
+    local run = exec.run
+    exec.run = function(argv, opts)
+      if not vim.tbl_contains(argv, "new-pane") then
+        return run(argv, opts)
+      end
+      local count, t0 = #terminals(session_name), vim.uv.hrtime()
+      local res, run_err = run(argv, opts)
+      observe("new-pane call", {
+        exit = res and res.code,
+        stdout = res and res.stdout,
+        stderr_first_line = res and vim.split(res.stderr, "\n", { plain = true })[1],
+        run_error = run_err and run_err.msg,
+        ms = math.floor((vim.uv.hrtime() - t0) / 1e6),
+        panes_before = count,
+        panes_after = #terminals(session_name),
+      })
+      return res, run_err
+    end
     local session, err = registry.start(tools.get("claude"))
+    exec.run = run
     check("start returns a session", session ~= nil, err)
     if not session then
       return
     end
     observe("started session", session)
-    check("started session is running at once", registry.is_running(session), session)
+    -- The pane may still show the env wrapper or the stub's bash for a moment (the tool env is set through env).
+    observe("started session is running at once", registry.is_running(session))
+    check("started session is running within 3 s", vim.wait(3000, function()
+      return registry.is_running(session)
+    end, 200), session)
     check("start created exactly one pane", #terminals(session_name) == before + 1)
-    local focused = {}
+    local focused, by_id = {}, {}
     for _, pane in ipairs(terminals(session_name)) do
       focused["terminal_" .. pane.id] = pane.is_focused
+      by_id["terminal_" .. pane.id] = pane
     end
     check("start focused the new pane, not nvim's", focused[session.pane] == true and focused["terminal_" .. nvim_pane] == false, focused)
+    local new_pane, own_pane = by_id[session.pane], by_id["terminal_" .. nvim_pane]
+    check("the new pane is in nvim's tab", new_pane ~= nil and own_pane ~= nil and new_pane.tab_id == own_pane.tab_id, { new_pane and new_pane.tab_id, own_pane and own_pane.tab_id })
+    check("the new pane is right of nvim's pane", new_pane ~= nil and own_pane ~= nil and new_pane.pane_x > own_pane.pane_x, { new_pane and new_pane.pane_x, own_pane and own_pane.pane_x })
     local n = session.pane:match("^terminal_(%d+)$")
     vim.wait(1500)
     check("the tool env reached the process", content(("%s/claude-%s.env"):format(outdir, n)) == "1", content(("%s/claude-%s.env"):format(outdir, n)))
@@ -372,7 +403,7 @@ case "$(Z list-sessions -n -s)" in
 esac
 
 # --- panes: A = stub claude, B = stub codex, G = stub claude that will exit, C = the first pane, a shell for nvim ---
-jfirst() { "$NVIM" -u NONE -i NONE --headless -l "$R/zjson.lua" "$@"; }
+jfirst() { z_env "$NVIM" -u NONE -i NONE --headless -l "$R/zjson.lua" "$@"; }
 
 pane_number() { # <new-pane output>
   case "$1" in
@@ -385,11 +416,13 @@ PANE_C=$(ZA list-panes --all --json --state | jfirst first)
 case "$PANE_C" in "" | *[!0-9]*) die "could not read the first pane id" ;; esac
 PANE_A=$(pane_number "$(ZA new-pane --direction right --no-focus --cwd "$R/work" --name sku-claude -- "$R/bin/claude")")
 PANE_B=$(pane_number "$(ZA new-pane --direction right --no-focus --cwd "$R/work" --name sku-codex -- "$R/bin/codex")")
-PANE_G=$(pane_number "$(ZA new-pane --direction right --no-focus --cwd "$R/work" --name sku-gone -- "$R/bin/claude")")
-echo "panes: shell=$PANE_C claude=$PANE_A codex=$PANE_B gone=$PANE_G"
+PANE_G=$(pane_number "$(ZA new-pane --direction right --no-focus --cwd "$R/work" --name sku-gone -- "$R/bin/gone")")
+# A /bin/sh pane with the claude stub typed into it: the common real case, a tool that is the shell's child.
+PANE_H=$(pane_number "$(ZA new-pane --direction right --no-focus --cwd "$R/work" --name sku-shell -- /bin/sh)")
+echo "panes: shell=$PANE_C claude=$PANE_A codex=$PANE_B gone=$PANE_G typed=$PANE_H"
 
 n=0
-until [ -f "$R/out/claude-$PANE_A.bytes" ] && [ -f "$R/out/codex-$PANE_B.bytes" ] && [ -f "$R/out/claude-$PANE_G.bytes" ]; do
+until [ -f "$R/out/claude-$PANE_A.bytes" ] && [ -f "$R/out/codex-$PANE_B.bytes" ] && [ -f "$R/out/claude-$PANE_G.env" ]; do
   n=$((n + 1))
   [ "$n" -le 40 ] || die "the stub panes did not start; their pane list is in $R/out"
   sleep 0.5
@@ -404,6 +437,18 @@ if [ "$ARGV0_A" != claude ] || [ "$ARGV0_B" != codex ]; then
   exit 3
 fi
 
+# Type the stub into the shell pane and observe, as argv0 only, what its pane_command starts with. This is an
+# observation, not a gate: the driver reports whether discovery found the pane.
+ZA write-chars --pane-id "terminal_$PANE_H" -- claude
+ZA send-keys --pane-id "terminal_$PANE_H" Enter
+n=0
+until [ -f "$R/out/claude-$PANE_H.bytes" ]; do
+  n=$((n + 1))
+  [ "$n" -le 20 ] || break
+  sleep 0.5
+done
+echo "observed argv0: typed-into-shell pane=[$(ZA list-panes --all --json --command --state | jfirst argv0 "$PANE_H")]"
+
 # Make the gone pane exit, and let zellij settle.
 ZA write-chars --pane-id "terminal_$PANE_G" -- Q
 sleep 1
@@ -414,7 +459,7 @@ nv() {
   say nvim "(headless, phase $phase, output $R/out/$phase.txt)"
   z_env \
     SKU_REPO="$REPO" SKU_OUT="$R/out/$phase.txt" SKU_PHASE="$phase" SKU_CWD="$R/work" SKU_OUTDIR="$R/out" \
-    SKU_SESSION="$S" SKU_CLAUDE_PANE="$PANE_A" SKU_CODEX_PANE="$PANE_B" SKU_GONE_PANE="$PANE_G" \
+    SKU_SESSION="$S" SKU_CLAUDE_PANE="$PANE_A" SKU_CODEX_PANE="$PANE_B" SKU_GONE_PANE="$PANE_G" SKU_SHELL_PANE="$PANE_H" \
     /usr/bin/perl -e 'alarm 90; exec @ARGV' -- "$NVIM" --headless -u NONE -i NONE -l "$R/drive.lua" || true
 }
 

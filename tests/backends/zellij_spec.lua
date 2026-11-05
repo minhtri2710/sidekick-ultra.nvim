@@ -11,7 +11,9 @@ local zellij = require("sidekick-ultra.backends.zellij")
 
 local expect = MiniTest.expect
 
-local FIXTURES = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/fixtures/zellij/"
+local TESTS = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
+local FIXTURES = TESTS .. "/fixtures/zellij/"
+local STUB = TESTS .. "/bin/zellij"
 local SECRET = "SECRET-TOKEN-xyz"
 
 ---@param name string file name inside tests/fixtures/zellij
@@ -122,7 +124,8 @@ describe("zellij backend", function()
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
     bin = dir .. "/zellij"
-    vim.fn.writefile({ "#!/bin/sh", "exit 97" }, bin)
+    -- The same stub as tests/bin/zellij, so a call that escapes the seam leaves the marker minit checks.
+    vim.fn.writefile(vim.fn.readfile(STUB), bin)
     vim.uv.fs_chmod(bin, 493)
     bin = vim.fn.exepath(bin)
     for _, var in ipairs(VARS) do
@@ -346,17 +349,63 @@ describe("zellij backend", function()
       end
     end)
 
-    it("reports a matching pane without a working directory, and not a pane that matches nothing", function()
+    it("reports a matching pane without a working directory", function()
+      for _, cwd in ipairs({ vim.NIL, "" }) do
+        local r = routes()
+        r[PANES_A] = patched("list_panes_a.json", function(panes)
+          terminal(panes, 1).pane_cwd = cwd ~= vim.NIL and cwd or nil
+        end)
+        rec = record(r)
+        local list, err = zellij.list(tools.all())
+        rec.restore()
+        rec = nil
+        expect.equality(list, nil)
+        expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
+      end
+    end)
+
+    it("does not need a working directory for a pane that matches no tool", function()
       local r = routes()
       r[PANES_A] = patched("list_panes_a.json", function(panes)
-        terminal(panes, 1).pane_cwd = nil
         terminal(panes, 4).pane_cwd = nil
       end)
       rec = record(r)
       local list, err = zellij.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(#list, 3)
+    end)
+
+    it("skips a vanished session only for exit 1 with \"Session '...' not found\"", function()
+      for _, failed in ipairs({
+        { code = 2, stdout = "", stderr = "Session 'skuA' not found\n" },
+        { code = 1, stdout = "", stderr = "Session 'skuA' exploded\n" },
+        { code = 1, stdout = "", stderr = "no skuA not found\n" },
+      }) do
+        local r = routes()
+        r[PANES_A] = failed
+        rec = record(r)
+        local list, err = zellij.list(tools.all())
+        rec.restore()
+        rec = nil
+        expect.equality(list, nil)
+        expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", failed.code })
+      end
+    end)
+
+    it("treats zellij as outside when only ZELLIJ_SESSION_NAME is set", function()
+      vim.env.ZELLIJ_SESSION_NAME = "skuB"
+      rec = record(routes())
+      zellij.list(tools.all())
+      expect.equality(rec.keys(), { LIST_SESSIONS, PANES_A, PANES_B })
+    end)
+
+    it("reports the no-session text only for a failed list-sessions with empty stdout", function()
+      rec = record({
+        [LIST_SESSIONS] = { code = 1, stdout = "skuA\n", stderr = "No active zellij sessions found.\n" },
+      })
+      local list, err = zellij.list(tools.all())
       expect.equality(list, nil)
-      expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
-      expect.equality(err.msg:find(SECRET, 1, true), nil)
+      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-sessions", 1 })
     end)
 
     it("fails with backend_error and runs nothing when the binary cannot be found", function()
@@ -472,10 +521,20 @@ describe("zellij backend", function()
       )
     end)
 
-    it("is false when the session is gone, when zellij fails, and when the output is malformed", function()
-      for _, result in ipairs({ NOT_FOUND, { code = 2, stdout = "", stderr = "boom\n" }, ok("not json") }) do
+    it("is false when the session is gone", function()
+      rec = record({ [PANES_A] = NOT_FOUND })
+      expect.equality(zellij.is_running(claude()), false)
+    end)
+
+    it("stays true when zellij fails or prints something unreadable, so no attached session is dropped", function()
+      for _, result in ipairs({
+        { code = 2, stdout = "", stderr = "boom\n" },
+        { code = 1, stdout = "", stderr = "Session 'skuA' exploded\n" },
+        ok("not json"),
+        ok('[{"id":"x"}]'),
+      }) do
         rec = record({ [PANES_A] = result })
-        expect.equality(zellij.is_running(claude()), false)
+        expect.equality(zellij.is_running(claude()), true)
         rec.restore()
         rec = nil
       end
@@ -524,16 +583,9 @@ describe("zellij backend", function()
       })
     end)
 
-    it("is running at once, and does not focus the new pane itself", function()
+    it("returns a session that is running at once", function()
       rec = record(routes(" /bin/sh"))
-      local session = start()
-      expect.equality(
-        vim.tbl_filter(function(key)
-          return key:find("focus-pane-id", 1, true) ~= nil
-        end, rec.keys()),
-        {}
-      )
-      expect.equality(zellij.is_running(session), true)
+      expect.equality(zellij.is_running((start())), true)
     end)
 
     it("passes the tool command as separate arguments after --", function()
@@ -615,6 +667,8 @@ describe("zellij backend", function()
         rec = nil
         expect.equality(session, nil)
         expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+        expect.equality(err.msg:find("sku-claude", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
+        expect.equality(err.msg:find("skuA", 1, true) ~= nil, true)
       end
     end)
 
@@ -743,7 +797,7 @@ describe("zellij backend", function()
         rec.restore()
         rec = nil
         expect.equality(ok_, nil)
-        expect.equality(err.id, "backend_error")
+        expect.equality({ err.id, err.cmd }, { "backend_error", "write-chars" })
       end
     end)
 
@@ -751,7 +805,7 @@ describe("zellij backend", function()
       rec = record({ [PANES_A] = NOT_FOUND, [WRITE] = "" })
       local ok_, err = zellij.send(claude(), "hello world")
       expect.equality(ok_, nil)
-      expect.equality(err.id, "backend_error")
+      expect.equality({ err.id, err.cmd }, { "backend_error", "write-chars" })
       expect.equality(wrote(rec.keys()), false)
     end)
 
@@ -843,10 +897,15 @@ describe("zellij backend", function()
     end)
   end)
 
-  -- Supervisor condition: pane_command beyond argv0 may carry secrets (here terminal_1 runs
-  -- `claude --resume SECRET-TOKEN-xyz`). Nothing the backend returns, raises or notifies may contain it.
+  -- Supervisor condition: pane_command beyond argv0 may carry secrets. Every input below has SECRET in the
+  -- pane_command of every terminal pane (an exited pane included), so a leak from any path can show. Nothing the
+  -- backend returns, raises or notifies may contain it.
   describe("pane_command arguments", function()
     local cap
+    local NEW_PANE_SH =
+      "--session skuA action new-pane --direction right --no-focus --cwd /tmp/sku-proj-a --name sku-claude -- /bin/sh"
+    local NEW_PANE_ENV =
+      "--session skuA action new-pane --direction right --no-focus --cwd /tmp/sku-proj-a --name sku-claude -- /usr/bin/env TOKEN=SECRET-TOKEN-xyz /bin/sh"
 
     before_each(function()
       cap = notify.capture()
@@ -856,130 +915,220 @@ describe("zellij backend", function()
       cap.restore()
     end)
 
+    ---A pane list whose every terminal pane, the exited one too, carries SECRET after its program.
+    ---@param name string
+    ---@param patch? fun(panes: table[])
+    ---@return string
+    local function leaky(name, patch)
+      local json = patched(name, function(panes)
+        for _, pane in ipairs(panes) do
+          if not pane.is_plugin then
+            pane.pane_command = (pane.pane_command or "/bin/sh") .. " --token " .. SECRET
+          end
+        end
+        if patch then
+          patch(panes)
+        end
+      end)
+      expect.equality(json:find(SECRET, 1, true) ~= nil, true)
+      return json
+    end
+
     ---@param value any
     local function expect_clean(value)
       expect.equality(vim.inspect(value):find(SECRET, 1, true), nil)
     end
 
-    it("the fixture really carries the secret in terminal_1's pane_command", function()
-      expect.equality(fixture("list_panes_a.json"):find(SECRET, 1, true) ~= nil, true)
-    end)
+    ---An error value, and the toast it would become, carry no SECRET.
+    ---@param err sidekick_ultra.Error
+    local function expect_clean_error(err)
+      expect.equality(type(err), "table")
+      expect_clean(err)
+      local before = #cap.calls
+      errors.notify(err)
+      expect.equality(#cap.calls, before + 1)
+      expect_clean(cap.calls)
+    end
 
-    it("appear in no session, no call made, and no notify, from list", function()
-      rec = record({ [LIST_SESSIONS] = "skuA\n", [PANES_A] = fixture("list_panes_a.json") })
+    ---@param panes_list string
+    ---@param other? table additional routes
+    ---@return table
+    local function start_routes(panes_list, other)
+      return vim.tbl_extend("force", { [NEW_PANE_SH] = fixture("new_pane.txt"), [PANES_A] = panes_list }, other or {})
+    end
+
+    local function start_inside()
+      vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
+      return zellij.start(tools.get("claude"), { cwd = "/tmp/sku-proj-a", env = {} })
+    end
+
+    it("reach no session and no call of list", function()
+      rec = record({
+        [LIST_SESSIONS] = fixture("list_sessions.txt"),
+        [PANES_A] = leaky("list_panes_a.json"),
+        [PANES_B] = leaky("list_panes_b.json"),
+      })
       local list = zellij.list(tools.all())
-      expect.equality(#list >= 1, true)
+      expect.equality(#list, 3)
       expect_clean(list)
       expect_clean(rec.subs)
-      expect_clean(cap.calls)
     end)
 
-    it("appear in no session of registry.discover, and no notify", function()
+    it("reach no session of list inside zellij", function()
+      vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
+      rec = record({ [PANES_A] = leaky("list_panes_a.json") })
+      local list = zellij.list(tools.all())
+      expect.equality(#list, 2)
+      expect_clean(list)
+    end)
+
+    it("reach no session of registry.discover", function()
       registry.register(zellij)
-      rec = record({ [LIST_SESSIONS] = "skuA\n", [PANES_A] = fixture("list_panes_a.json") })
-      expect_clean(registry.discover())
-      expect_clean(cap.calls)
+      rec = record({ [LIST_SESSIONS] = "skuA\n", [PANES_A] = leaky("list_panes_a.json") })
+      local list = registry.discover()
+      expect.equality(#list, 2)
+      expect_clean(list)
     end)
 
-    it("appear in the errors of list", function()
-      for _, patch in ipairs({
-        function(panes)
+    it("reach no error of list", function()
+      local inputs = {
+        leaky("list_panes_a.json", function(panes)
           terminal(panes, 1).pane_cwd = nil
-        end,
-      }) do
-        rec = record({ [LIST_SESSIONS] = "skuA\n", [PANES_A] = patched("list_panes_a.json", patch) })
+        end),
+        leaky("list_panes_a.json", function(panes)
+          terminal(panes, 1).pane_cwd = ""
+        end),
+        '[{"id":"x","pane_command":"/bin/sh --token ' .. SECRET .. '"}]',
+        "not json " .. SECRET,
+        { code = 3, stdout = "out " .. SECRET, stderr = "boom\n" },
+      }
+      for _, input in ipairs(inputs) do
+        rec = record({ [LIST_SESSIONS] = "skuA\n", [PANES_A] = input })
         local list, err = zellij.list(tools.all())
         rec.restore()
         rec = nil
         expect.equality(list, nil)
-        expect_clean(err)
+        expect_clean_error(err)
       end
     end)
 
-    it("appear in is_running, which also notifies nothing", function()
-      rec = record({ [PANES_A] = fixture("list_panes_a.json") })
-      expect.equality(zellij.is_running(claude()), true)
-      rec.restore()
-      rec = record({
-        [PANES_A] = patched("list_panes_a.json", function(panes)
-          terminal(panes, 1).pane_command = "/bin/sh --token " .. SECRET
-        end),
-      })
-      expect.equality(zellij.is_running(claude()), false)
-      expect_clean(cap.calls)
+    it("reach no result of is_running, which never notifies", function()
+      for _, case in ipairs({
+        { leaky("list_panes_a.json"), true },
+        {
+          leaky("list_panes_a.json", function(panes)
+            terminal(panes, 1).pane_command = "/bin/sh --token " .. SECRET
+          end),
+          false,
+        },
+        { { code = 2, stdout = "out " .. SECRET, stderr = "boom\n" }, true },
+      }) do
+        rec = record({ [PANES_A] = case[1] })
+        local result = zellij.is_running(claude())
+        expect.equality(#rec.subs, 1)
+        rec.restore()
+        rec = nil
+        expect.equality(result, case[2])
+      end
+      expect.equality(cap.calls, {})
     end)
 
-    it("appear in the refusal of a send to a pane whose program changed", function()
-      rec = record({
-        [PANES_A] = patched("list_panes_a.json", function(panes)
+    it("reach no refusal or error of send", function()
+      for _, input in ipairs({
+        leaky("list_panes_a.json", function(panes)
           terminal(panes, 1).pane_command = "/bin/sh --token " .. SECRET
         end),
-      })
-      local ok_, err = zellij.send(claude(), "text")
-      expect.equality(ok_, nil)
-      expect_clean(err)
-      errors.notify(err)
-      expect_clean(cap.calls)
-      expect.equality(#cap.calls, 1)
-      expect.equality(vim.tbl_contains(rec.keys(), write_chars("skuA", "terminal_1", "text")), false)
-    end)
-
-    it("appear in the refusal of a send to an exited or gone pane", function()
-      for _, patch in ipairs({
-        function(panes)
-          local pane = terminal(panes, 1)
-          pane.exited = true
-          pane.pane_command = nil
-        end,
-        function(panes)
+        leaky("list_panes_a.json", function(panes)
+          terminal(panes, 1).exited = true
+        end),
+        leaky("list_panes_a.json", function(panes)
           for i, pane in ipairs(panes) do
             if pane.id == 1 and not pane.is_plugin then
               table.remove(panes, i)
               break
             end
           end
-        end,
+        end),
+        { code = 1, stdout = "out " .. SECRET, stderr = "Session 'skuA' not found\n" },
+        { code = 2, stdout = "out " .. SECRET, stderr = "boom\n" },
+        '[{"id":"x","pane_command":"/bin/sh --token ' .. SECRET .. '"}]',
       }) do
-        rec = record({ [PANES_A] = patched("list_panes_a.json", patch) })
-        local _, err = zellij.send(claude(), "text")
+        rec = record({ [PANES_A] = input, [write_chars("skuA", "terminal_1", "text")] = "" })
+        local ok_, err = zellij.send(claude(), "text")
+        local wrote_text = vim.tbl_contains(rec.keys(), write_chars("skuA", "terminal_1", "text"))
         rec.restore()
         rec = nil
-        expect_clean(err)
+        expect.equality(ok_, nil)
+        expect.equality(wrote_text, false)
+        expect_clean_error(err)
       end
     end)
 
-    it("appear in a started session whose new pane carries arguments", function()
-      vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
-      rec = record({
-        ["--session skuA action new-pane --direction right --no-focus --cwd /tmp/sku-proj-a --name sku-claude -- /bin/sh"] = fixture(
-          "new_pane.txt"
-        ),
-        [PANES_A] = patched("list_panes_a_started.json", function(panes)
-          terminal(panes, 6).pane_command = "/usr/local/bin/claude --resume " .. SECRET
-        end),
-      })
-      local session, err = zellij.start(tools.get("claude"), { cwd = "/tmp/sku-proj-a", env = {} })
-      expect.equality(err, nil)
-      expect.equality(session.proc_name, "claude")
-      expect_clean(session)
-      expect_clean(cap.calls)
+    it("reach no session of start, even when the new pane still shows the env wrapper with a secret", function()
+      for _, case in ipairs({
+        { NEW_PANE_SH, "claude", function() end },
+        {
+          NEW_PANE_ENV,
+          "sh",
+          function(panes)
+            terminal(panes, 6).pane_command = "/usr/bin/env TOKEN=" .. SECRET .. " /bin/sh"
+          end,
+        },
+      }) do
+        rec = record({
+          [case[1]] = fixture("new_pane.txt"),
+          [PANES_A] = leaky("list_panes_a_started.json", case[3]),
+        })
+        local env_table = case[1] == NEW_PANE_ENV and { TOKEN = SECRET } or {}
+        vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
+        local session, err = zellij.start(tools.get("claude"), { cwd = "/tmp/sku-proj-a", env = env_table })
+        rec.restore()
+        rec = nil
+        expect.equality(err, nil)
+        expect.equality(session.proc_name, case[2])
+        expect_clean(session)
+      end
     end)
 
-    it("appear in the error of a start that cannot map its pane", function()
-      vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
-      rec = record({
-        ["--session skuA action new-pane --direction right --no-focus --cwd /tmp/sku-proj-a --name sku-claude -- /bin/sh"] = fixture(
-          "new_pane.txt"
-        ),
-        [PANES_A] = patched("list_panes_a_started.json", function(panes)
-          local pane = terminal(panes, 6)
-          pane.pane_command = "/usr/local/bin/claude --resume " .. SECRET
-          pane.pane_cwd = nil
-        end),
-      })
-      local session, err = zellij.start(tools.get("claude"), { cwd = "/tmp/sku-proj-a", env = {} })
-      expect.equality(session, nil)
-      expect_clean(err)
+    it("reach no error of start", function()
+      local cases = {
+        -- new-pane printed something else, which may echo anything
+        { { [NEW_PANE_SH] = "oops " .. SECRET .. "\n" } },
+        -- the new pane is not in the listing, has exited, or lost its command
+        { start_routes(leaky("list_panes_a.json")) },
+        {
+          start_routes(leaky("list_panes_a_started.json", function(panes)
+            terminal(panes, 6).exited = true
+          end)),
+        },
+        {
+          start_routes(leaky("list_panes_a_started.json", function(panes)
+            terminal(panes, 6).pane_command = nil
+          end)),
+        },
+        -- the pane has no working directory
+        {
+          start_routes(leaky("list_panes_a_started.json", function(panes)
+            terminal(panes, 6).pane_cwd = nil
+          end)),
+        },
+        -- the mapping call fails or prints something unreadable
+        { start_routes({ code = 2, stdout = "out " .. SECRET, stderr = "boom\n" }) },
+        { start_routes('[{"id":"x","pane_command":"/bin/sh --token ' .. SECRET .. '"}]') },
+        { start_routes("not json " .. SECRET) },
+      }
+      for _, case in ipairs(cases) do
+        local routes_table = case[1]
+        if routes_table[NEW_PANE_SH] and not routes_table[PANES_A] then
+          routes_table[PANES_A] = ""
+        end
+        rec = record(routes_table)
+        local session, err = start_inside()
+        rec.restore()
+        rec = nil
+        expect.equality(session, nil)
+        expect_clean_error(err)
+      end
     end)
   end)
 end)

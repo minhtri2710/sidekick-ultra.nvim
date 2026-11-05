@@ -79,13 +79,14 @@ What they do not have is an agent status. herdr and rex tell the plugin when an 
 - Discovery lists every pane of the server, in all sessions, with one `list-panes -a` call, and skips dead panes. A pane counts when a process in its process tree (the pane's own process and everything below it) is a configured tool. Neovim reads the tree itself; no `ps` runs and no command line or environment is read. No running server means no sessions, not an error.
 - A session id is `tmux:%N`, with the pane id tmux gives.
 - Start splits to the right of Neovim's pane without focus, in Neovim's directory, with the tool's `env` as `-e K=V`.
-- `send` pastes the text through a temporary tmux buffer with no Enter, and line feeds stay line feeds. `submit` sends Enter.
+- tmux 3.7 or newer is required: `send` pastes with `paste-buffer -S` (new in 3.7), which keeps control characters as the bytes they are. `:checkhealth` warns below 3.7.
+- `send` pastes the text through a temporary tmux buffer with no Enter, and line feeds stay line feeds. `submit` sends Enter. Both first leave copy mode (or any other pane mode) if the pane is in one, since a pane in a mode takes keys and pastes for the mode instead of the program.
 - `focus` selects the pane's window and the pane. When Neovim runs inside tmux and the pane is in another session, it also switches the client to it.
 
 **zellij** (checked against zellij 0.45.1)
 
 - Neovim counts as inside zellij when `ZELLIJ` and `ZELLIJ_PANE_ID` are set. Calls inside zellij go to the current session (`ZELLIJ_SESSION_NAME`). Outside zellij, discovery asks every session in turn. There is no zellij option besides `enabled`.
-- zellij gives the plugin no process id. Discovery therefore goes by program name: a terminal pane counts when the first word of its running command (`pane_command`) is a configured tool. Plugin panes and exited panes are skipped. The rest of the command line is never read.
+- zellij gives the plugin no process id. Discovery therefore goes by program name: a terminal pane counts when the first word of its running command (`pane_command`) is a configured tool. Plugin panes and exited panes are skipped. The rest of the command line is never kept.
 - A session id is `zellij:<session>:terminal_<N>`.
 - With no process id there is no in-process liveness check. Whether an attached zellij session still runs takes one `list-panes` call, made when the statusline refreshes (at most every 5 s) and when attached sessions are listed. The other backends make no call for this.
 - zellij exits 0 when `write-chars` is sent to a pane that does not exist, and drops the text. So `send` first checks the pane, and a pane that is gone or has exited is refused before anything is written.

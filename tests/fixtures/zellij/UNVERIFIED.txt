@@ -17,27 +17,49 @@ Verified by the probe:
   A missing session        exit 1 with "Session '...' not found".
   `list-sessions -n -s`    printed one session name per line (list_sessions.txt) while a session existed.
 
+Settled by the live run at 24c6bd1 (~/.paseo/reports/sidekick-ultra/reviews/d8-zellij-24c6bd1.log, outside phase):
+  `list-sessions -n -s` with no session
+                           exit 1, empty stdout, stderr "No active zellij sessions found." The backend's guess matches.
+  pane_command argv0 of a stub started as `exec -a claude /bin/bash stub` (bash stub, new-pane with an absolute path)
+                           "claude" and "codex": discovery, attach and the argv0 match worked. The stubs are now
+                           `exec -a <name> /bin/dd`; the next live run must show that argv0 again.
+  `write-chars` to a missing pane
+                           exit 0 (reproduced), so the send guard is needed.
+  send, focus, the gone-pane guard, the not_in_mux refusal
+                           all passed. "submit presses Enter" failed because the old stub could not record a CR
+                           (bash `read` turns CR into LF); the new stub records raw bytes with dd.
+
 Still unverified (the live run, tests/live/zellij.sh, must settle each):
-  pane_command argv0 of a stub agent
-                           the probe only saw /bin/sh, /bin/cat and /bin/sleep. The backend matches a tool on the
-                           basename of the first word of pane_command. Whether a stub started as
-                           `exec -a claude /bin/bash stub` reports "claude" or "/bin/bash" there is unknown; the live
-                           script prints the observed argv0 and reports UNVERIFIABLE when it is not the tool's name.
+  `new-pane` from inside nvim
+                           at 24c6bd1 it exited 0 and printed no `terminal_N` (the same flags print the id from outside
+                           and from a pane's shell in the probe). The cause is not known. Reading zellij v0.45.1: the
+                           id is a Log line the server sends once the pane is created, and the client waits one
+                           second at most (ACTION_COMPLETION_TIMEOUT in route.rs); a spawn error or a timeout ends
+                           with exit 0 and no output. The live script now observes the call (exit, stdout, stderr first
+                           line, milliseconds, pane counts before and after). Whether a pane was created is read from
+                           those counts.
   pane_command for a tool started with env
                            start puts "/usr/bin/env K=V claude" in front of the tool. Whether pane_command then shows
                            "env" or the exec'd tool, and for how long, is unknown. The backend records the tool's
                            command name as proc_name when argv0 is still "env", and is_running asks the tool's is_proc,
                            so the session counts as running once env has exec'd the tool. While the pane still shows
-                           "env", is_running is false. The live script checks "running at once" immediately after start.
+                           "env" (or the stub's bash), is_running is false. The live script observes the state at once
+                           and gates on running within 3 s.
+  pane_command of a tool typed into a shell pane
+                           every stub runs as the pane's own command. Whether pane_command shows the shell or its
+                           foreground child when a tool is typed into /bin/sh is not known. The live script types the
+                           stub into a /bin/sh pane and records the argv0 and whether discovery found it (an
+                           observation, not a gate).
   pane_command of a held pane
                            the exited fixture (terminal_3) has exited true and no pane_command, as the probe saw for an
                            exited pane. Whether a pane held after its command ended reports the same is not known; the
                            backend skips any pane with exited true.
-  `list-sessions` with no session
-                           the backend treats a non-zero exit with empty stdout and "No active zellij sessions" on
-                           stderr as an empty list. That text is from memory of the zellij source, not from the probe.
-                           Any other failure is a backend_error. The live script records the real exit code and text
-                           before it creates its session.
   list-panes on an exited (resurrectable) session
                            `list-sessions -s` may name it. The backend skips a session whose list-panes fails with
                            "Session '...' not found" (exit 1) and reports every other failure.
+  focus-pane-id for a pane in another tab
+                           the probe and the live run used one tab. Whether focus-pane-id switches tabs is not known
+                           (design 11 left "go-to-tab-by-id first" open).
+  tools installed as scripts
+                           a tool installed as `#!/usr/bin/env node` may show argv0 "node" and go undiscovered. Not
+                           tested; the same family as the rex argv0 match.

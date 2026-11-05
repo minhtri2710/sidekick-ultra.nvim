@@ -13,14 +13,19 @@ local tools = require("sidekick-ultra.tools")
 ---@type sidekick_ultra.Backend
 local M = { name = "tmux" }
 
----Fields of the `list-panes` rows, tab separated (the separator is a real tab: tmux passes it through).
+---Oldest tmux `send` works with: `paste-buffer -S` was added in 3.7 (CHANGES FROM 3.6b TO 3.7). Used by health.
+M.MIN_VERSION = { 3, 7 }
+
+---Fields of the `list-panes` rows, tab separated (the separator is a real tab: tmux passes it through). The working
+---directory comes last, so a path that holds a tab stays whole; it is the pane's current path, or the path the pane
+---was started in when tmux cannot read the current one.
 local LIST_FORMAT = table.concat({
   "#{pane_id}",
   "#{pane_pid}",
-  "#{pane_current_path}",
   "#{session_name}",
   "#{window_id}",
   "#{pane_dead}",
+  "#{?pane_current_path,#{pane_current_path},#{pane_start_path}}",
 }, "\t")
 local START_FORMAT = "#{pane_id}\t#{pane_pid}"
 
@@ -146,25 +151,26 @@ function M.list(configured)
   for _, row in ipairs(vim.split(res.stdout, "\n", { plain = true, trimempty = true })) do
     local f = vim.split(row, "\t", { plain = true })
     local root = tonumber(f[2])
-    if #f ~= 6 or not f[1]:match("^%%%d+$") or not root then
+    if #f < 6 or not f[1]:match("^%%%d+$") or not root then
       return nil, failure("list-panes", "tmux printed an unexpected pane list")
     end
-    if f[6] ~= "1" then
+    local cwd = table.concat(f, "\t", 6)
+    if f[5] ~= "1" then
       local name, pid, proc_name = find_tool(root, configured)
       if name then
-        if f[3] == "" then
+        if cwd == "" then
           return nil, failure("list-panes", "tmux printed no working directory for pane " .. f[1])
         end
         table.insert(ret, {
           id = "tmux:" .. f[1],
           backend = M.name,
           tool = name,
-          cwd = f[3],
+          cwd = cwd,
           pid = pid,
           proc_name = proc_name,
           pane = f[1],
-          tmux_session = f[4],
-          window_id = f[5],
+          tmux_session = f[3],
+          window_id = f[4],
         })
       end
     end
@@ -229,12 +235,43 @@ function M.start(tool, opts)
   }
 end
 
----Raw text through a named paste buffer: `-r` keeps LF as LF, so no Enter is sent, and `-d` deletes the buffer.
+---Leave any mode the pane is in (copy mode after a scroll-back). In a mode the pane takes keys and pastes for the mode,
+---not for the program, so Enter would end copy mode and the text would not reach the tool. The man page does not say
+---whether `copy-mode -q` is harmless on a pane in no mode, so the mode count is read first (`#{pane_in_mode}`) and
+---`copy-mode -q`, which cancels every mode, runs only when it is above zero.
+---@param pane string
+---@return true? ok
+---@return sidekick_ultra.Error? err
+local function leave_mode(pane)
+  local res, err = run("display-message", { "display-message", "-p", "-t", pane, "#{pane_in_mode}" })
+  if not res then
+    return nil, err
+  end
+  local modes = tonumber(vim.trim(res.stdout))
+  if not modes then
+    return nil, failure("display-message", "tmux printed no mode count for pane " .. pane)
+  end
+  if modes > 0 then
+    local _, quit_err = run("copy-mode", { "copy-mode", "-q", "-t", pane })
+    if quit_err then
+      return nil, quit_err
+    end
+  end
+  return true
+end
+
+---Raw text through a named paste buffer: `-r` keeps LF as LF, so no Enter is sent, `-S` stops tmux from passing the
+---buffer through vis(3) (the default since tmux 3.7, which would turn an ESC byte into the text `\033`), and `-d`
+---deletes the buffer.
 ---@param session sidekick_ultra.Session
 ---@param text string
 function M.send(session, text)
   if text == "" then
     return true
+  end
+  local left, mode_err = leave_mode(session.pane)
+  if not left then
+    return nil, mode_err
   end
   buffer_count = buffer_count + 1
   local buffer = ("sku-%d-%d"):format(vim.uv.os_getpid(), buffer_count)
@@ -242,7 +279,7 @@ function M.send(session, text)
   if not loaded then
     return nil, err
   end
-  local pasted, paste_err = run("paste-buffer", { "paste-buffer", "-b", buffer, "-d", "-r", "-t", session.pane })
+  local pasted, paste_err = run("paste-buffer", { "paste-buffer", "-b", buffer, "-d", "-r", "-S", "-t", session.pane })
   if not pasted then
     -- The paste failed, so `-d` never ran: do not leave the text in the server.
     run("delete-buffer", { "delete-buffer", "-b", buffer })
@@ -253,6 +290,10 @@ end
 
 ---@param session sidekick_ultra.Session
 function M.submit(session)
+  local left, mode_err = leave_mode(session.pane)
+  if not left then
+    return nil, mode_err
+  end
   local res, err = run("send-keys", { "send-keys", "-t", session.pane, "Enter" })
   return res and true or nil, err
 end

@@ -11,7 +11,8 @@ local HERDR_SERVER_VARS = { "HERDR_SOCKET_PATH", "HERDR_SESSION" }
 ---Report the version `<bin> -V` (tmux) or `<bin> --version` (zellij) prints.
 ---@param name string
 ---@param bin string
-local function version(name, bin)
+---@param min? integer[] {major, minor}: warn when the reported version is older
+local function version(name, bin, min)
   local health = vim.health
   local res, err = exec.run({ bin, name == "tmux" and "-V" or "--version" }, { backend = name, cmd = "version" })
   if not res then
@@ -19,7 +20,17 @@ local function version(name, bin)
   elseif res.code ~= 0 then
     health.warn(("%s: the version command exited with %d"):format(name, res.code))
   else
-    health.info(("%s: version %s"):format(name, vim.trim(vim.split(res.stdout, "\n", { plain = true })[1])))
+    -- The tools print their own name first ("tmux 3.8"); the row already starts with it.
+    local line = vim.trim(vim.split(res.stdout, "\n", { plain = true })[1])
+    health.info(("%s: version %s"):format(name, (line:gsub("^" .. name .. "%s+", ""))))
+    -- "3.8", "3.7a" and "next-3.9" all hold major.minor; a line without one (a "master" build) is not judged.
+    local major, minor = line:match("(%d+)%.(%d+)")
+    if min and major and (tonumber(major) < min[1] or (tonumber(major) == min[1] and tonumber(minor) < min[2])) then
+      health.warn(
+        ("%s: %s is older than %d.%d, which `send` needs"):format(name, line, min[1], min[2]),
+        { "Upgrade " .. name .. " to " .. ("%d.%d"):format(min[1], min[2]) .. " or newer" }
+      )
+    end
   end
 end
 
@@ -77,7 +88,7 @@ local function backend(name, cfg)
       end
     end
     if ok then
-      version(name, path)
+      version(name, path, mod.MIN_VERSION)
     end
   end
   return ok and mod.inside()

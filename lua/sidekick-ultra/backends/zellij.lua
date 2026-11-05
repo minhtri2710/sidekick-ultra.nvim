@@ -231,10 +231,13 @@ end
 
 ---ponytail: one list-panes call per attached zellij session per refresh (status refresh and attach-time pruning);
 ---batch per zellij session if that ever matters.
+---A failing CLI call is not an answer: the session stays attached (a false here detaches it silently), as
+---`registry.discover` keeps the attached sessions of a backend that fails. The send guard, which shares `alive`, still
+---refuses on an error.
 ---@param session sidekick_ultra.Session
 ---@return boolean
 function M.is_running(session)
-  return alive(session) == true
+  return alive(session) ~= false
 end
 
 ---Split a new pane to the right of nvim's own, without focus, running the tool. `new-pane` is placed relative to the
@@ -275,7 +278,14 @@ function M.start(tool, opts)
   local name = vim.trim(res.stdout)
   local number = name:match("^terminal_(%d+)$")
   if not number then
-    return nil, failure("new-pane", "zellij printed no id for the new pane")
+    return nil,
+      failure(
+        "new-pane",
+        ("zellij printed no id for the new pane; if it created one, a pane named sku-%s may have been left open in session %s"):format(
+          tool.name,
+          session
+        )
+      )
   end
 
   -- The pane is "running" at once: record whatever it runs now. The next discovery replaces this record by id.

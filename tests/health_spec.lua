@@ -130,6 +130,8 @@ describe("health", function()
       b.available = function()
         return true, "/opt/" .. name, "PATH"
       end
+      -- The real tmux backend names its floor; a fake zellij has none, like the real one.
+      b.MIN_VERSION = name == "tmux" and { 3, 7 } or nil
       package.loaded["sidekick-ultra.backends." .. name] = b
     end
   end
@@ -142,10 +144,66 @@ describe("health", function()
     expect.equality(has("ok", "zellij: /opt/zellij (from PATH)"), true)
     expect.equality(has("info", "tmux: nvim runs inside tmux"), true)
     expect.equality(has("info", "zellij: nvim does not run inside zellij"), true)
-    expect.equality(has("info", "tmux: version tmux 9.9"), true)
-    expect.equality(has("info", "zellij: version zellij 9.9"), true)
+    expect.equality(has("info", "tmux: version 9.9"), true)
+    expect.equality(has("info", "zellij: version 9.9"), true)
     expect.equality(version_calls, { { "/opt/tmux", "-V" }, { "/opt/zellij", "--version" } })
     expect.equality(has("ok", "nvim runs inside tmux: start is available"), true)
+  end)
+
+  it("drops only the leading tool name from the version line, so the row does not say it twice", function()
+    muxes(false, false)
+    local out = { ["/opt/tmux"] = "tmux next-tmux 3.9\n", ["/opt/zellij"] = "zellij-fork 1.0\nsecond line\n" }
+    exec.run = function(argv)
+      return { code = 0, stdout = out[argv[1]], stderr = "" }
+    end
+    fake.reset(nil, { tmux = { enabled = true }, zellij = { enabled = true } })
+    check()
+    expect.equality(has("info", "tmux: version next-tmux 3.9"), true)
+    expect.equality(has("info", "version tmux"), false)
+    expect.equality(has("info", "zellij: version zellij-fork 1.0"), true)
+    expect.equality(has("info", "second line"), false)
+  end)
+
+  it("warns when tmux is older than the floor its backend names, and only then", function()
+    muxes(false, false)
+    local warned = {}
+    for line, expected in pairs({
+      ["tmux 3.6b"] = true,
+      ["tmux 3.6"] = true,
+      ["tmux 2.9a"] = true,
+      ["tmux 3.7"] = false,
+      ["tmux 3.7a"] = false,
+      ["tmux 3.8"] = false,
+      ["tmux 3.10"] = false,
+      ["tmux 4.0"] = false,
+      ["tmux next-3.9"] = false,
+      ["tmux master"] = false,
+    }) do
+      exec.run = function()
+        return { code = 0, stdout = line .. "\n", stderr = "" }
+      end
+      fake.reset(nil, { tmux = { enabled = true } })
+      check()
+      warned[line] = { has("warn", "tmux: " .. line .. " is older than 3.7"), expected }
+    end
+    for line, got in pairs(warned) do
+      expect.equality({ line, got[1] }, { line, got[2] })
+    end
+    exec.run = function()
+      return { code = 0, stdout = "tmux 3.6\n", stderr = "" }
+    end
+    check()
+    expect.equality(advice("warn", "older than 3.7"), "Upgrade tmux to 3.7 or newer")
+  end)
+
+  it("never judges the zellij version", function()
+    muxes(false, false)
+    exec.run = function()
+      return { code = 0, stdout = "zellij 0.1.0\n", stderr = "" }
+    end
+    fake.reset(nil, { zellij = { enabled = true } })
+    check()
+    expect.equality(has("warn", "older"), false)
   end)
 
   it("reports whether tmux.socket is set, without printing its value", function()
