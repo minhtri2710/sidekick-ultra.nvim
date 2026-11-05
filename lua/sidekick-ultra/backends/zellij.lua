@@ -10,14 +10,20 @@ local tools = require("sidekick-ultra.tools")
 ---@type sidekick_ultra.Backend
 local M = { name = "zellij" }
 
--- `start` waits for the new pane to show the tool as its program (the env wrapper and a shell show first): at most
--- START_POLLS sleeps of START_STEP_MS.
+-- `start` waits for the new pane to show the tool as its program (the env wrapper and a shell show first): no new
+-- list-panes poll starts once START_WAIT_MS have passed since new-pane returned, and polls are START_STEP_MS apart.
+local START_WAIT_MS = 2000
 local START_STEP_MS = 50
-local START_POLLS = 40
 
----Sleep for `ms`. A field so tests can observe the wait without taking it.
-M.sleep = function(ms)
-  vim.uv.sleep(ms)
+---Milliseconds on a monotonic clock. A field with `wait`, so tests can drive both with a fake clock.
+M.now = function()
+  return vim.uv.hrtime() / 1e6
+end
+
+---Wait `ms` while the event loop keeps running (the exec calls of this backend already do the same through
+---`vim.system():wait()`).
+M.wait = function(ms)
+  vim.wait(ms)
 end
 
 ---@return boolean ok
@@ -321,11 +327,9 @@ function M.start(tool, opts)
 
   -- Return only once the pane shows the tool as its program, so the session is running at once: the env wrapper, a
   -- shell or a script's interpreter show first. An empty answer is asked again within the bound.
+  local deadline = M.now() + START_WAIT_MS
   local last_err
-  for poll = 0, START_POLLS do
-    if poll > 0 then
-      M.sleep(START_STEP_MS)
-    end
+  while true do
     local panes, panes_err, silent = panes_of(session)
     if not panes then
       if not silent then
@@ -349,6 +353,13 @@ function M.start(tool, opts)
       if tools.matches(tool, { cmd = argv0 }) then
         return session_of(tool.name, session, seen, argv0)
       end
+    end
+    if M.now() >= deadline then
+      break
+    end
+    M.wait(START_STEP_MS)
+    if M.now() >= deadline then
+      break
     end
   end
   return nil,

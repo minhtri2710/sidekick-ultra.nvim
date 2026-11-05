@@ -98,7 +98,9 @@ local function write_chars(session, pane, text)
 end
 
 describe("zellij backend", function()
-  local rec, dir, bin, orig_sleep, slept
+  local rec, dir, bin, orig_now, orig_wait, waits
+  -- The fake clock `start` reads (milliseconds): it moves only through zellij.wait, and a route may move it too.
+  local clock
   local env = {}
   local VARS = { "ZELLIJ", "ZELLIJ_PANE_ID", "ZELLIJ_SESSION_NAME", "PATH" }
 
@@ -121,10 +123,14 @@ describe("zellij backend", function()
   end
 
   before_each(function()
-    -- `start` waits for the pane through zellij.sleep; the specs record the waits instead of taking them.
-    orig_sleep, slept = zellij.sleep, {}
-    zellij.sleep = function(ms)
-      table.insert(slept, ms)
+    -- `start` reads zellij.now and waits through zellij.wait; the specs drive a fake clock and take no wait.
+    orig_now, orig_wait, waits, clock = zellij.now, zellij.wait, {}, 0
+    zellij.now = function()
+      return clock
+    end
+    zellij.wait = function(ms)
+      table.insert(waits, ms)
+      clock = clock + ms
     end
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
@@ -145,7 +151,7 @@ describe("zellij backend", function()
   end)
 
   after_each(function()
-    zellij.sleep = orig_sleep
+    zellij.now, zellij.wait = orig_now, orig_wait
     if rec then
       rec.restore()
       expect.equality(rec.unexpected, {})
@@ -685,28 +691,57 @@ describe("zellij backend", function()
       end)
     end
 
-    it("returns on the first poll, without waiting, when the pane already shows the tool", function()
-      rec = record(routes(" /bin/sh"))
-      expect.equality(start().proc_name, "claude")
-      expect.equality(#rec.subs, 2)
-      expect.equality(slept, {})
+    ---A list-panes route for the wait: `answers` in order (the last repeats), each call recorded in `polls` with the
+    ---clock at its start, and each taking `cost` ms of the fake clock.
+    local polls
+    local function timed(answers, cost)
+      polls = {}
+      return function(n)
+        table.insert(polls, clock)
+        clock = clock + (cost or 0)
+        return answers[math.min(n, #answers)]
+      end
+    end
+
+    local function bound_error_names_everything(err)
+      expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+      for _, part in ipairs({ "claude", "terminal_6", "skuA", "left open", "never showed" }) do
+        expect.equality({ part, err.msg:find(part, 1, true) ~= nil }, { part, true })
+      end
+      -- Not even the program's basename is echoed.
+      expect.equality(err.msg:find("node", 1, true), nil)
+    end
+
+    it("waits with the event loop running, on a monotonic clock, when nothing is faked", function()
+      local ran = false
+      vim.schedule(function()
+        ran = true
+      end)
+      local t0 = orig_now()
+      orig_wait(30)
+      expect.equality(ran, true)
+      expect.equality(orig_now() - t0 >= 25, true)
     end)
 
-    it("waits through an env answer and a shell answer until the pane shows the tool", function()
-      local wrapper = with_command("/usr/bin/env A=1 /bin/sh")
-      local shell = with_command("/bin/bash")
+    it("returns on the first poll, without waiting, when the pane already shows the tool", function()
+      local r = routes(" /bin/sh")
+      r[PANES_A] = timed({ fixture("list_panes_a_started.json") })
+      rec = record(r)
+      expect.equality(start().proc_name, "claude")
+      expect.equality(polls, { 0 })
+      expect.equality(waits, {})
+    end)
+
+    it("waits through an env answer and a shell answer until the pane shows the tool, before the deadline", function()
       local started = fixture("list_panes_a_started.json")
-      local seen = { wrapper, shell, started }
       local r = routes(" /usr/bin/env A=1 /bin/sh")
-      r[PANES_A] = function(n)
-        return seen[n]
-      end
+      r[PANES_A] = timed({ with_command("/usr/bin/env A=1 /bin/sh"), with_command("/bin/bash"), started })
       rec = record(r)
       local session, err = start({ A = "1" })
       expect.equality(err, nil)
       expect.equality({ session.pane, session.proc_name }, { "terminal_6", "claude" })
-      expect.equality(slept, { 50, 50 })
-      expect.equality(#rec.subs, 4)
+      expect.equality(polls, { 0, 50, 100 })
+      expect.equality(waits, { 50, 50 })
       rec.restore()
       -- The session it returns is running by the plain rule.
       rec = record({ [PANES_A] = started })
@@ -714,22 +749,37 @@ describe("zellij backend", function()
     end)
 
     it(
-      "fails at the bound, naming the tool, the pane and the session, when the program never shows as the tool",
+      "ends at the deadline with the pane named when the program never shows as the tool, and polls no later",
       function()
-        rec = record(routes(" /bin/sh", with_command("node script.js")))
+        local r = routes(" /bin/sh")
+        r[PANES_A] = timed({ with_command("node script.js") })
+        rec = record(r)
         local session, err = start()
         expect.equality(session, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
-        for _, part in ipairs({ "claude", "terminal_6", "skuA", "left open", "never showed" }) do
-          expect.equality({ part, err.msg:find(part, 1, true) ~= nil }, { part, true })
-        end
-        -- Not even the program's basename is echoed.
-        expect.equality(err.msg:find("node", 1, true), nil)
-        expect.equality(#slept, 40)
-        expect.equality(slept[1], 50)
-        expect.equality(#rec.subs, 1 + 41)
+        bound_error_names_everything(err)
+        expect.equality(clock, 2000)
+        expect.equality(polls[1], 0)
+        expect.equality(polls[#polls] < 2000, true)
+        expect.equality(polls[#polls] >= 2000 - 50, true)
+        expect.equality(
+          vim.tbl_filter(function(ms)
+            return ms ~= 50
+          end, waits),
+          {}
+        )
       end
     )
+
+    it("starts no poll after the deadline when the answers themselves are slow", function()
+      local r = routes(" /bin/sh")
+      r[PANES_A] = timed({ with_command("node script.js") }, 900)
+      rec = record(r)
+      local session, err = start()
+      expect.equality(session, nil)
+      bound_error_names_everything(err)
+      expect.equality(polls, { 0, 950, 1900 })
+      expect.equality(clock, 2800)
+    end)
 
     it("fails at once, naming the pane, when the pane exits or vanishes during the wait", function()
       local wrapper = with_command("/usr/bin/env A=1 /bin/sh")
@@ -737,11 +787,8 @@ describe("zellij backend", function()
         terminal(panes, 6).exited = true
       end)
       for _, second in ipairs({ exited, fixture("list_panes_a.json") }) do
-        local seen = { wrapper, second }
         local r = routes(" /usr/bin/env A=1 /bin/sh")
-        r[PANES_A] = function(n)
-          return seen[n]
-        end
+        r[PANES_A] = timed({ wrapper, second })
         rec = record(r)
         local session, err = start({ A = "1" })
         rec.restore()
@@ -749,32 +796,32 @@ describe("zellij backend", function()
         expect.equality(session, nil)
         expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
         expect.equality(err.msg:find("terminal_6", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
-        expect.equality(slept, { 50 })
-        slept = {}
+        expect.equality(polls, { 0, 50 })
+        waits, clock = {}, 0
       end
     end)
 
-    it("asks again after an empty answer in the wait, and fails at the bound with no answer", function()
-      local seen = { "\n", with_command("/bin/bash"), "", fixture("list_panes_a_started.json") }
+    it("asks again after an empty answer in the wait", function()
       local r = routes(" /bin/sh")
-      r[PANES_A] = function(n)
-        return seen[n]
-      end
+      r[PANES_A] = timed({ "\n", with_command("/bin/bash"), "", fixture("list_panes_a_started.json") })
       rec = record(r)
       local session, err = start()
       expect.equality(err, nil)
       expect.equality(session.proc_name, "claude")
-      expect.equality(slept, { 50, 50, 50 })
-      rec.restore()
-      slept = {}
+      expect.equality(polls, { 0, 50, 100, 150 })
+    end)
 
-      rec = record(routes(" /bin/sh", "\n"))
-      session, err = start()
+    it("ends empty answers at the deadline with the no-answer error, each taking its second", function()
+      local r = routes(" /bin/sh")
+      r[PANES_A] = timed({ "\n" }, 1000)
+      rec = record(r)
+      local session, err = start()
       expect.equality(session, nil)
       expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
       expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
-      expect.equality(#slept, 40)
-      expect.equality(#rec.subs, 1 + 41)
+      -- The second poll started at 1050, before the deadline; the third would start at 2100, after it.
+      expect.equality(polls, { 0, 1050 })
+      expect.equality(clock, 2050)
     end)
 
     it("stops at once when list-panes fails in the wait", function()
@@ -786,7 +833,7 @@ describe("zellij backend", function()
       local session, err = start()
       expect.equality(session, nil)
       expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 2 })
-      expect.equality(slept, { 50 })
+      expect.equality(waits, { 50 })
     end)
 
     it("fails without a session name and runs nothing", function()
@@ -846,7 +893,7 @@ describe("zellij backend", function()
       local session, err = start()
       expect.equality(session, nil)
       expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 2 })
-      expect.equality(slept, {})
+      expect.equality(waits, {})
     end)
 
     it("is picked by registry.start, which focuses the new pane afterwards", function()
@@ -1249,9 +1296,9 @@ describe("zellij backend", function()
           rec = nil
           expect.equality(err, nil)
           expect.equality(session.proc_name, "claude")
-          expect.equality(#slept, case[3])
+          expect.equality(#waits, case[3])
           expect_clean(session)
-          slept = {}
+          waits = {}
         end
       end
     )

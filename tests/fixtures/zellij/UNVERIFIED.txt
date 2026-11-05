@@ -55,9 +55,12 @@ Still unverified (the live run, tests/live/zellij.sh, must settle each):
                            the stubs ran as bash scripts at 24c6bd1; the dd stubs have not been seen. The script gates on
                            argv0 claude and codex before any phase.
   the active tab after a cross-tab focus-pane-id
-                           list-tabs --json has an `active` flag per tab (zellij docs); the script observes it, no gate.
-                           Whether is_focused is per tab or per client is not known; the focus checks read it for panes
-                           of one tab only.
+                           the live run at 36e69a8 observed `{ 0 }`: list-tabs --json exited 0 and no tab was flagged
+                           active (the active tab id was nil; vim.inspect drops a trailing nil). So the `active` flag is
+                           not set, or not set that way, in a session with no attached client; the focus checks read
+                           is_focused for panes of one tab only, and they passed. Whether is_focused is per tab or per
+                           client is not known, and the same run showed nvim's pane still flagged focused in its own
+                           tab after the focus moved to another tab.
   `new-pane` that prints no id
                            at 24c6bd1 (inside start) and at 58637a7 (setup) a `new-pane --direction right` exited 0 with
                            empty stdout. Both were the 4th right split of a headless session 50 columns wide. Reading
@@ -71,8 +74,8 @@ Still unverified (the live run, tests/live/zellij.sh, must settle each):
                            after, and the tab's panes.
   pane_command for a tool started with env
                            start puts "/usr/bin/env K=V claude" in front of the tool. Whether pane_command shows "env"
-                           or the exec'd tool, and for how long, is unknown. start polls list-panes (50 ms steps, at
-                           most 40 sleeps, about 2 s) until the new pane's argv0 satisfies the tool's is_proc, and
+                           or the exec'd tool, and for how long, is unknown. start polls list-panes (50 ms apart, no new
+                           poll after a 2 s deadline taken when new-pane returns) until the new pane's argv0 satisfies the tool's is_proc, and
                            only then returns, so the session is running at once. If the program never shows as the
                            tool (env that stays, a shell, `node` for a script-installed tool), start fails and says
                            the pane was left open. The live script records how long registry.start took and checks
@@ -90,8 +93,9 @@ Still unverified (the live run, tests/live/zellij.sh, must settle each):
                            `list-sessions -s` may name it. The backend skips a session whose list-panes fails with
                            "Session '...' not found" (exit 1) and reports every other failure.
   focus-pane-id for a pane in another tab
-                           the probe and the live run used one tab. Whether focus-pane-id switches tabs is not known
-                           (design 11 left "go-to-tab-by-id first" open).
+                           the live run at 36e69a8 ran focus-pane-id on a pane in another tab (tab 1, from nvim's tab 0)
+                           and is_focused moved between the two panes of that tab. No tab was flagged active, so that the
+                           visible tab switched is not shown (design 11 left "go-to-tab-by-id first" open).
   tools installed as scripts
                            a tool installed as `#!/usr/bin/env node` may show argv0 "node" and go undiscovered. Not
                            tested; the same family as the rex argv0 match.

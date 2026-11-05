@@ -91,6 +91,8 @@ What they do not have is an agent status. herdr and rex tell the plugin when an 
 - With no process id there is no in-process liveness check. Whether an attached zellij session still runs takes one `list-panes` call, made when the statusline refreshes (at most every 5 s) and when attached sessions are listed. The other backends make no call for this.
 - zellij exits 0 when `write-chars` is sent to a pane that does not exist, and drops the text. So `send` first checks the pane, and a pane that is gone or has exited is refused before anything is written.
 - Start opens a pane to the right of Neovim's pane in Neovim's own session, without focus. zellij has no environment flag for it, so a tool `env` is passed as `/usr/bin/env K=V command`. `focus` focuses the pane by id.
+- Start returns once the new pane's program name is the tool, waiting up to 2 s while Neovim keeps running. If the name never shows (a tool installed as a `node` or `python` script shows as the interpreter, until a script-name rule exists), start fails and the new pane is left open.
+- Focus is verified within one tab only. Focusing a pane in another tab is unverified.
 
 ## Keymaps
 
