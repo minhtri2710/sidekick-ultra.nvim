@@ -131,7 +131,7 @@ function M.prompt(opts)
   local names = vim.tbl_keys(render.prompts())
   table.sort(names)
   local items = vim.tbl_filter(function(name)
-    return render.render({ prompt = name }, snap) ~= nil
+    return render.build({ prompt = name }, snap) ~= nil
   end, names)
   vim.ui.select(items, {
     prompt = "sidekick-ultra prompt",

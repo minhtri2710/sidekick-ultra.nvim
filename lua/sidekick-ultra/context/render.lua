@@ -2,7 +2,6 @@
 local errors = require("sidekick-ultra.errors")
 local snapshot = require("sidekick-ultra.context.snapshot")
 local sources = require("sidekick-ultra.context.sources")
-local tools = require("sidekick-ultra.tools")
 
 ---@alias sidekick_ultra.Prompt string|{msg: string}|fun(snap: sidekick_ultra.Snapshot): string
 
@@ -97,7 +96,29 @@ local function alternatives(expr)
   return names
 end
 
----A source's value as flat output segments (lines joined by "\n"), or nil when it yields nothing.
+---Whether `segment` is a location record `tools.location` can write: a string path, a known kind, and the integer
+---rows and columns that kind needs (`r1` for line, `r1` and `c1` for position); `r2` and `c2` are optional.
+---@param segment table
+---@return boolean
+local function is_location(segment)
+  local function int(v)
+    return type(v) == "number" and v % 1 == 0
+  end
+  local kind = segment.kind
+  if type(segment.path) ~= "string" or (kind ~= "file" and kind ~= "line" and kind ~= "position") then
+    return false
+  end
+  for _, field in ipairs({ "r1", "c1", "r2", "c2" }) do
+    local needed = (field == "r1" and kind ~= "file") or (field == "c1" and kind == "position")
+    if segment[field] == nil and needed or segment[field] ~= nil and not int(segment[field]) then
+      return false
+    end
+  end
+  return true
+end
+
+---A source's value as flat output segments (lines joined by "\n"), or nil when it yields nothing. Raises when a
+---line is not a string or a list of strings and location records.
 ---@param value any string, or a list of lines
 ---@return (string|sidekick_ultra.Location)[]?
 local function as_segments(value)
@@ -112,7 +133,19 @@ local function as_segments(value)
     if i > 1 then
       table.insert(segments, "\n")
     end
-    vim.list_extend(segments, type(line) == "string" and { line } or line)
+    if type(line) == "string" then
+      table.insert(segments, line)
+    elseif type(line) == "table" and vim.islist(line) then
+      for _, segment in ipairs(line) do
+        assert(
+          type(segment) == "string" or (type(segment) == "table" and is_location(segment)),
+          "line segment must be a string or a location record"
+        )
+        table.insert(segments, segment)
+      end
+    else
+      error("line must be a string or a list of strings and location records")
+    end
   end
   for _, segment in ipairs(segments) do
     if type(segment) == "table" then
@@ -173,11 +206,13 @@ function M.build(opts, snap)
   local memo, details = {}, {}
   local function value(name)
     if memo[name] == nil then
-      local ok, ret = pcall(active[name], snap)
+      local ok, ret = pcall(function()
+        return as_segments(active[name](snap))
+      end)
       if not ok then
         table.insert(details, ("%s: %s"):format(name, tostring(ret)))
       end
-      memo[name] = ok and as_segments(ret) or false
+      memo[name] = ok and ret or false
     end
     return memo[name]
   end
@@ -218,20 +253,6 @@ function M.build(opts, snap)
   end
   table.insert(out, text:sub(pos))
   return out
-end
-
----`build`, written out in `style`. Returns "" when there is nothing to render.
----@param opts {msg?: string, prompt?: string}
----@param snap sidekick_ultra.Snapshot
----@param style? sidekick_ultra.LocationStyle
----@return string? text
----@return sidekick_ultra.Error? err
-function M.render(opts, snap, style)
-  local segments, err = M.build(opts, snap)
-  if not segments then
-    return nil, err
-  end
-  return tools.format(segments, style)
 end
 
 return M

@@ -303,8 +303,9 @@ describe("actions", function()
       target.with_target = function(_, cb)
         cb(registry.attached())
       end
-      actions.send({ msg = "{counted} {file}" })
+      local ok, err = pcall(actions.send, { msg = "{counted} {file}" })
       target.with_target = orig
+      assert(ok, err)
       expect.equality(count, 1)
       -- Targets come sorted by session id: claude, codex, gemini.
       expect.equality(backend.delivered, { 'c @"my file.lua"\n', "c @my file.lua\n", "c @my\\ file.lua\n" })

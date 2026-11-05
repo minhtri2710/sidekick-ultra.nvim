@@ -1,6 +1,7 @@
 local expect = MiniTest.expect
 local render = require("sidekick-ultra.context.render")
 local snapshot = require("sidekick-ultra.context.snapshot")
+local tools = require("sidekick-ultra.tools")
 
 describe("context.render", function()
   local dir, orig_cwd
@@ -20,7 +21,11 @@ describe("context.render", function()
   ---@param opts table
   ---@param style? string
   local function run(opts, style)
-    return render.render(opts, snapshot.capture(), style)
+    local segments, err = render.build(opts, snapshot.capture())
+    if not segments then
+      return nil, err
+    end
+    return tools.format(segments, style)
   end
 
   before_each(function()
@@ -216,7 +221,6 @@ describe("context.render", function()
       vim.fn.writefile({ "x" }, file)
       vim.cmd.edit(file)
       local segments = render.build({ msg = "see {file}" }, snapshot.capture())
-      local tools = require("sidekick-ultra.tools")
       expect.equality(segments[1], "see ")
       expect.equality(type(segments[2]), "table")
       expect.equality(tools.format(segments, "plain"), "see @" .. snapshot.path(0, snapshot.capture().cwd))
@@ -300,6 +304,29 @@ describe("context.render", function()
       expect.equality(err.id, "render_failed")
       expect.equality(err.names, { "boom" })
       expect.equality(type(err.detail), "string")
+    end)
+
+    it("counts a source returning a malformed list as empty and keeps the detail", function()
+      local bad = {
+        numbers = { 1, 2 },
+        empty_table = { { {} } },
+        no_kind = { { { path = "x" } } },
+        no_row = { { { path = "x", kind = "line" } } },
+        dicts = { { lnum = 1, text = "a" }, { lnum = 2, text = "b" } },
+      }
+      for name, value in pairs(bad) do
+        render.setup(nil, {
+          [name] = function()
+            return value
+          end,
+        })
+        local ok, text, err = pcall(run, { msg = "{" .. name .. "}" })
+        expect.equality(ok, true)
+        expect.equality(text, nil)
+        expect.equality(err.id, "render_failed")
+        expect.equality(err.names, { name })
+        expect.equality(type(err.detail), "string")
+      end
     end)
 
     it("fails the diagnostics prompt when there are no diagnostics", function()

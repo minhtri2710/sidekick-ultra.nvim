@@ -21,12 +21,21 @@ describe("health", function()
     return false
   end
 
+  ---The advice lines of the first reported line of `kind` whose message holds `needle`.
+  local function advice(kind, needle)
+    for _, line in ipairs(report) do
+      if line.kind == kind and line.msg:find(needle, 1, true) then
+        return table.concat(line.advice or {}, "\n")
+      end
+    end
+  end
+
   before_each(function()
     orig = {}
     for _, kind in ipairs({ "start", "ok", "info", "warn", "error" }) do
       orig[kind] = vim.health[kind]
-      vim.health[kind] = function(msg)
-        table.insert(report, { kind = kind, msg = msg })
+      vim.health[kind] = function(msg, hint)
+        table.insert(report, { kind = kind, msg = msg, advice = hint })
       end
     end
     loaded = {
@@ -87,6 +96,16 @@ describe("health", function()
     expect.equality(has("info", "/secret/path"), false)
     expect.equality(has("info", "rex: rex.server is not configured"), true)
     expect.equality(has("info", "start is unavailable"), true)
+  end)
+
+  it("names rex.bin and its value when the configured binary is missing", function()
+    package.loaded["sidekick-ultra.backends.rex"] = nil
+    fake.reset(nil, { rex = { enabled = true, bin = "/nonexistent/sku-rex" } })
+    check()
+    expect.equality(has("error", "rex.bin"), true)
+    expect.equality(has("error", "/nonexistent/sku-rex"), true)
+    expect.equality(has("error", "binary not found"), false)
+    expect.equality(advice("error", "rex.bin"):find("Fix or remove `rex.bin`", 1, true) ~= nil, true)
   end)
 
   it("lists each configured tool as installed or missing", function()

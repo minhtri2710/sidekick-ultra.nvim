@@ -24,6 +24,11 @@ local function backend(name, cfg)
   local ok, path, source = mod.available()
   if ok then
     health.ok(("%s: %s%s"):format(name, path or "available", source and (" (from " .. source .. ")") or ""))
+  elseif name == "rex" and cfg.rex.bin then
+    health.error(
+      ("rex: rex.bin = %q is missing or not executable"):format(cfg.rex.bin),
+      { "Fix or remove `rex.bin`: a configured binary has no fallback to PATH or the bundled rex" }
+    )
   else
     health.error(
       name .. ": binary not found",
