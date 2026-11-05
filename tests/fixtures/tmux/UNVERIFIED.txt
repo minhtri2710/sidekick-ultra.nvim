@@ -1,0 +1,59 @@
+These fixtures follow the shapes the D8 tmux 3.8 probe printed (reviews/d8-probe-tmux.log, run 2026-11-05 on a private
+server). They were written by hand for the spec; no tmux was run while writing them. Pids, paths, session names and
+window ids are placeholders.
+
+What the probe saw (and the fixtures copy):
+  split_window.txt          `split-window -h -d -P -F '#{pane_id}\t#{pane_pid}'` printed `%1<TAB>58283`, and the active
+                            pane stayed `%0`. With an argv command pane_pid is the program itself; a one-element
+                            command goes through `sh -c`, which exec'd `sleep`, so pane_pid was `sleep`'s pid.
+  stderr_missing_pane.txt   `can't find pane: %99`, exit 1, for `send-keys -t %99` and `list-panes -t %99`.
+  `load-buffer -` + `paste-buffer -d -r`
+                            delivered `a b\nc d` with LF kept and no CR; `send-keys Enter` then added `\r`; the buffer
+                            was gone afterwards.
+  `select-window -t %1 ; select-pane -t %1`
+                            made %1 the active pane.
+  a bare `tmux` inside a pane reached that pane's server.
+
+Settled by the live run at 24c6bd1 (reviews/d8-tmux-24c6bd1.log, 42 checks passed, private server, symlinked /bin/cat
+stubs named claude and codex):
+  stub agents through the process-tree walk
+                            discovery found the stub claude typed into a shell (depth 1) and the stub codex as the
+                            pane's own process in a second session (depth 0); nvim_get_proc reported "claude" and
+                            "codex" for the symlinks. A real AI CLI was not run, so what nvim reads as the name of
+                            Claude Code, or of a tool installed as a node script, is still not confirmed.
+  stderr_missing_pane.txt   `tmux exited with 1: can't find pane: %999` for a paste-buffer to a missing pane (24c6bd1, as
+                            the probe saw). `send` no longer gets there: see display_pane_gone.txt.
+  no server                 `list-panes -a` against a socket path with no server returned an empty list and notified
+                            nothing. The log does not record which of the two accepted first stderr lines tmux
+                            printed. stderr_no_server.txt (`no server running on ...`, a socket nobody answers) and
+                            stderr_no_socket.txt (`error connecting to ... (No such file or directory)`) are both
+                            hand-written; the first has not been seen from a real tmux.
+  paste buffers             none were left in the server after a send (24c6bd1).
+  start                     split-window printed the id and pid; the new pane sat in nvim's window and was focused
+                            afterwards (D7); the one-element command ran through the shell as a quoted word.
+
+Settled by the live run at 58637a7 (reviews/d8-tmux-58637a7.log, 56 checks passed):
+  display_pane_gone.txt     `display-message -p -t %999 '#{pane_in_mode}'` for a pane that does not exist: stdout was
+                            empty. Exit 0 is inferred (the backend only reads stdout of a successful call, and the log
+                            shows its "tmux pane %999 not found" error, not an exit-code error). Stderr was not
+                            recorded, so whether tmux printed anything there is unknown. This differs from
+                            `send-keys`, `paste-buffer` and `list-panes -t`, which exit 1 with `can't find pane: %N`.
+                            The backend reads empty output from the mode check as "pane not found". Because that
+                            check runs before load-buffer, a send to a missing pane never reaches paste-buffer or the
+                            delete-buffer cleanup in the live run; the cleanup after a failed paste is covered by the
+                            spec only.
+  copy mode                 with the pane in copy mode (`copy-mode -t %N`, mode count 1), `send` and `submit` left the
+                            mode (count 0) and delivered the text and then the echoed line. `copy-mode -q` was only run
+                            on a pane in a mode. How paste-buffer itself behaves in a mode was not observed (the mode
+                            is always left first).
+  raw paste (-S)            a text holding an ESC byte reached the program as the byte: the pane's tty echoed `^[`, no
+                            backslash form appeared, and cat's output had the SGR sequence consumed by the terminal.
+                            tmux 3.7 is the floor (README, `MIN_VERSION`, health warning).
+
+Not settled; a live run must still show:
+  display_session.txt       `display-message -p -t $TMUX_PANE '#{session_name}'` output, and `switch-client -t %N`
+                            from a pane in another session. No client is attached to the private server, so the live
+                            run logged UNVERIFIABLE; the probe checked focus only inside one session.
+  the working-directory fallback
+                            `#{pane_start_path}` when `pane_current_path` is empty: the branch was never taken live.
+  a real AI CLI             see the stub row above.

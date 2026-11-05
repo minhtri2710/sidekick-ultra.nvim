@@ -1,9 +1,12 @@
+local exec = require("sidekick-ultra.exec")
 local fake = require("tests.helpers.fake")
 
 local expect = MiniTest.expect
 
+local NAMES = { "herdr", "rex", "tmux", "zellij" }
+
 describe("health", function()
-  local report, orig, loaded
+  local report, orig, loaded, orig_run, version_calls
 
   ---Run the check and return the reported `kind: message` lines.
   local function check()
@@ -38,17 +41,26 @@ describe("health", function()
         table.insert(report, { kind = kind, msg = msg, advice = hint })
       end
     end
-    loaded = {
-      herdr = package.loaded["sidekick-ultra.backends.herdr"],
-      rex = package.loaded["sidekick-ultra.backends.rex"],
-    }
+    loaded = {}
+    for _, name in ipairs(NAMES) do
+      loaded[name] = package.loaded["sidekick-ultra.backends." .. name]
+    end
+    -- The version rows run `<bin> -V` / `--version` through the exec seam; nothing here runs a real binary.
+    version_calls = {}
+    orig_run = exec.run
+    exec.run = function(argv)
+      table.insert(version_calls, argv)
+      return { code = 0, stdout = vim.fs.basename(argv[1]) .. " 9.9\n", stderr = "" }
+    end
   end)
   after_each(function()
     for kind, fn in pairs(orig) do
       vim.health[kind] = fn
     end
-    package.loaded["sidekick-ultra.backends.herdr"] = loaded.herdr
-    package.loaded["sidekick-ultra.backends.rex"] = loaded.rex
+    for _, name in ipairs(NAMES) do
+      package.loaded["sidekick-ultra.backends." .. name] = loaded[name]
+    end
+    exec.run = orig_run
     vim.env.HERDR_SOCKET_PATH = nil
   end)
 
@@ -63,6 +75,9 @@ describe("health", function()
     check()
     expect.equality(has("info", "herdr: disabled"), true)
     expect.equality(has("info", "rex: disabled"), true)
+    expect.equality(has("info", "tmux: disabled"), true)
+    expect.equality(has("info", "zellij: disabled"), true)
+    expect.equality(version_calls, {})
   end)
 
   it("reports the binary path and where it came from, and start availability", function()
@@ -106,6 +121,140 @@ describe("health", function()
     expect.equality(has("error", "/nonexistent/sku-rex"), true)
     expect.equality(has("error", "binary not found"), false)
     expect.equality(advice("error", "rex.bin"):find("Fix or remove `rex.bin`", 1, true) ~= nil, true)
+  end)
+
+  ---Fake tmux and zellij modules with a binary path and an inside state.
+  local function muxes(tmux_inside, zellij_inside)
+    for name, inside in pairs({ tmux = tmux_inside, zellij = zellij_inside }) do
+      local b = fake.backend(name, { is_inside = inside })
+      b.available = function()
+        return true, "/opt/" .. name, "PATH"
+      end
+      -- The real tmux backend names its floor; a fake zellij has none, like the real one.
+      b.MIN_VERSION = name == "tmux" and { 3, 7 } or nil
+      package.loaded["sidekick-ultra.backends." .. name] = b
+    end
+  end
+
+  it("reports the tmux and zellij binary, inside state and version through the exec seam", function()
+    muxes(true, false)
+    fake.reset(nil, { tmux = { enabled = true }, zellij = { enabled = true } })
+    check()
+    expect.equality(has("ok", "tmux: /opt/tmux (from PATH)"), true)
+    expect.equality(has("ok", "zellij: /opt/zellij (from PATH)"), true)
+    expect.equality(has("info", "tmux: nvim runs inside tmux"), true)
+    expect.equality(has("info", "zellij: nvim does not run inside zellij"), true)
+    expect.equality(has("info", "tmux: version 9.9"), true)
+    expect.equality(has("info", "zellij: version 9.9"), true)
+    expect.equality(version_calls, { { "/opt/tmux", "-V" }, { "/opt/zellij", "--version" } })
+    expect.equality(has("ok", "nvim runs inside tmux: start is available"), true)
+  end)
+
+  it("drops only the leading tool name from the version line, so the row does not say it twice", function()
+    muxes(false, false)
+    local out = { ["/opt/tmux"] = "tmux next-tmux 3.9\n", ["/opt/zellij"] = "zellij-fork 1.0\nsecond line\n" }
+    exec.run = function(argv)
+      return { code = 0, stdout = out[argv[1]], stderr = "" }
+    end
+    fake.reset(nil, { tmux = { enabled = true }, zellij = { enabled = true } })
+    check()
+    expect.equality(has("info", "tmux: version next-tmux 3.9"), true)
+    expect.equality(has("info", "version tmux"), false)
+    expect.equality(has("info", "zellij: version zellij-fork 1.0"), true)
+    expect.equality(has("info", "second line"), false)
+  end)
+
+  it("warns when tmux is older than the floor its backend names, and only then", function()
+    muxes(false, false)
+    local warned = {}
+    for line, expected in pairs({
+      ["tmux 3.6b"] = true,
+      ["tmux 3.6"] = true,
+      ["tmux 2.9a"] = true,
+      ["tmux 3.7"] = false,
+      ["tmux 3.7a"] = false,
+      ["tmux 3.8"] = false,
+      ["tmux 3.10"] = false,
+      ["tmux 4.0"] = false,
+      ["tmux next-3.9"] = false,
+      ["tmux master"] = false,
+    }) do
+      exec.run = function()
+        return { code = 0, stdout = line .. "\n", stderr = "" }
+      end
+      fake.reset(nil, { tmux = { enabled = true } })
+      check()
+      warned[line] = { has("warn", "tmux: " .. line .. " is older than 3.7"), expected }
+    end
+    for line, got in pairs(warned) do
+      expect.equality({ line, got[1] }, { line, got[2] })
+    end
+    exec.run = function()
+      return { code = 0, stdout = "tmux 3.6\n", stderr = "" }
+    end
+    check()
+    expect.equality(advice("warn", "older than 3.7"), "Upgrade tmux to 3.7 or newer")
+  end)
+
+  it("never judges the zellij version", function()
+    muxes(false, false)
+    exec.run = function()
+      return { code = 0, stdout = "zellij 0.1.0\n", stderr = "" }
+    end
+    fake.reset(nil, { zellij = { enabled = true } })
+    check()
+    expect.equality(has("warn", "older"), false)
+  end)
+
+  it("reports whether tmux.socket is set, without printing its value", function()
+    muxes(false, false)
+    fake.reset(nil, { tmux = { enabled = true, socket = "/secret/sock" } })
+    check()
+    expect.equality(has("info", "tmux: socket is configured (tmux.socket)"), true)
+    expect.equality(has("info", "/secret/sock"), false)
+    fake.reset(nil, { tmux = { enabled = true } })
+    check()
+    expect.equality(has("info", "tmux: tmux.socket is not configured"), true)
+  end)
+
+  it("names all four multiplexers when nvim runs inside none", function()
+    fake.reset()
+    check()
+    expect.equality(has("info", "nvim does not run inside herdr, rex, tmux or zellij: start is unavailable"), true)
+  end)
+
+  it("errors for a missing tmux or zellij binary and does not ask it for a version", function()
+    for _, name in ipairs({ "tmux", "zellij" }) do
+      local b = fake.backend(name)
+      b.available = function()
+        return false
+      end
+      package.loaded["sidekick-ultra.backends." .. name] = b
+    end
+    fake.reset(nil, { tmux = { enabled = true }, zellij = { enabled = true } })
+    check()
+    expect.equality(has("error", "tmux: binary not found"), true)
+    expect.equality(has("error", "zellij: binary not found"), true)
+    expect.equality(version_calls, {})
+  end)
+
+  it("warns when the version cannot be read", function()
+    muxes(false, false)
+    local failures = {
+      function()
+        return nil, require("sidekick-ultra.errors").new("backend_error", "cannot run /opt/tmux: boom")
+      end,
+      function()
+        return { code = 2, stdout = "", stderr = "" }
+      end,
+    }
+    exec.run = function(argv)
+      return failures[argv[1] == "/opt/tmux" and 1 or 2]()
+    end
+    fake.reset(nil, { tmux = { enabled = true }, zellij = { enabled = true } })
+    check()
+    expect.equality(has("warn", "tmux: cannot read the version: cannot run /opt/tmux: boom"), true)
+    expect.equality(has("warn", "zellij: the version command exited with 2"), true)
   end)
 
   it("lists each configured tool as installed or missing", function()

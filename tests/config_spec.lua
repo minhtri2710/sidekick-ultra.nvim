@@ -21,6 +21,8 @@ describe("config", function()
       keys = { prefix = "<leader>a" },
       herdr = { enabled = true },
       rex = { enabled = true },
+      tmux = { enabled = true },
+      zellij = { enabled = true },
     })
   end)
 
@@ -48,6 +50,8 @@ describe("config", function()
       watch = false,
       herdr = { enabled = false },
       rex = { enabled = true, bin = "/x/rex", server = "unix:///tmp/s.sock" },
+      tmux = { enabled = true, socket = "/tmp/t.sock" },
+      zellij = { enabled = false },
       tools = {
         claude = { env = { A = "b" }, mux_focus = true, location = "escaped", url = "https://x" },
         aider = false,
@@ -77,6 +81,8 @@ describe("config", function()
     expect.equality(cfg.watch, false)
     expect.equality(cfg.rex.server, "unix:///tmp/s.sock")
     expect.equality(cfg.herdr.enabled, false)
+    expect.equality(cfg.tmux, { enabled = true, socket = "/tmp/t.sock" })
+    expect.equality(cfg.zellij, { enabled = false })
   end)
 
   it("names the key path for a bad option", function()
@@ -84,6 +90,13 @@ describe("config", function()
     expect.equality(path_of({ herdr = { enabled = "yes" } }), "herdr.enabled")
     expect.equality(path_of({ rex = { bin = 3 } }), "rex.bin")
     expect.equality(path_of({ rex = { server = false } }), "rex.server")
+    expect.equality(path_of({ tmux = { enabled = "yes" } }), "tmux.enabled")
+    expect.equality(path_of({ tmux = { socket = 3 } }), "tmux.socket")
+    expect.equality(path_of({ tmux = { socket = false } }), "tmux.socket")
+    expect.equality(path_of({ tmux = { socket = "" } }), "tmux.socket")
+    expect.equality(path_of({ zellij = { enabled = 1 } }), "zellij.enabled")
+    expect.equality(path_of({ tmux = true }), "tmux")
+    expect.equality(path_of({ zellij = "on" }), "zellij")
     expect.equality(path_of({ tools = { claude = { cmd = {} } } }), "tools.claude.cmd")
     expect.equality(path_of({ tools = { claude = { cmd = { "a", 1 } } } }), "tools.claude.cmd[2]")
     expect.equality(path_of({ tools = { claude = { env = { A = 1 } } } }), "tools.claude.env.A")
@@ -102,9 +115,16 @@ describe("config", function()
 
   it("lists the allowed keys, sorted, in an unknown-key error", function()
     local _, err = config.validate({ nope = 1 })
-    expect.equality(err.msg:find("allowed: context, herdr, keys, prompts, rex, tools, watch", 1, true) ~= nil, true)
+    expect.equality(
+      err.msg:find("allowed: context, herdr, keys, prompts, rex, tmux, tools, watch, zellij", 1, true) ~= nil,
+      true
+    )
     _, err = config.validate({ rex = { nope = 1 } })
     expect.equality(err.msg:find("allowed: bin, enabled, server", 1, true) ~= nil, true)
+    _, err = config.validate({ tmux = { nope = 1 } })
+    expect.equality(err.msg:find("allowed: enabled, socket", 1, true) ~= nil, true)
+    _, err = config.validate({ zellij = { socket = "/x" } })
+    expect.equality(err.msg:find("allowed: enabled", 1, true) ~= nil, true)
     _, err = config.validate({ tools = { claude = { nope = 1 } } })
     expect.equality(err.msg:find("allowed: cmd, env, is_proc, location, mux_focus, url", 1, true) ~= nil, true)
   end)
@@ -113,6 +133,8 @@ describe("config", function()
     expect.equality(path_of({ nope = 1 }), "nope")
     expect.equality(path_of({ herdr = { nope = 1 } }), "herdr.nope")
     expect.equality(path_of({ rex = { nope = 1 } }), "rex.nope")
+    expect.equality(path_of({ tmux = { nope = 1 } }), "tmux.nope")
+    expect.equality(path_of({ zellij = { socket = "/x" } }), "zellij.socket")
     expect.equality(path_of({ tools = { claude = { nope = 1 } } }), "tools.claude.nope")
   end)
 
@@ -132,11 +154,13 @@ describe("config", function()
     local first = config.get()
     first.watch = false
     first.herdr.enabled = false
+    first.tmux.enabled = false
     first.tools.claude.env.A = "changed"
     first.context.mine = nil
     local second = config.get()
     expect.equality(second.watch, true)
     expect.equality(second.herdr.enabled, true)
+    expect.equality(second.tmux.enabled, true)
     expect.equality(second.tools.claude.env.A, "1")
     expect.equality(second.context.mine == fn, true)
     expect.equality(vim.tbl_count(second.tools), 1)

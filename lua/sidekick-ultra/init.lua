@@ -1,7 +1,7 @@
----sidekick-ultra.nvim: drive AI CLIs that run in herdr panes or rex blocks.
+---sidekick-ultra.nvim: drive AI CLIs that run in herdr panes, rex blocks, tmux panes or zellij panes.
 local M = {}
 
-local BACKENDS = { "herdr", "rex" }
+local BACKENDS = { "herdr", "rex", "tmux", "zellij" }
 
 ---Validate the options, register the enabled and available backends, create `:SidekickUltra` and define the default
 ---keymaps. Raises an error naming the key path when the options are invalid. Calling it again first detaches every

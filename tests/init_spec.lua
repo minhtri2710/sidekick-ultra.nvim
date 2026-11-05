@@ -5,73 +5,89 @@ local sidekick = require("sidekick-ultra")
 
 local expect = MiniTest.expect
 
+local NAMES = { "herdr", "rex", "tmux", "zellij" }
+
 describe("setup", function()
   local saved
   before_each(function()
-    saved = {
-      herdr = package.loaded["sidekick-ultra.backends.herdr"],
-      rex = package.loaded["sidekick-ultra.backends.rex"],
-      herdr_preload = package.preload["sidekick-ultra.backends.herdr"],
-      rex_preload = package.preload["sidekick-ultra.backends.rex"],
-    }
-    package.loaded["sidekick-ultra.backends.herdr"] = nil
-    package.loaded["sidekick-ultra.backends.rex"] = nil
+    saved = { loaded = {}, preload = {} }
+    for _, name in ipairs(NAMES) do
+      local mod = "sidekick-ultra.backends." .. name
+      saved.loaded[name], saved.preload[name] = package.loaded[mod], package.preload[mod]
+      -- Every real module is replaced by a fake that reports its binary missing, so nothing depends on the host.
+      local gone = fake.backend(name)
+      gone.available = function()
+        return false
+      end
+      package.loaded[mod] = gone
+    end
   end)
   after_each(function()
-    package.loaded["sidekick-ultra.backends.herdr"] = saved.herdr
-    package.loaded["sidekick-ultra.backends.rex"] = saved.rex
-    package.preload["sidekick-ultra.backends.herdr"] = saved.herdr_preload
-    package.preload["sidekick-ultra.backends.rex"] = saved.rex_preload
+    for _, name in ipairs(NAMES) do
+      local mod = "sidekick-ultra.backends." .. name
+      package.loaded[mod], package.preload[mod] = saved.loaded[name], saved.preload[name]
+    end
     registry.reset()
   end)
 
   local function names()
     return vim.tbl_filter(function(name)
       return registry.backend(name) ~= nil
-    end, { "herdr", "rex" })
+    end, NAMES)
   end
 
-  it("registers each enabled backend that is available", function()
-    package.loaded["sidekick-ultra.backends.herdr"] = fake.backend("herdr")
-    package.loaded["sidekick-ultra.backends.rex"] = fake.backend("rex")
+  local function use(...)
+    for _, name in ipairs({ ... }) do
+      package.loaded["sidekick-ultra.backends." .. name] = fake.backend(name)
+    end
+  end
+
+  local function off()
+    local ret = {}
+    for _, name in ipairs(NAMES) do
+      ret[name] = { enabled = false }
+    end
+    return ret
+  end
+
+  it("registers each enabled backend that is available, all four by default", function()
+    use("herdr", "rex", "tmux", "zellij")
     sidekick.setup({})
-    expect.equality(names(), { "herdr", "rex" })
+    expect.equality(names(), { "herdr", "rex", "tmux", "zellij" })
   end)
 
   it("does not register an enabled backend whose binary is missing", function()
-    local rex = fake.backend("rex")
-    rex.available = function()
-      return false
-    end
-    package.loaded["sidekick-ultra.backends.herdr"] = fake.backend("herdr")
-    package.loaded["sidekick-ultra.backends.rex"] = rex
+    use("herdr", "tmux")
     sidekick.setup({})
-    expect.equality(names(), { "herdr" })
+    expect.equality(names(), { "herdr", "tmux" })
   end)
 
   it("never requires a disabled backend", function()
-    package.preload["sidekick-ultra.backends.herdr"] = function()
-      error("herdr must not be required")
+    for _, name in ipairs(NAMES) do
+      package.loaded["sidekick-ultra.backends." .. name] = nil
+      package.preload["sidekick-ultra.backends." .. name] = function()
+        error(name .. " must not be required")
+      end
     end
-    package.preload["sidekick-ultra.backends.rex"] = function()
-      error("rex must not be required")
-    end
-    sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+    sidekick.setup(off())
     expect.equality(names(), {})
   end)
 
-  it("registers only the enabled one when one is disabled", function()
-    package.loaded["sidekick-ultra.backends.rex"] = fake.backend("rex")
-    sidekick.setup({ herdr = { enabled = false } })
-    expect.equality(names(), { "rex" })
+  it("registers only the enabled ones when others are disabled", function()
+    use("rex", "tmux", "zellij")
+    sidekick.setup({ herdr = { enabled = false }, tmux = { enabled = false } })
+    expect.equality(names(), { "rex", "zellij" })
   end)
 
   it("raises an error naming the key path for an invalid option, and registers nothing", function()
-    package.loaded["sidekick-ultra.backends.herdr"] = fake.backend("herdr")
+    use("herdr")
     local ok, err = pcall(sidekick.setup, { rex = { server = 1 } })
     expect.equality(ok, false)
     expect.equality(err:find("rex.server", 1, true) ~= nil, true)
     expect.equality(names(), {})
+    ok, err = pcall(sidekick.setup, { tmux = { socket = "" } })
+    expect.equality(ok, false)
+    expect.equality(err:find("tmux.socket", 1, true) ~= nil, true)
   end)
 
   it("applies tool, prompt and context configuration", function()
@@ -108,7 +124,7 @@ describe("setup", function()
       return false
     end)
     expect.equality(#require("sidekick-ultra.status").cli(), 1)
-    sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+    sidekick.setup(off())
     vim.wait(1000, function()
       return #events > 0
     end)

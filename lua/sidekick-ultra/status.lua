@@ -1,4 +1,5 @@
----Statusline data. Never runs an external command: a refresh only runs the cheap `is_running` checks.
+---Statusline data. A refresh runs `registry.is_running` for each attached session: an in-process pid check, except
+---for a backend that defines its own `is_running` (zellij), which makes one CLI call per attached session.
 local registry = require("sidekick-ultra.registry")
 
 local M = {}

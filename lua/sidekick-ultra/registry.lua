@@ -56,10 +56,15 @@ function M.sid(tool, cwd)
   return tool .. " " .. vim.fn.sha256(path):sub(1, 16 - #tool)
 end
 
----True when a process with the recorded pid exists and has the recorded name. No external call.
+---Whether the session still runs. A backend that defines `is_running` decides (it may call its mux); otherwise this
+---is true when a process with the recorded pid exists and has the recorded name, with no external call.
 ---@param session sidekick_ultra.Session
 ---@return boolean
 function M.is_running(session)
+  local backend = M.backend(session.backend)
+  if backend and backend.is_running then
+    return backend.is_running(session)
+  end
   local ok, proc = pcall(vim.api.nvim_get_proc, session.pid)
   return ok and type(proc) == "table" and proc.name == session.proc_name
 end
@@ -161,7 +166,7 @@ function M.discover()
   return ret
 end
 
----The backend `start` uses: among the registered backends whose `inside()` is true, the only one, or with two
+---The backend `start` uses: among the registered backends whose `inside()` is true, the only one, or with several
 ---the one named by `TERM_PROGRAM`. Anything else is `not_in_mux`.
 ---@return sidekick_ultra.Backend? backend
 ---@return sidekick_ultra.Error? err

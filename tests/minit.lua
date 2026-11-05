@@ -2,7 +2,7 @@
 local root = vim.fs.dirname(vim.fs.dirname(vim.uv.fs_realpath(debug.getinfo(1, "S").source:sub(2))))
 local stubs = assert(vim.uv.fs_realpath(root .. "/tests/bin"))
 
-for _, name in ipairs({ "herdr", "rex" }) do
+for _, name in ipairs({ "herdr", "rex", "tmux", "zellij" }) do
   local found = vim.fn.exepath(name)
   local real = found ~= "" and vim.uv.fs_realpath(found) or nil
   if real ~= stubs .. "/" .. name then
@@ -39,7 +39,7 @@ for _, case in ipairs(MiniTest.current.all_cases or {}) do
   failed = failed or (case.exec ~= nil and #case.exec.fails > 0)
 end
 if vim.uv.fs_stat(vim.env.HOME .. "/.sku-stub-reached") then
-  vim.uv.fs_write(2, "minit: a stub herdr/rex was reached; a test ran a real binary\n")
+  vim.uv.fs_write(2, "minit: a stub herdr/rex/tmux/zellij was reached; a test ran a real binary\n")
   vim.cmd("cquit 3")
 end
 vim.cmd(failed and "cquit 1" or "0cquit")

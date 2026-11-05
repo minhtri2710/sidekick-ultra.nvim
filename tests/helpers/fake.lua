@@ -103,12 +103,18 @@ function M.backend(name, opts)
   return b
 end
 
----Reset every module the specs touch to a clean state: both real backends disabled and no built-in tools, so the
+---Reset every module the specs touch to a clean state: every real backend disabled and no built-in tools, so the
 ---result does not depend on what is installed. `tools` adds the tools a spec needs (config entries).
 ---@param tools? table<string, table>
 ---@param extra? table more setup options
 function M.reset(tools, extra)
-  local cfg = { herdr = { enabled = false }, rex = { enabled = false }, tools = {} }
+  local cfg = {
+    herdr = { enabled = false },
+    rex = { enabled = false },
+    tmux = { enabled = false },
+    zellij = { enabled = false },
+    tools = {},
+  }
   for _, name in ipairs(require("sidekick-ultra.tools").builtin_names()) do
     cfg.tools[name] = false
   end

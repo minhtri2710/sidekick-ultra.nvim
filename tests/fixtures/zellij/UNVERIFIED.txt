@@ -1,0 +1,101 @@
+These fixtures are partly verified. The D8 probe (2026-11-05, zellij 0.45.1, private socket dir, panes running /bin/sh,
+/bin/cat, /bin/sleep and a byte recorder) printed the shapes below; ids, paths, session names and the pane commands
+are placeholders. The probe log is ~/.paseo/reports/sidekick-ultra/reviews/d8-probe-zellij.log.
+
+Verified by the probe:
+  list_panes_*.json        `zellij --session S action list-panes --all --json --command --state` -> a JSON array of
+                           panes with id, is_plugin, is_focused, exited, exit_status, is_held, title, tab_id, tab_name,
+                           terminal_command, plugin_url, ... A terminal pane adds pane_command ("/bin/sh",
+                           "/bin/sleep 300": the running command line) and pane_cwd. There is no pid. Plugin panes
+                           (is_plugin true) share ids with terminal panes: plugin 0 and terminal 0 coexist.
+  new_pane.txt             `new-pane --direction right --no-focus ...` prints "terminal_N" and leaves focus alone.
+  `write-chars --pane-id terminal_N -- TEXT`
+                           no Enter, LF stays LF, a leading "-" is safe after "--". To a missing pane it exits 0 and
+                           drops the text, which is why send checks the pane first.
+  `send-keys --pane-id terminal_N Enter`, `focus-pane-id terminal_N`
+                           worked as the backend uses them.
+  A missing session        exit 1 with "Session '...' not found".
+  `list-sessions -n -s`    printed one session name per line (list_sessions.txt) while a session existed.
+
+Settled by the live run at 24c6bd1 (~/.paseo/reports/sidekick-ultra/reviews/d8-zellij-24c6bd1.log, outside phase):
+  `list-sessions -n -s` with no session
+                           exit 1, empty stdout, stderr "No active zellij sessions found." The backend's guess matches.
+  pane_command argv0 of a stub started as `exec -a claude /bin/bash stub` (bash stub, new-pane with an absolute path)
+                           "claude" and "codex": discovery, attach and the argv0 match worked. The stubs are now
+                           `exec -a <name> /bin/dd`; the next live run must show that argv0 again.
+  `write-chars` to a missing pane
+                           exit 0 (reproduced), so the send guard is needed.
+  send, focus, the gone-pane guard, the not_in_mux refusal
+                           all passed. "submit presses Enter" failed because the old stub could not record a CR
+                           (bash `read` turns CR into LF); the new stub records raw bytes with dd.
+
+Settled by the live run at 3231491 (d8-zellij-3231491.log, setup only):
+  `new-tab` in a session with no attached client
+                           does not work in 0.45.1: the tab is 0x0 ("Not enough room for panes", zellij issues 5594 and
+                           5664), its panes never show in list-panes, and one list-panes printed nothing. The live script
+                           now builds all its tabs from a layout at session creation.
+
+Still unverified (the live run, tests/live/zellij.sh, must settle each):
+  which way gives the layout to a background session
+                           `--layout F attach --create-background S`, `attach --create-background S options
+                           --default-layout F` and `default_layout` in config.kdl were all read from the 0.45.1 docs and
+                           source, none was run. The script tries them in that order, checks list-panes right after
+                           (the five layout names, their tabs, a real width) and prints the form that held.
+  pane `name` as the list-panes `title`
+                           assumed (the probe showed the --name given to new-pane as the title, not a layout name). The
+                           script finds its panes by title and stops with a FATAL listing the titles when one is missing.
+  whether a creation-layout tab in a session with no client has a real size
+                           the script asserts pane_columns >= 10 for every layout pane.
+  an empty answer of list-panes or list-sessions (exit 0, nothing printed)
+                           seen once in the 3231491 run (list-panes). Cause unknown: the server's 1 s wait ends with an
+                           error to stderr and a non-zero exit in the source, but the run recorded no stderr. The backend
+                           treats it as "zellij did not answer" (a backend_error), never as no panes or no sessions; the
+                           script prints each empty answer with its exit code and first stderr line and retries it.
+  stub argv0 of `exec -a <name> /bin/dd`
+                           the stubs ran as bash scripts at 24c6bd1; the dd stubs have not been seen. The script gates on
+                           argv0 claude and codex before any phase.
+  the active tab after a cross-tab focus-pane-id
+                           the live run at 36e69a8 observed `{ 0 }`: list-tabs --json exited 0 and no tab was flagged
+                           active (the active tab id was nil; vim.inspect drops a trailing nil). So the `active` flag is
+                           not set, or not set that way, in a session with no attached client; the focus checks read
+                           is_focused for panes of one tab only, and they passed. Whether is_focused is per tab or per
+                           client is not known, and the same run showed nvim's pane still flagged focused in its own
+                           tab after the focus moved to another tab.
+  `new-pane` that prints no id
+                           at 24c6bd1 (inside start) and at 58637a7 (setup) a `new-pane --direction right` exited 0 with
+                           empty stdout. Both were the 4th right split of a headless session 50 columns wide. Reading
+                           zellij v0.45.1 (zellij-server/src/tab/mod.rs): with no room to split, zellij closes the
+                           freshly spawned pane and returns Ok, so no pane exists and no id is printed; with floating
+                           panes visible, or a floating target pane, it returns early with nothing created. The server
+                           also waits only 1 s for the pane (route.rs), so a slow server could print nothing for a
+                           pane it did create. The backend's error says all of this. The live script keeps nvim's tab
+                           roomy (its stubs are in other tabs of the creation layout), and records one deliberate
+                           no-room split in the "gone" tab: exit, stdout, stderr first line, pane counts before and
+                           after, and the tab's panes.
+  pane_command for a tool started with env
+                           start puts "/usr/bin/env K=V claude" in front of the tool. Whether pane_command shows "env"
+                           or the exec'd tool, and for how long, is unknown. start polls list-panes (50 ms apart, no new
+                           poll after a 2 s deadline taken when new-pane returns) until the new pane's argv0 satisfies the tool's is_proc, and
+                           only then returns, so the session is running at once. If the program never shows as the
+                           tool (env that stays, a shell, `node` for a script-installed tool), start fails and says
+                           the pane was left open. The live script records how long registry.start took and checks
+                           "running at once" and the N2 attach/refresh path.
+  pane_command of a tool typed into a shell pane
+                           every stub runs as the pane's own command. Whether pane_command shows the shell or its
+                           foreground child when a tool is typed into /bin/sh is not known. The live script types the
+                           stub into a /bin/sh pane and records the argv0 and whether discovery found it (an
+                           observation, not a gate).
+  pane_command of a held pane
+                           the exited fixture (terminal_3) has exited true and no pane_command, as the probe saw for an
+                           exited pane. Whether a pane held after its command ended reports the same is not known; the
+                           backend skips any pane with exited true.
+  list-panes on an exited (resurrectable) session
+                           `list-sessions -s` may name it. The backend skips a session whose list-panes fails with
+                           "Session '...' not found" (exit 1) and reports every other failure.
+  focus-pane-id for a pane in another tab
+                           the live run at 36e69a8 ran focus-pane-id on a pane in another tab (tab 1, from nvim's tab 0)
+                           and is_focused moved between the two panes of that tab. No tab was flagged active, so that the
+                           visible tab switched is not shown (design 11 left "go-to-tab-by-id first" open).
+  tools installed as scripts
+                           a tool installed as `#!/usr/bin/env node` may show argv0 "node" and go undiscovered. Not
+                           tested; the same family as the rex argv0 match.
