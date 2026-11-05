@@ -37,7 +37,6 @@ die() {
 HERDR=$(command -v herdr) || die "herdr is not on PATH"
 NVIM=$(command -v nvim) || die "nvim is not on PATH"
 case "$HERDR" in */tests/bin/*) die "herdr resolves to the test stub: $HERDR" ;; esac
-BINDIRS="$(dirname "$HERDR"):/usr/bin:/bin"
 
 [ -e "$R" ] && die "$R already exists; remove it yourself after looking at it"
 
@@ -45,14 +44,23 @@ CREATED=0
 SERVER_PID=
 SOCK="$R/herdr.sock"
 
-# The one environment every herdr client and the server run in.
+# The one PATH every pane, client and the server get: the stubs and herdr's symlink, then the system dirs. No host
+# bin directory, so the real claude and codex CLIs are not reachable even if a stub goes missing.
+ISO_PATH="$R/bin:/usr/bin:/bin"
+
+# The one environment every herdr client, the server and the nvim driver run in, as `env` words: an allowlist, `env -i`
+# plus explicit assignments. A `-u` blocklist can never be complete (ENV, BASH_ENV, PROMPT_COMMAND, exported bash
+# functions such as BASH_FUNC_claude%% and names we do not know would get through), and any of them could change PATH or
+# shadow a stub. Every value is a plain word (the root is a literal path, the user name comes from `id -un`), so none has
+# a space or a glob character and the unquoted expansions below split correctly. LANG is for the stub's non-ASCII OSC title.
+USER_NAME=$(id -un)
+HX_ENV="-i HOME=$R/home XDG_CONFIG_HOME=$R/config XDG_STATE_HOME=$R/state XDG_DATA_HOME=$R/data XDG_CACHE_HOME=$R/cache
+  HERDR_CONFIG_PATH=$R/config/herdr/config.toml HERDR_SOCKET_PATH=$SOCK PATH=$ISO_PATH
+  USER=$USER_NAME LOGNAME=$USER_NAME TMPDIR=$R/tmp LANG=en_US.UTF-8 TERM=xterm-256color SHELL=/bin/sh"
+
 hx_env() {
-  env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SESSION \
-    -u HERDR_CLIENT_SOCKET_PATH -u HERDR_BIN_PATH -u TERM_PROGRAM \
-    HOME="$R/home" XDG_CONFIG_HOME="$R/config" XDG_STATE_HOME="$R/state" \
-    XDG_DATA_HOME="$R/data" XDG_CACHE_HOME="$R/cache" \
-    HERDR_CONFIG_PATH="$R/config/herdr/config.toml" HERDR_SOCKET_PATH="$SOCK" \
-    PATH="$R/bin:$BINDIRS" "$@"
+  # shellcheck disable=SC2086
+  env $HX_ENV "$@"
 }
 
 hx() {
@@ -88,7 +96,9 @@ trap cleanup EXIT INT TERM
 say mkdir "$R"
 mkdir "$R"
 CREATED=1
-mkdir "$R/bin" "$R/home" "$R/config" "$R/config/herdr" "$R/state" "$R/data" "$R/cache" "$R/work" "$R/out"
+mkdir "$R/bin" "$R/home" "$R/config" "$R/config/herdr" "$R/state" "$R/data" "$R/cache" "$R/tmp" "$R/work" "$R/out"
+# nvim's driver and the plugin call `herdr` by name; the isolated PATH finds this link. Clients and the server run $HERDR.
+ln -s "$HERDR" "$R/bin/herdr"
 
 # Stub agent CLIs: print a banner, echo every stdin line, exit on EOF. herdr identifies an agent from the foreground
 # process's argv0 (normalized_process_name, src/detect/mod.rs:381-384; identify_agent_process_in_job, :254-268), so
@@ -112,6 +122,19 @@ EOF
 }
 make_stub claude "✳ sku-stub"
 make_stub codex "sku-stub"
+
+# Refuse unless the stubs win: under the exact isolated PATH, claude and codex must resolve to the files written above.
+# Nothing is executed. herdr types the bare names into the pane shells, so a missing or unusable stub would run a real CLI.
+for name in claude codex; do
+  found=$(
+    PATH=$ISO_PATH
+    command -v "$name"
+  ) || found=
+  if [ "$found" != "$R/bin/$name" ] || [ -L "$R/bin/$name" ] || [ ! -f "$R/bin/$name" ] || [ ! -x "$R/bin/$name" ]; then
+    echo "refusing: $name resolves to '$found' under PATH=$ISO_PATH, not to the stub $R/bin/$name" >&2
+    exit 2
+  fi
+done
 
 # /bin/sh without login startup, so pane shells keep the PATH above (the stubs come first).
 cat >"$R/config/herdr/config.toml" <<'EOF'
@@ -289,15 +312,11 @@ case "$SOCK" in
 esac
 [ "${#SOCK}" -lt 100 ] || die "socket path is too long for a unix socket: $SOCK"
 
-# Inline `env`, not the hx_env function: a backgrounded function runs in a subshell, so $! would be the subshell's
-# pid. `env` execs herdr, so $! is the server's own pid, which is the only pid the teardown ever signals.
+# Inline `env` with $HX_ENV, not the hx_env function: a backgrounded function runs in a subshell, so $! would be the
+# subshell's pid. `env` execs herdr, so $! is the server's own pid, which is the only pid the teardown ever signals.
 say herdr server '(background, log in' "$R/server.log)"
-env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SESSION \
-  -u HERDR_CLIENT_SOCKET_PATH -u HERDR_BIN_PATH -u TERM_PROGRAM \
-  HOME="$R/home" XDG_CONFIG_HOME="$R/config" XDG_STATE_HOME="$R/state" \
-  XDG_DATA_HOME="$R/data" XDG_CACHE_HOME="$R/cache" \
-  HERDR_CONFIG_PATH="$R/config/herdr/config.toml" HERDR_SOCKET_PATH="$SOCK" \
-  PATH="$R/bin:$BINDIRS" "$HERDR" server >"$R/server.log" 2>&1 &
+# shellcheck disable=SC2086
+env $HX_ENV "$HERDR" server >"$R/server.log" 2>&1 &
 SERVER_PID=$!
 echo "$SERVER_PID" >"$R/server.pid"
 
@@ -341,12 +360,7 @@ sleep 1
 nv() {
   phase=$1
   say nvim "(headless, phase $phase, output $R/out/$phase.txt)"
-  env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SESSION \
-    -u HERDR_CLIENT_SOCKET_PATH -u HERDR_BIN_PATH -u TERM_PROGRAM \
-    HOME="$R/home" XDG_CONFIG_HOME="$R/config" XDG_STATE_HOME="$R/state" \
-    XDG_DATA_HOME="$R/data" XDG_CACHE_HOME="$R/cache" \
-    HERDR_CONFIG_PATH="$R/config/herdr/config.toml" HERDR_SOCKET_PATH="$SOCK" \
-    PATH="$R/bin:$BINDIRS" \
+  hx_env \
     SKU_REPO="$REPO" SKU_OUT="$R/out/$phase.txt" SKU_PHASE="$phase" SKU_CWD="$R/work" \
     SKU_CLAUDE_PANE="$PANE_A" SKU_CODEX_PANE="$PANE_B" \
     /usr/bin/perl -e 'alarm 90; exec @ARGV' -- "$NVIM" --headless -u NONE -i NONE -l "$R/drive.lua" || true

@@ -33,10 +33,19 @@ x() { # print, then run
   "$@"
 }
 
-# One rex client call against the private server, with the rex variables of any enclosing rex removed.
+# The one environment the private server and every rex client call run in: an allowlist, `env -i` plus explicit
+# assignments. A `-u` blocklist can never be complete (REX_*, ENV, BASH_ENV, PROMPT_COMMAND, exported bash functions and
+# names we do not know would get through). The PATH has the stubs first and no host bin dir.
+ISO_PATH=$ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin
+USER_NAME=$(id -un)
+ISO_ENV=(env -i
+  HOME="$ROOT/home" XDG_CONFIG_HOME="$ROOT/config" XDG_DATA_HOME="$ROOT/data" XDG_STATE_HOME="$ROOT/state"
+  XDG_CACHE_HOME="$ROOT/cache" PATH="$ISO_PATH" USER="$USER_NAME" LOGNAME="$USER_NAME" TMPDIR="$ROOT/tmp"
+  LANG=en_US.UTF-8 TERM=xterm-256color SHELL=/bin/sh)
+
+# One rex client call against the private server.
 rexc() {
-  set -- env -u REX_SESSION -u REX_BLOCK -u REX_SERVER -u REX_CLIENT -u TERM_PROGRAM HOME="$ROOT/home" \
-    "$REX" --autostart=false -S "$SOCK" "$@"
+  set -- "${ISO_ENV[@]}" "$REX" --autostart=false -S "$SOCK" "$@"
   say "$@"
   "$@"
 }
@@ -84,7 +93,7 @@ trap cleanup EXIT INT TERM
 
 x mkdir "$ROOT"
 CREATED=1
-x mkdir "$ROOT/home" "$ROOT/config" "$ROOT/data" "$ROOT/state" "$ROOT/cache" "$ROOT/bin" "$ROOT/work" "$ROOT/out"
+x mkdir "$ROOT/home" "$ROOT/config" "$ROOT/data" "$ROOT/state" "$ROOT/cache" "$ROOT/tmp" "$ROOT/bin" "$ROOT/work" "$ROOT/out"
 : >"$ROOT/empty.lua"
 
 # Stub agent CLIs: print a banner, echo every stdin line, exit on EOF. They re-exec bash under their own name so
@@ -105,14 +114,28 @@ EOF
 make_stub claude
 make_stub codex
 
+# Refuse unless the stubs exist: claude and codex must be regular executable files, written above, at the absolute paths
+# $ROOT/bin/claude and $ROOT/bin/codex. rex runs block commands through the user's login shell, which gets the ISO_ENV
+# variables and nothing else from us, but its startup files can still change PATH, so PATH is not relied on: every
+# block command in this script is an absolute path ($ROOT/bin/claude, $ROOT/bin/codex, $ROOT/run-nvim.sh, which execs
+# the absolute $NVIM). The PATH lookup below only proves that ISO_PATH, which the server and the clients get, finds the
+# stubs first. Nothing is executed.
+for name in claude codex; do
+  found=$(
+    PATH=$ISO_PATH
+    command -v "$name"
+  ) || found=
+  if [ "$found" != "$ROOT/bin/$name" ] || [ -L "$ROOT/bin/$name" ] || [ ! -f "$ROOT/bin/$name" ] || [ ! -x "$ROOT/bin/$name" ]; then
+    echo "refusing: $name resolves to '$found' under PATH=$ISO_PATH, not to the stub $ROOT/bin/$name" >&2
+    exit 2
+  fi
+done
+
 # Private server, background job with its pid recorded.
-say env -u REX_SESSION -u REX_BLOCK -u REX_SERVER -u REX_CLIENT -u TERM_PROGRAM \
-  HOME="$ROOT/home" XDG_CONFIG_HOME="$ROOT/config" XDG_DATA_HOME="$ROOT/data" XDG_STATE_HOME="$ROOT/state" \
-  XDG_CACHE_HOME="$ROOT/cache" PATH="$ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+# `env` execs rex, so $! is the server's own pid.
+say "${ISO_ENV[@]}" \
   "$REX" --autostart=false server run --listen "$SOCK" --state-dir "$ROOT/state" --config "$ROOT/empty.lua" --exit-empty
-env -u REX_SESSION -u REX_BLOCK -u REX_SERVER -u REX_CLIENT -u TERM_PROGRAM \
-  HOME="$ROOT/home" XDG_CONFIG_HOME="$ROOT/config" XDG_DATA_HOME="$ROOT/data" XDG_STATE_HOME="$ROOT/state" \
-  XDG_CACHE_HOME="$ROOT/cache" PATH="$ROOT/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+"${ISO_ENV[@]}" \
   "$REX" --autostart=false server run --listen "$SOCK" --state-dir "$ROOT/state" --config "$ROOT/empty.lua" --exit-empty \
   >"$ROOT/server.log" 2>&1 &
 SERVER_PID=$!
