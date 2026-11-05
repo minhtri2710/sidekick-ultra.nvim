@@ -41,6 +41,20 @@ describe("registry", function()
       end)
     end)
 
+    it("accepts a backend with is_running and rejects one whose is_running is not a function", function()
+      local b = fake.backend("zellij")
+      b.is_running = function()
+        return true
+      end
+      registry.register(b)
+      expect.equality(registry.backend("zellij") == b, true)
+      local bad = fake.backend("tmux")
+      bad.is_running = "yes"
+      expect.error(function()
+        registry.register(bad)
+      end)
+    end)
+
     it("rejects a second backend with the same name", function()
       registry.register(fake.backend("herdr"))
       expect.error(function()
@@ -202,12 +216,63 @@ describe("registry", function()
       expect.equality(registry.is_running(vim.tbl_extend("force", s, { proc_name = "other" })), false)
       expect.equality(registry.is_running(vim.tbl_extend("force", s, { pid = 2 ^ 22 + 12345 })), false)
     end)
+
+    it("keeps the pid and name check for a registered backend without is_running", function()
+      registry.register(fake.backend("herdr"))
+      local s = fake.session("herdr", "claude")
+      expect.equality(registry.is_running(s), true)
+      expect.equality(registry.is_running(vim.tbl_extend("force", s, { proc_name = "other" })), false)
+    end)
+
+    it("returns the result of the session's backend is_running, and ignores pid and name then", function()
+      local b = fake.backend("zellij")
+      local calls, answer = {}, true
+      b.is_running = function(session)
+        table.insert(calls, session.id)
+        return answer
+      end
+      registry.register(b)
+      registry.register(fake.backend("herdr"))
+      -- No pid at all: only the backend can say.
+      local s = fake.session("zellij", "claude", 1)
+      s.pid = nil
+      expect.equality(registry.is_running(s), true)
+      answer = false
+      -- A matching live pid and name do not rescue a session the backend calls gone.
+      local live = fake.session("zellij", "claude", 2)
+      expect.equality(registry.is_running(live), false)
+      expect.equality(calls, { "zellij:claude1", "zellij:claude2" })
+      -- Another backend's session never reaches it.
+      expect.equality(registry.is_running(fake.session("herdr", "claude")), true)
+      expect.equality(#calls, 2)
+    end)
+
+    it("detaches an attached session its backend says stopped, and keeps one it says runs", function()
+      local b = fake.backend("zellij")
+      local alive = { ["zellij:claude1"] = true, ["zellij:claude2"] = false }
+      b.is_running = function(session)
+        return alive[session.id]
+      end
+      registry.register(b)
+      local one = fake.session("zellij", "claude", 1)
+      one.pid = nil
+      registry.attach(one)
+      registry.attach(fake.session("zellij", "claude", 2))
+      expect.equality(
+        vim.tbl_map(function(s)
+          return s.id
+        end, registry.attached()),
+        { "zellij:claude1" }
+      )
+      settle()
+      expect.equality(events[#events], { registry.DETACH, "zellij:claude2" })
+    end)
   end)
 
   describe("start backend selection", function()
     local function select(inside_names, term)
       registry.reset()
-      for _, name in ipairs({ "herdr", "rex" }) do
+      for _, name in ipairs({ "herdr", "rex", "tmux", "zellij" }) do
         registry.register(fake.backend(name, { is_inside = vim.tbl_contains(inside_names, name) }))
       end
       vim.env.TERM_PROGRAM = term
@@ -222,6 +287,23 @@ describe("registry", function()
 
     it("uses the one named by TERM_PROGRAM when both are inside", function()
       expect.equality({ select({ "herdr", "rex" }, "rex") }, { "rex" })
+    end)
+
+    it("uses the innermost of tmux and herdr, which TERM_PROGRAM names", function()
+      expect.equality({ select({ "herdr", "tmux" }, "tmux") }, { "tmux" })
+      expect.equality({ select({ "herdr", "tmux" }, "herdr") }, { "herdr" })
+    end)
+
+    it("uses zellij when it is the only one inside, whatever TERM_PROGRAM says", function()
+      expect.equality({ select({ "zellij" }, nil) }, { "zellij" })
+      expect.equality({ select({ "zellij" }, "tmux") }, { "zellij" })
+    end)
+
+    it("picks by TERM_PROGRAM among several, and zellij never matches it (it sets none)", function()
+      expect.equality({ select({ "herdr", "rex", "tmux" }, "rex") }, { "rex" })
+      -- zellij inside tmux: tmux is outermost but TERM_PROGRAM (inherited) names it; zellij is not chosen.
+      expect.equality({ select({ "tmux", "zellij" }, "tmux") }, { "tmux" })
+      expect.equality({ select({ "rex", "zellij" }, nil) }, { nil, "not_in_mux" })
     end)
 
     it("refuses when both are inside and TERM_PROGRAM names neither", function()

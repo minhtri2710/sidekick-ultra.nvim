@@ -1,0 +1,43 @@
+These fixtures are partly verified. The D8 probe (2026-11-05, zellij 0.45.1, private socket dir, panes running /bin/sh,
+/bin/cat, /bin/sleep and a byte recorder) printed the shapes below; ids, paths, session names and the pane commands
+are placeholders. The probe log is ~/.paseo/reports/sidekick-ultra/reviews/d8-probe-zellij.log.
+
+Verified by the probe:
+  list_panes_*.json        `zellij --session S action list-panes --all --json --command --state` -> a JSON array of
+                           panes with id, is_plugin, is_focused, exited, exit_status, is_held, title, tab_id, tab_name,
+                           terminal_command, plugin_url, ... A terminal pane adds pane_command ("/bin/sh",
+                           "/bin/sleep 300": the running command line) and pane_cwd. There is no pid. Plugin panes
+                           (is_plugin true) share ids with terminal panes: plugin 0 and terminal 0 coexist.
+  new_pane.txt             `new-pane --direction right --no-focus ...` prints "terminal_N" and leaves focus alone.
+  `write-chars --pane-id terminal_N -- TEXT`
+                           no Enter, LF stays LF, a leading "-" is safe after "--". To a missing pane it exits 0 and
+                           drops the text, which is why send checks the pane first.
+  `send-keys --pane-id terminal_N Enter`, `focus-pane-id terminal_N`
+                           worked as the backend uses them.
+  A missing session        exit 1 with "Session '...' not found".
+  `list-sessions -n -s`    printed one session name per line (list_sessions.txt) while a session existed.
+
+Still unverified (the live run, tests/live/zellij.sh, must settle each):
+  pane_command argv0 of a stub agent
+                           the probe only saw /bin/sh, /bin/cat and /bin/sleep. The backend matches a tool on the
+                           basename of the first word of pane_command. Whether a stub started as
+                           `exec -a claude /bin/bash stub` reports "claude" or "/bin/bash" there is unknown; the live
+                           script prints the observed argv0 and reports UNVERIFIABLE when it is not the tool's name.
+  pane_command for a tool started with env
+                           start puts "/usr/bin/env K=V claude" in front of the tool. Whether pane_command then shows
+                           "env" or the exec'd tool, and for how long, is unknown. The backend records the tool's
+                           command name as proc_name when argv0 is still "env", and is_running asks the tool's is_proc,
+                           so the session counts as running once env has exec'd the tool. While the pane still shows
+                           "env", is_running is false. The live script checks "running at once" immediately after start.
+  pane_command of a held pane
+                           the exited fixture (terminal_3) has exited true and no pane_command, as the probe saw for an
+                           exited pane. Whether a pane held after its command ended reports the same is not known; the
+                           backend skips any pane with exited true.
+  `list-sessions` with no session
+                           the backend treats a non-zero exit with empty stdout and "No active zellij sessions" on
+                           stderr as an empty list. That text is from memory of the zellij source, not from the probe.
+                           Any other failure is a backend_error. The live script records the real exit code and text
+                           before it creates its session.
+  list-panes on an exited (resurrectable) session
+                           `list-sessions -s` may name it. The backend skips a session whose list-panes fails with
+                           "Session '...' not found" (exit 1) and reports every other failure.

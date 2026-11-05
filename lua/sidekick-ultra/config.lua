@@ -16,6 +16,8 @@
 ---@field keys { prefix: string }|false default keymaps under `prefix`, or false for none
 ---@field herdr { enabled: boolean }
 ---@field rex { enabled: boolean, bin?: string, server?: string } `bin` and `server` are passed to the rex backend as is
+---@field tmux { enabled: boolean, socket?: string } `socket` becomes `-S <socket>` on every tmux call
+---@field zellij { enabled: boolean }
 
 ---A validation failure: `path` is the full key path, `expected` the type or values wanted.
 ---@class sidekick_ultra.ConfigError
@@ -35,6 +37,8 @@ local function defaults()
     keys = { prefix = require("sidekick-ultra.keys").DEFAULT_PREFIX },
     herdr = { enabled = true },
     rex = { enabled = true },
+    tmux = { enabled = true },
+    zellij = { enabled = true },
   }
 end
 
@@ -164,7 +168,8 @@ end
 function M.validate(opts)
   opts = opts or {}
   local cfg = defaults()
-  local err = check_table("", opts, set("tools", "prompts", "context", "watch", "keys", "herdr", "rex"))
+  local err =
+    check_table("", opts, set("tools", "prompts", "context", "watch", "keys", "herdr", "rex", "tmux", "zellij"))
   if err then
     return nil, err
   end
@@ -225,8 +230,13 @@ function M.validate(opts)
     end
   end
 
-  local backends = { herdr = set("enabled"), rex = set("enabled", "bin", "server") }
-  for _, name in ipairs({ "herdr", "rex" }) do
+  local backends = {
+    herdr = set("enabled"),
+    rex = set("enabled", "bin", "server"),
+    tmux = set("enabled", "socket"),
+    zellij = set("enabled"),
+  }
+  for _, name in ipairs({ "herdr", "rex", "tmux", "zellij" }) do
     local value = opts[name]
     if value ~= nil then
       err = check_table(name, value, backends[name])
@@ -237,6 +247,9 @@ function M.validate(opts)
         err = check_type(name .. "." .. key, field, key == "enabled" and "boolean" or "string")
         if err then
           return nil, err
+        end
+        if key == "socket" and field == "" then
+          return nil, fail("tmux.socket", "non-empty string", field)
         end
         cfg[name][key] = field
       end

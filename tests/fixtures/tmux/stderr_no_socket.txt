@@ -1,0 +1,1 @@
+error connecting to /private/tmp/sku-live-tmux/tmux.sock (No such file or directory)

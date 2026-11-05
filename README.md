@@ -1,13 +1,13 @@
 # sidekick-ultra.nvim
 
-Drive AI coding CLIs (claude, codex, gemini, and others) that run in herdr panes or rex blocks, from Neovim. Pick a running session, attach to it, and send it context from your editor: the current file, the cursor position, the visual selection, diagnostics, the quickfix list, or one of the built-in prompts.
+Drive AI coding CLIs (claude, codex, gemini, and others) that run in herdr panes, rex blocks, tmux panes or zellij panes, from Neovim. Pick a running session, attach to it, and send it context from your editor: the current file, the cursor position, the visual selection, diagnostics, the quickfix list, or one of the built-in prompts.
 
 This is a standalone rewrite, not a fork. It takes its workflow and vocabulary from [folke/sidekick.nvim](https://github.com/folke/sidekick.nvim), which was the inspiration and the behavior reference for the CLI feature, and shares no code with it. There is no Neovim `:terminal` window: the tools run in your multiplexer.
 
 ## Requirements
 
 - Neovim >= 0.11.2
-- herdr and/or rex, with Neovim running inside the multiplexer if you want to start tools from the editor
+- at least one of herdr, rex, tmux or zellij, with Neovim running inside the multiplexer if you want to start tools from the editor
 - the AI CLIs you want to use, on `PATH`
 - optional: `nvim-treesitter-textobjects`, for the `{function}` and `{class}` placeholders
 
@@ -37,6 +37,11 @@ or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the 
     bin = nil,    -- path to the rex binary; default: rex on PATH, then the Rex Beta app bundle
     server = nil, -- passed to rex as -S <server>
   },
+  tmux = {
+    enabled = true,
+    socket = nil, -- non-empty path; adds -S <socket> to every tmux call
+  },
+  zellij = { enabled = true },
   -- Merged per tool over the built-ins; `false` removes a tool; a new name adds one (`cmd` required).
   tools = {
     claude = { env = { FOO = "bar" } },
@@ -60,6 +65,31 @@ or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the 
 Tool fields: `cmd` (non-empty list), `env`, `url`, `is_proc` (Vim regex or a function of `{pid, cmd}`; the default matches the command name as a word), `mux_focus` (send a focus-in event before input), `location` (`plain`, `claude` or `escaped`: how file locations are written in sent text).
 
 Built-in tools: aider, amazon_q, claude, codex, copilot, crush, cursor, gemini, grok, opencode, pi, qwen.
+
+## tmux and zellij
+
+Both are backends like herdr and rex: they list the panes that run a configured tool, start a tool in a new pane beside Neovim's own, send text, press Enter and focus a pane. Each is enabled by default and registered when its binary is found; `tmux = { enabled = false }` or `zellij = { enabled = false }` turns one off.
+
+What they do not have is an agent status. herdr and rex tell the plugin when an agent is blocked on a prompt; tmux and zellij do not. So on tmux and zellij `send` never refuses with `session_blocked` or `status_unreadable`: the text goes to the pane whatever it is doing.
+
+**tmux** (checked against tmux 3.8)
+
+- Neovim counts as inside tmux when `TMUX` and `TMUX_PANE` are set, and, if `tmux.socket` is set, when the server in `TMUX` is that socket (compared after normalizing and resolving the path); otherwise start is refused with `not_in_mux`. Starting a tool is allowed only when inside.
+- Without `tmux.socket`, calls go to the server named by `TMUX`, or to tmux's default server when Neovim runs outside tmux. With `socket`, every call is `tmux -S <socket> ...`. Set it to reach a private server from an editor that runs outside tmux.
+- Discovery lists every pane of the server, in all sessions, with one `list-panes -a` call, and skips dead panes. A pane counts when a process in its process tree (the pane's own process and everything below it) is a configured tool. Neovim reads the tree itself; no `ps` runs and no command line or environment is read. No running server means no sessions, not an error.
+- A session id is `tmux:%N`, with the pane id tmux gives.
+- Start splits to the right of Neovim's pane without focus, in Neovim's directory, with the tool's `env` as `-e K=V`.
+- `send` pastes the text through a temporary tmux buffer with no Enter, and line feeds stay line feeds. `submit` sends Enter.
+- `focus` selects the pane's window and the pane. When Neovim runs inside tmux and the pane is in another session, it also switches the client to it.
+
+**zellij** (checked against zellij 0.45.1)
+
+- Neovim counts as inside zellij when `ZELLIJ` and `ZELLIJ_PANE_ID` are set. Calls inside zellij go to the current session (`ZELLIJ_SESSION_NAME`). Outside zellij, discovery asks every session in turn. There is no zellij option besides `enabled`.
+- zellij gives the plugin no process id. Discovery therefore goes by program name: a terminal pane counts when the first word of its running command (`pane_command`) is a configured tool. Plugin panes and exited panes are skipped. The rest of the command line is never read.
+- A session id is `zellij:<session>:terminal_<N>`.
+- With no process id there is no in-process liveness check. Whether an attached zellij session still runs takes one `list-panes` call, made when the statusline refreshes (at most every 5 s) and when attached sessions are listed. The other backends make no call for this.
+- zellij exits 0 when `write-chars` is sent to a pane that does not exist, and drops the text. So `send` first checks the pane, and a pane that is gone or has exited is refused before anything is written.
+- Start opens a pane to the right of Neovim's pane in Neovim's own session, without focus. zellij has no environment flag for it, so a tool `env` is passed as `/usr/bin/env K=V command`. `focus` focuses the pane by id.
 
 ## Keymaps
 
@@ -132,17 +162,17 @@ require("sidekick-ultra.status").cli()
 -- { { id = "herdr:w1-1", tool = "claude", cwd = "...", backend = "herdr", state = "idle" }, ... }
 ```
 
-One entry per attached session, with `state` set when the backend reports one. It never runs an external command. Events `User SidekickUltraAttach` and `User SidekickUltraDetach` carry `data = { id = ... }`.
+One entry per attached session, with `state` set when the backend reports one. The list is cached for 5 s. Refreshing it checks that each attached session still runs: an in-process pid check for herdr, rex and tmux, and one `zellij` call per attached zellij session. Events `User SidekickUltraAttach` and `User SidekickUltraDetach` carry `data = { id = ... }`.
 
 ## Safety
 
-- `send` re-reads the session state first and refuses (`session_blocked`) when the agent is blocked on a prompt, and refuses (`status_unreadable`) when the state cannot be read.
-- Starting a tool is allowed only when Neovim runs inside that multiplexer (`not_in_mux` otherwise). If it runs inside both, `TERM_PROGRAM` decides.
+- On herdr and rex, `send` re-reads the session state first and refuses (`session_blocked`) when the agent is blocked on a prompt, and refuses (`status_unreadable`) when the state cannot be read. tmux and zellij have no agent status and no such guard.
+- Starting a tool is allowed only when Neovim runs inside that multiplexer (`not_in_mux` otherwise). If it runs inside several, `TERM_PROGRAM` decides: the backend whose name it equals is used, and anything else is `not_in_mux`. herdr, rex and tmux set `TERM_PROGRAM` to their own name; zellij does not, so inside zellij nested in another multiplexer the outer one is chosen if `TERM_PROGRAM` names it, and otherwise start is refused.
 - Notifications carry a stable error id: `not_in_mux`, `session_blocked`, `status_unreadable`, `not_installed`, `no_match`, `nothing_to_send`, `unknown_context`, `unknown_prompt`, `render_failed`, `backend_error`, `duplicate_session`, `invalid_command`, `incomplete_command`, `invalid_args`.
 
 ## Health
 
-`:checkhealth sidekick-ultra` reports the Neovim version, each backend (enabled, binary path and where it came from, server settings by variable name only), whether Neovim runs inside herdr or rex, whether the textobjects queries are available, and which tools are installed.
+`:checkhealth sidekick-ultra` reports the Neovim version, each backend (enabled, binary path and where it came from, server settings by variable name only), for tmux and zellij also whether Neovim runs inside them and their version (`tmux -V`, `zellij --version`), whether `tmux.socket` is set, whether Neovim runs inside any of the four multiplexers, whether the textobjects queries are available, and which tools are installed.
 
 ## Development
 
@@ -151,7 +181,7 @@ make check        # stylua --check, selene, and the test suite
 make test-floor   # the suite under Neovim 0.11.2 (NVIM=/tmp/sku-nvim-0.11/nvim-macos-arm64/bin/nvim)
 ```
 
-`scripts/test` clones mini.test at a pinned commit into `.tests/deps`, runs the specs in an isolated HOME with stub `herdr` and `rex` binaries first on `PATH` (a stub that is reached prints `stub reached` and exits 97), and bounds the run at 300 s. The backend contract is documented in `lua/sidekick-ultra/backend.lua`.
+`scripts/test` clones mini.test at a pinned commit into `.tests/deps`, runs the specs in an isolated HOME with stub `herdr`, `rex`, `tmux` and `zellij` binaries first on `PATH` (a stub that is reached prints `stub reached` and exits 97), and bounds the run at 300 s. The backend contract is documented in `lua/sidekick-ultra/backend.lua`.
 
 ## License
 

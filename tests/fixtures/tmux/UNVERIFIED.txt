@@ -1,0 +1,37 @@
+These fixtures follow the shapes the D8 tmux 3.8 probe printed (reviews/d8-probe-tmux.log, run 2026-11-05 on a private
+server). They were written by hand for the spec; no tmux was run while writing them. Pids, paths, session names and
+window ids are placeholders.
+
+What the probe saw (and the fixtures copy):
+  split_window.txt          `split-window -h -d -P -F '#{pane_id}\t#{pane_pid}'` printed `%1<TAB>58283`, and the active
+                            pane stayed `%0`. With an argv command pane_pid is the program itself; a one-element
+                            command goes through `sh -c`, which exec'd `sleep`, so pane_pid was `sleep`'s pid.
+  stderr_missing_pane.txt   `can't find pane: %99`, exit 1, for `send-keys -t %99` and `list-panes -t %99`.
+  `load-buffer -` + `paste-buffer -d -r`
+                            delivered `a b\nc d` with LF kept and no CR; `send-keys Enter` then added `\r`; the buffer
+                            was gone afterwards.
+  `select-window -t %1 ; select-pane -t %1`
+                            made %1 the active pane.
+  a bare `tmux` inside a pane reached that pane's server.
+
+Not seen by the probe; the live run (tests/live/tmux.sh) must settle:
+  list_panes.txt            the probe listed with a different format string (`#{pane_id} #{pane_pid} ... #{pane_dead}`
+                            order and fields differed). This six-field row with `#{session_name}` and `#{window_id}`
+                            is the backend's own format and has not been printed by a real tmux. The format separates
+                            fields with a real TAB character, not the two characters backslash-t.
+  stub agents through the process-tree walk
+                            the probe ran `cat` and `sleep`, never an AI CLI. Whether `nvim_get_proc(pid).name` is
+                            "claude" / "codex" for a stub, and whether the stub sits at depth 0 (argv command) or
+                            below a shell (typed command), is not confirmed. Real Claude Code (a version string as
+                            name on rex) is not covered.
+  stderr_no_server.txt, stderr_no_socket.txt
+                            the text and exit code of `list-panes -a` with no server running. The probe never
+                            stopped its server before listing. The backend treats exit != 0 with a first stderr line
+                            of `no server running ...` or `error connecting to ... (No such file or directory)` as an
+                            empty list; any other failure is a backend_error.
+  display_session.txt       `display-message -p -t $TMUX_PANE '#{session_name}'` output, and `switch-client -t %N`
+                            from a pane in another session. The probe checked focus only inside one session.
+  the one-element command shell-escaped (`'claude'`)
+                            only `sleep` ran through `sh -c` in the probe.
+  buffer names `sku-<pid>-<n>`
+                            the probe used a fixed buffer name.

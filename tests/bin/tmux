@@ -1,0 +1,4 @@
+#!/bin/sh
+echo "stub reached" >&2
+: > "$HOME/.sku-stub-reached"
+exit 97
