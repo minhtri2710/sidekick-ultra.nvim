@@ -1115,10 +1115,12 @@ describe("zellij backend", function()
 
     before_each(function()
       cap = notify.capture()
-      fake.reset(
-        { claude = { cmd = fake.INSTALLED }, gemini = { cmd = fake.INSTALLED }, aider = { cmd = fake.INSTALLED } },
-        { zellij = { enabled = false } }
-      )
+      fake.reset({
+        claude = { cmd = fake.INSTALLED },
+        gemini = { cmd = fake.INSTALLED },
+        aider = { cmd = fake.INSTALLED },
+        qwen = { cmd = fake.INSTALLED },
+      }, { zellij = { enabled = false } })
     end)
 
     after_each(function()
@@ -1306,6 +1308,22 @@ describe("zellij backend", function()
         { 'node -e "' .. SECRET .. '"', nil },
         { "python3 -m aider --token " .. SECRET, "aider" },
         { 'python3 -c "' .. SECRET .. '"', nil },
+        { 'node -pe "/x/' .. SECRET .. '/gemini"', nil },
+        { 'node -ep "/x/' .. SECRET .. '/gemini"', nil },
+        { "node --eval=0 /x/" .. SECRET .. "/gemini", nil },
+        { "node --print=0 /x/" .. SECRET .. "/gemini", nil },
+        { "node --run /x/" .. SECRET .. "/gemini", nil },
+        { "node --env-file " .. SECRET .. " /x/bin/gemini", "gemini" },
+        { "node --title " .. SECRET .. " /x/bin/gemini", "gemini" },
+        { "node --config-file /x/bin/qwen --x /x/" .. SECRET .. "/gemini", "qwen" },
+        { "node - /x/" .. SECRET .. "/gemini", nil },
+        { 'python3 -uc "/x/' .. SECRET .. '/gemini"', nil },
+        { "python3 -c/x/" .. SECRET .. "/gemini", nil },
+        { "python3 -Wc /x/bin/aider --token " .. SECRET, nil },
+        { "python3 -maider /x/" .. SECRET .. "/gemini", nil },
+        { "python3 -uX /x/" .. SECRET .. "/gemini /x/bin/aider", "aider" },
+        { "python3 --check-hash-based-pycs " .. SECRET .. " /x/bin/aider", "aider" },
+        { "python3 - /x/" .. SECRET .. "/gemini", nil },
       }
 
       ---@param value any
