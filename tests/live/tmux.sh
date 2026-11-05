@@ -12,7 +12,7 @@
 # Then it tears everything down: `kill-server` on the private socket, then `rm -rf` of the literal root.
 #
 # Every tmux call it makes (and the plugin makes, outside) names the private socket with -S. It never uses -L, the
-# default server, the Human's sessions or any /tmp/munsu-e2e.* server. The stubs are copies of /bin/cat, so a typed
+# default server, the Human's sessions or any /tmp/munsu-e2e.* server. The stubs are symlinks to /bin/cat, so a typed
 # line is echoed by the tty and printed again by cat once Enter arrives; nothing is interpreted by a shell.
 set -eu
 
@@ -103,11 +103,11 @@ mkdir "$R/bin" "$R/home" "$R/tmp" "$R/work" "$R/out"
 # nvim's driver and the plugin call `tmux` by name; the isolated PATH finds this link. The script runs $TMUX_BIN.
 ln -s "$TMUX_BIN" "$R/bin/tmux"
 
-# Stub agents: copies of /bin/cat named claude and codex. nvim reads a process name from the executable's own name, so
-# a copy answers to its name where a shell script would answer as bash.
+# Stub agents: symlinks to /bin/cat named claude and codex. nvim reads the invoked name, so a symlink answers to its own
+# name (checked with nvim_get_proc on this Mac). A copy of /bin/cat is killed by macOS when run from another path, and a
+# shell script would answer as bash.
 for name in claude codex; do
-  cp /bin/cat "$R/bin/$name"
-  chmod +x "$R/bin/$name"
+  ln -s /bin/cat "$R/bin/$name"
 done
 
 # Refuse unless the stubs win: under the exact isolated PATH, claude, codex and tmux must resolve to the files made
@@ -122,14 +122,14 @@ for name in claude codex tmux; do
     exit 2
   fi
 done
+# Each stub must be exactly a symlink to /bin/cat, and it must run (cat exits 0 on EOF at once).
 for name in claude codex; do
-  if [ -L "$R/bin/$name" ] || [ ! -f "$R/bin/$name" ]; then
-    echo "refusing: $R/bin/$name is not a regular file" >&2
+  if [ ! -L "$R/bin/$name" ] || [ "$(readlink "$R/bin/$name")" != /bin/cat ]; then
+    echo "refusing: $R/bin/$name is not a symlink to /bin/cat" >&2
     exit 2
   fi
-  # The copy must run (on Apple Silicon a copied system binary can be refused); cat exits 0 on EOF at once.
   "$R/bin/$name" </dev/null || {
-    echo "refusing: the stub copy $R/bin/$name does not run" >&2
+    echo "refusing: the stub $R/bin/$name does not run" >&2
     exit 2
   }
 done
