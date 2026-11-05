@@ -3,20 +3,36 @@
 # Written, not run, by the D8 Engineer. The Lead sends this recipe to the Supervisor before the first run.
 #
 # What it does: creates a background zellij session under the literal root /tmp/sku-live-zellij (own HOME, XDG dirs,
-# config dir, data dir and ZELLIJ_SOCKET_DIR), adds stub-agent panes (claude, codex, a claude that exits on its first
-# byte, and a /bin/sh pane that has the claude stub typed into it), and drives headless nvim with the plugin.
-# Layout: the session is a headless 50 columns wide, and `new-pane --direction right` creates nothing when the tab has
-# no room (zellij closes the freshly spawned pane and prints no id). So nvim's tab (the first one) holds only nvim's
-# pane, which keeps the room for the inside start. The stubs live in other tabs, one tab for claude and codex (two panes
-# side by side), one for the pane that exits, one for the shell pane. Floating panes are not used: with a floating pane
-# visible, zellij silently creates no tiled pane at all. After the phases, a scratch tab is split right until a split
-# prints no id, to record what a no-room `new-pane` does (a bounded observation, never a gate).
-#   outside the mux: discover, attach, send (no Enter), submit, focus, the gone-pane guard, the not_in_mux start refusal;
-#   inside the mux (nvim typed into the session's first pane): inside(), discover, start through registry.start (the new
-#                    pane is focused per D7, beside nvim's pane and in its tab, with a tool env), running within 3 s,
-#                    rediscovery, send, submit. The call of `new-pane` is observed: exit code, stdout, stderr first line,
-#                    time and pane counts before and after (never a command line).
-# Then it tears everything down: `kill-session` of the one session it made, and `rm -rf` of the root.
+# config dir, data dir and ZELLIJ_SOCKET_DIR) FROM A LAYOUT FILE and drives headless nvim with the plugin.
+# Why a layout at creation: zellij 0.45.1 sizes a tab from an attached client. A tab made later by `new-tab` in a session
+# with no client is 0x0 ("Not enough room for panes"); its panes never show in list-panes and the tab is dropped when a
+# client attaches (zellij issues 5594 and 5664, 0.45.1). Tabs of the creation layout are the way around it. The layout:
+#   tab "nvim":  pane sku-nvim (the default shell, where nvim is typed; nothing else, so the inside start has room)
+#   tab "stubs": panes sku-claude and sku-codex side by side (stub agents)
+#   tab "gone":  pane sku-gone (a stub that ends on its first byte)
+#   tab "shell": pane sku-shell (/bin/sh, with the claude stub typed into it)
+# No tab-bar or status-bar plugin panes. The panes are found by their layout name (list-panes `title`), never by command.
+# Floating panes are not used: with one visible, zellij silently creates no tiled pane at all.
+#   outside the mux: discover, attach, send (no Enter), submit, cross-tab focus, the gone-pane guard, the not_in_mux
+#                    refusal;
+#   inside the mux (nvim typed into the sku-nvim pane): inside(), discover, start through registry.start (focused per D7,
+#                    in nvim's tab and right of nvim's pane, with a tool env), the attach and status-refresh path (N2),
+#                    running at once (start waits up to 2 s for the pane's argv0 to be the tool, past the env
+#                    wrapper) and within 3 s, rediscovery, send, submit. The `new-pane` call is observed: exit code, stdout,
+#                    stderr first line, time and pane counts before and after (never a command line).
+# After the phases, one split-right in the "gone" tab is repeated (at most 6 times) until a split prints no id, to record
+# what a no-room `new-pane` does. It is an observation, never a gate.
+#
+# The layout reaches the session by one of three forms; no probe ran any of them, so each is checked right after use
+# against list-panes (names, tabs, sizes) and the next one is tried when the check fails:
+#   layout-flag     zellij --layout F attach --create-background S
+#   options-flag    zellij attach --create-background S options --default-layout F
+#   config-default  default_layout "F" in the config file, then zellij attach --create-background S
+# The form that held is printed. If none holds, the run stops with a FATAL that lists all three.
+#
+# A list-panes answer can be empty (exit 0, nothing printed; the server gives up after 1 s). Every empty answer prints a
+# line with the call, its exit code and its first stderr line, and is retried within a bound; nothing is silent. Every
+# setup step that fails stops the run with a FATAL naming the step.
 #
 # It never lists or touches another session: every zellij call runs under `env -i` with ZELLIJ_SOCKET_DIR under the
 # root, so the Human's sessions are not even visible. It never runs kill-all-sessions or delete-all-sessions.
@@ -28,6 +44,7 @@ set -eu
 }
 
 R=/tmp/sku-live-zellij
+SESSIONS="skulive skulive-b skulive-c"
 S=skulive
 here=$(cd "$(dirname "$0")" && pwd -P)
 REPO=$(cd "$here/../.." && pwd -P)
@@ -45,11 +62,11 @@ die() {
 }
 
 # Resolved now, with the caller's PATH, and only ever executed with the isolated environment below.
-ZBIN=$(command -v zellij) || die "zellij is not on PATH"
-NVIM=$(command -v nvim) || die "nvim is not on PATH"
-case "$ZBIN" in */tests/bin/*) die "zellij resolves to a test stub: $ZBIN" ;; esac
+ZBIN=$(command -v zellij) || die "preflight: zellij is not on PATH"
+NVIM=$(command -v nvim) || die "preflight: nvim is not on PATH"
+case "$ZBIN" in */tests/bin/*) die "preflight: zellij resolves to a test stub: $ZBIN" ;; esac
 
-[ -e "$R" ] && die "$R already exists; remove it yourself after looking at it"
+[ -e "$R" ] && die "preflight: $R already exists; remove it yourself after looking at it"
 
 CREATED=0
 
@@ -62,7 +79,7 @@ ISO_PATH="$R/bin:/usr/bin:/bin"
 # functions and names we do not know would get through). Every value is a plain word (the root is a literal path, the
 # user name comes from `id -un`), so none has a space or a glob character and the unquoted expansions below split
 # correctly. ZELLIJ_SOCKET_DIR is what keeps the Human's sessions out of reach.
-USER_NAME=$(id -un)
+USER_NAME=$(id -un) || die "preflight: id -un failed"
 Z_ENV="-i HOME=$R/home TMPDIR=$R/tmp XDG_CONFIG_HOME=$R/xdg/config XDG_DATA_HOME=$R/xdg/data
   XDG_STATE_HOME=$R/xdg/state XDG_CACHE_HOME=$R/xdg/cache ZELLIJ_SOCKET_DIR=$R/sock PATH=$ISO_PATH
   USER=$USER_NAME LOGNAME=$USER_NAME LANG=en_US.UTF-8 TERM=xterm-256color SHELL=/bin/sh"
@@ -81,12 +98,15 @@ ZA() {
   Z --session "$S" action "$@"
 }
 
+# Only kill-session, and only of the session names this script can have made. Never kill-all-sessions.
 # shellcheck disable=SC2329
 cleanup() {
   status=$?
   trap - EXIT INT TERM
   if [ "$CREATED" = 1 ]; then
-    Z kill-session "$S" >/dev/null 2>&1 || true
+    for name in $SESSIONS; do
+      Z kill-session "$name" >/dev/null 2>&1 || true
+    done
     sleep 1
     say rm -rf /tmp/sku-live-zellij
     rm -rf /tmp/sku-live-zellij
@@ -97,13 +117,13 @@ trap cleanup EXIT INT TERM
 
 # --- root, stubs, helpers -------------------------------------------------------------------------------------
 say mkdir "$R"
-mkdir "$R"
+mkdir "$R" || die "setup: mkdir $R"
 CREATED=1
 mkdir "$R/bin" "$R/home" "$R/tmp" "$R/work" "$R/out" "$R/sock" "$R/config" "$R/data" \
-  "$R/xdg" "$R/xdg/config" "$R/xdg/data" "$R/xdg/state" "$R/xdg/cache"
+  "$R/xdg" "$R/xdg/config" "$R/xdg/data" "$R/xdg/state" "$R/xdg/cache" || die "setup: mkdir of the root's directories"
 # nvim's driver and the plugin call `zellij` by name; the isolated PATH finds this link. The script runs $ZBIN.
-ln -s "$ZBIN" "$R/bin/zellij"
-printf 'show_startup_tips false\nshow_release_notes false\n' >"$R/config/config.kdl"
+ln -s "$ZBIN" "$R/bin/zellij" || die "setup: link to zellij"
+
 
 # Stub agent CLIs. The backend identifies a tool from the first word of the pane's command line, so each stub ends in
 # `exec -a <name> /bin/dd`: the process is dd, named <name>. dd is the byte recorder of the probe (raw tty, bs=1): it
@@ -141,19 +161,64 @@ for name in claude codex; do
   fi
 done
 
-# Reads the JSON of `list-panes` on stdin and prints one answer by mode. Never a command line: argv0 is the basename of
-# the first word of a pane_command, and nothing else of it is printed.
-#   first        id of the first terminal pane           max          highest terminal pane id (or -1)
-#   newer N      id of the first terminal pane above N   tabof N     tab_id of terminal pane N
-#   argv0 N      argv0 of terminal pane N                count [T]    number of terminal panes (of tab T)
+# The layout (KDL). Pane `name`s are what the script looks for; cwd is the work directory. `default_tab_template` with
+# only `children` leaves out the tab-bar and status-bar plugin panes.
+cat >"$R/layout.kdl" <<EOF
+layout {
+    default_tab_template {
+        children
+    }
+    tab name="nvim" {
+        pane name="sku-nvim" cwd="$R/work"
+    }
+    tab name="stubs" split_direction="vertical" {
+        pane name="sku-claude" command="$R/bin/claude" cwd="$R/work"
+        pane name="sku-codex" command="$R/bin/codex" cwd="$R/work"
+    }
+    tab name="gone" {
+        pane name="sku-gone" command="$R/bin/gone" cwd="$R/work"
+    }
+    tab name="shell" {
+        pane name="sku-shell" command="/bin/sh" cwd="$R/work"
+    }
+}
+EOF
+
+# Reads the JSON of `list-panes` on stdin and prints one answer by mode. Empty or invalid input stops with a message that
+# names the calling step (SKU_STEP) and exit 3. It never prints a command line: argv0 is the basename of the first word
+# of a pane_command, and a title is printed only when it is one of the layout's own names.
+#   first        id of the first terminal pane          max          highest terminal pane id (or -1)
+#   newer N      id of the first terminal pane above N  tabof N      tab_id of terminal pane N
+#   argv0 N      argv0 of terminal pane N               count [T]    number of terminal panes (of tab T)
+#   byname NAME  id of the terminal pane titled NAME    cols N       pane_columns of terminal pane N
+#   titles       "id tab columns title" per terminal pane (a title not starting with sku- is shown as "(other)")
 #   desc T       one line per terminal pane of tab T: id, floating, suppressed, stacked, exited
 cat >"$R/zjson.lua" <<'EOF'
-local panes = vim.json.decode(io.read("*a"))
+local step = os.getenv("SKU_STEP") or "?"
+local function fail(reason)
+  io.stderr:write(("FATAL zjson (step: %s): %s\n"):format(step, reason))
+  os.exit(3)
+end
+local raw = io.read("*a")
+if raw == nil or not raw:find("%S") then
+  fail("empty input (zellij printed nothing)")
+end
+local ok, panes = pcall(vim.json.decode, raw, { luanil = { object = true, array = true } })
+if not ok or type(panes) ~= "table" then
+  fail("input is not JSON")
+end
 local mode, want = arg[1], tonumber(arg[2])
 local terminals = {}
 for _, pane in ipairs(panes) do
-  if not pane.is_plugin then
+  if type(pane) == "table" and not pane.is_plugin then
     table.insert(terminals, pane)
+  end
+end
+local function find(id)
+  for _, pane in ipairs(terminals) do
+    if pane.id == id then
+      return pane
+    end
   end
 end
 if mode == "first" then
@@ -171,17 +236,30 @@ elseif mode == "newer" then
       return
     end
   end
-elseif mode == "tabof" or mode == "argv0" then
+elseif mode == "tabof" or mode == "argv0" or mode == "cols" then
+  local pane = find(want)
+  if pane == nil then
+    return
+  end
+  if mode == "tabof" then
+    io.write(tostring(pane.tab_id))
+  elseif mode == "cols" then
+    io.write(tostring(pane.pane_columns))
+  else
+    local word = (pane.pane_command or ""):match("^%s*(%S+)")
+    io.write(word and vim.fs.basename(word) or "")
+  end
+elseif mode == "byname" then
   for _, pane in ipairs(terminals) do
-    if pane.id == want then
-      if mode == "tabof" then
-        io.write(tostring(pane.tab_id))
-      else
-        local word = (pane.pane_command or ""):match("^%s*(%S+)")
-        io.write(word and vim.fs.basename(word) or "")
-      end
+    if pane.title == arg[2] then
+      io.write(tostring(pane.id))
       return
     end
+  end
+elseif mode == "titles" then
+  for _, pane in ipairs(terminals) do
+    local title = type(pane.title) == "string" and pane.title:sub(1, 4) == "sku-" and pane.title or "(other)"
+    io.write(("%s %s %s %s\n"):format(pane.id, tostring(pane.tab_id), tostring(pane.pane_columns), title))
   end
 elseif mode == "count" then
   local n = 0
@@ -197,6 +275,8 @@ elseif mode == "desc" then
       io.write(("id=%s floating=%s suppressed=%s stacked=%s exited=%s\n"):format(pane.id, tostring(pane.is_floating), tostring(pane.is_suppressed), tostring(pane.is_stacked), tostring(pane.exited)))
     end
   end
+else
+  fail("unknown mode " .. tostring(mode))
 end
 EOF
 
@@ -224,10 +304,20 @@ local function zellij(session, ...)
 end
 ---@return table[] the terminal panes of the session
 local function terminals(session)
-  local json = vim.json.decode((zellij(session, "list-panes", "--all", "--json", "--state")))
-  return vim.tbl_filter(function(pane)
-    return not pane.is_plugin
-  end, json)
+  -- An empty answer (exit 0, nothing printed) is logged with its exit code and retried; it is never read as "no panes".
+  for try = 1, 10 do
+    local stdout, code = zellij(session, "list-panes", "--all", "--json", "--state")
+    if stdout:find("%S") then
+      local ok, json = pcall(vim.json.decode, stdout)
+      assert(ok and type(json) == "table", "driver terminals(): list-panes printed invalid JSON")
+      return vim.tbl_filter(function(pane)
+        return not pane.is_plugin
+      end, json)
+    end
+    log(("EMPTY answer (driver terminals): list-panes exit=%s (try %d of 10)"):format(tostring(code), try))
+    vim.wait(500)
+  end
+  error("driver terminals(): list-panes stayed empty after 10 tries")
 end
 local function find(sessions, id)
   for _, s in ipairs(sessions) do
@@ -322,6 +412,18 @@ local function run()
     end
     check("focus moved to the codex pane, not the claude pane", focused[b] == true and focused[a] == false, focused)
     observe("focus crossed tabs (codex tab vs nvim's tab)", { tab_of[b], tab_of[c] })
+    -- list-tabs --json has an `active` flag per tab (zellij docs, programmatic control). Observed, not gated.
+    local tabs_out, tabs_code = zellij(session_name, "list-tabs", "--json")
+    local active_tab
+    if tabs_code == 0 then
+      local okj, tabs = pcall(vim.json.decode, tabs_out)
+      for _, tab in ipairs(okj and type(tabs) == "table" and tabs or {}) do
+        if tab.active then
+          active_tab = tab.tab_id
+        end
+      end
+    end
+    observe("active tab after the cross-tab focus (list-tabs exit, active tab_id)", { tabs_code, active_tab })
     observe("nvim's pane still flagged focused after the cross-tab focus", focused[c])
 
     -- The pane in SKU_GONE_PANE ran a stub that exited on `Q`: it is exited or closed, and the guard must refuse.
@@ -386,13 +488,16 @@ local function run()
         attach_fired = true
       end,
     })
+    local started_at = vim.uv.hrtime()
     local session, err = registry.start(tools.get("claude"))
+    local start_ms = math.floor((vim.uv.hrtime() - started_at) / 1e6)
     exec.run = run
     check("start returns a session", session ~= nil, err)
     if not session then
       return
     end
     observe("started session", session)
+    observe("registry.start duration ms (new-pane, the wait for the tool as argv0, focus)", start_ms)
     -- At once, as the product does: attach, then let the event loop run the status refresh (its autocmd was
     -- registered before this one, so it has run when this one fires).
     check("attach started session", registry.attach(session) == true)
@@ -406,8 +511,8 @@ local function run()
       still = still or attached.id == session.id
     end
     check("the started session is still attached after the status refresh", still and not detached[session.id], { still, detached })
-    -- The pane may still show the env wrapper or the stub's bash for a moment (the tool env is set through env).
-    observe("started session is running at once", registry.is_running(session))
+        -- start returns only once the pane's argv0 matches the tool, so this holds at once.
+    check("started session is running at once", registry.is_running(session) == true, session)
     check("started session is running within 3 s", vim.wait(3000, function()
       return registry.is_running(session)
     end, 200), session)
@@ -453,9 +558,55 @@ log("DONE")
 vim.cmd("qa!")
 EOF
 
-# --- session --------------------------------------------------------------------------------------------------
+# --- listing helpers -------------------------------------------------------------------------------------------
+# `snap_try <step> [extra list-panes flags]` stores the JSON of `list-panes --all --json --state` in $R/out/snap.json. An
+# empty answer (exit 0 and nothing printed, a timeout in the server) prints a line with the call, its exit code and its
+# first stderr line, then retries SNAP_TRIES times, 0.5 s apart. It returns 1 when the answer stays empty. `snap` stops the
+# run instead, naming the step.
+SNAP_TRIES=10
+snap_try() {
+  step=$1
+  shift
+  tries=0
+  while :; do
+    say zellij --session "$S" action list-panes --all --json --state "$@"
+    set +e
+    z_env "$ZBIN" --config-dir "$R/config" --data-dir "$R/data" --session "$S" action list-panes --all --json --state "$@" \
+      >"$R/out/snap.json" 2>"$R/out/snap.err"
+    rc=$?
+    set -e
+    if grep -q '[^[:space:]]' "$R/out/snap.json"; then
+      return 0
+    fi
+    tries=$((tries + 1))
+    echo "EMPTY answer ($step): list-panes --all --json --state $* exit=$rc stderr1=[$(head -n 1 "$R/out/snap.err")] (try $tries of $SNAP_TRIES)" >&2
+    [ "$tries" -lt "$SNAP_TRIES" ] || return 1
+    sleep 0.5
+  done
+}
+snap() {
+  snap_try "$@" || die "$1: list-panes stayed empty after $SNAP_TRIES tries"
+}
+
+# `jf <step> <mode> [argument]` runs zjson.lua on $R/out/snap.json under the isolated environment. Use it as
+# `x=$(jf step mode arg) || die "step: ..."`; zjson.lua names the step on a bad input.
+jf() {
+  step=$1
+  shift
+  z_env SKU_STEP="$step" "$NVIM" -u NONE -i NONE --headless -l "$R/zjson.lua" "$@" <"$R/out/snap.json"
+}
+
+# --- session, from the layout ---------------------------------------------------------------------------------
+write_config() { # <form>
+  printf 'show_startup_tips false\nshow_release_notes false\nsession_serialization false\n' >"$R/config/config.kdl"
+  if [ "$1" = config-default ]; then
+    printf 'default_layout "%s"\n' "$R/layout.kdl" >>"$R/config/config.kdl"
+  fi
+}
+
 # Observation before any session exists in the private socket dir: the backend treats a non-zero exit with empty stdout
 # and "No active zellij sessions" on stderr as an empty list. This records what zellij really does.
+write_config none
 set +e
 z_env "$ZBIN" --config-dir "$R/config" --data-dir "$R/data" list-sessions -n -s >"$R/out/nosession.stdout" 2>"$R/out/nosession.stderr"
 rc=$?
@@ -466,71 +617,107 @@ set -e
   echo "stderr: $(cat "$R/out/nosession.stderr")"
 } >"$R/out/nosession.txt"
 
-Z attach --create-background "$S"
-sleep 2
-
-# Socket preflight: the session's socket must be under the root, or nothing below may run.
-find "$R/sock" -name "$S" 2>/dev/null | grep -q . || {
-  echo "refusing: no socket for $S under $R/sock" >&2
-  find "$R/sock" >&2 || true
-  exit 2
-}
-case "$(Z list-sessions -n -s)" in
-  "$S") ;;
-  *) die "the private socket dir does not list exactly the session $S" ;;
-esac
-
-# --- panes: A = stub claude, B = stub codex, G = stub claude that will exit, C = the first pane, a shell for nvim ---
-jfirst() { z_env "$NVIM" -u NONE -i NONE --headless -l "$R/zjson.lua" "$@"; }
-
-pane_number() { # <new-pane output>
-  case "$1" in
-    terminal_[0-9]*) echo "${1#terminal_}" ;;
-    *) die "new-pane printed no terminal id: $1" ;;
-  esac
-}
-
-PANE_C=$(ZA list-panes --all --json --state | jfirst first)
-case "$PANE_C" in "" | *[!0-9]*) die "could not read the first pane id" ;; esac
-
-# A new tab whose only terminal pane runs the given command; prints that pane's number. The new pane is found as the
-# first terminal pane above the highest id before the call (ids are never reused), and the tab keeps all of its room.
-new_tab_pane() { # <tab name> <command and arguments>
-  name=$1
-  shift
-  above=$(ZA list-panes --all --json --state | jfirst max)
-  ZA new-tab --name "$name" --cwd "$R/work" -- "$@" >/dev/null
-  tries=0
-  while :; do
-    found=$(ZA list-panes --all --json --state | jfirst newer "$above")
-    case "$found" in "" | *[!0-9]*) ;; *) break ;; esac
-    tries=$((tries + 1))
-    [ "$tries" -le 20 ] || die "new-tab $name created no terminal pane"
-    sleep 0.3
+# After a form was used: the five named panes exist, in the right tabs, with a real size.
+layout_ok() { # <form>
+  form_=$1
+  snap_try "layout check ($form_)" || {
+    echo "layout form $form_: list-panes stayed empty" >&2
+    return 1
+  }
+  ids=""
+  for name in sku-nvim sku-claude sku-codex sku-gone sku-shell; do
+    id=$(jf "layout check ($form_)" byname "$name") || return 1
+    if [ -z "$id" ]; then
+      echo "layout form $form_: no pane titled $name; panes seen (id tab columns title):" >&2
+      jf "layout check ($form_)" titles >&2 || true
+      return 1
+    fi
+    cols=$(jf "layout check ($form_)" cols "$id") || return 1
+    case "$cols" in "" | *[!0-9]*) cols=0 ;; esac
+    if [ "$cols" -lt 10 ]; then
+      echo "layout form $form_: pane $name is $cols columns wide (a tab without a real size?)" >&2
+      return 1
+    fi
+    ids="$ids $id"
   done
-  echo "$found"
+  # shellcheck disable=SC2086
+  set -- $ids
+  t_nvim=$(jf "layout check ($form_)" tabof "$1") || return 1
+  t_claude=$(jf "layout check ($form_)" tabof "$2") || return 1
+  t_codex=$(jf "layout check ($form_)" tabof "$3") || return 1
+  t_gone=$(jf "layout check ($form_)" tabof "$4") || return 1
+  t_shell=$(jf "layout check ($form_)" tabof "$5") || return 1
+  if [ "$t_claude" != "$t_codex" ] || [ "$t_nvim" = "$t_claude" ] || [ "$t_gone" = "$t_claude" ] || [ "$t_shell" = "$t_claude" ] || [ "$t_gone" = "$t_shell" ] || [ "$t_nvim" = "$t_gone" ] || [ "$t_nvim" = "$t_shell" ]; then
+    echo "layout form $form_: the tabs are not as in the layout: nvim=$t_nvim claude=$t_claude codex=$t_codex gone=$t_gone shell=$t_shell" >&2
+    return 1
+  fi
+  PANE_C=$1 PANE_A=$2 PANE_B=$3 PANE_G=$4 PANE_H=$5
+  return 0
 }
 
-PANE_A=$(new_tab_pane sku-stubs "$R/bin/claude")
-TAB_A=$(ZA list-panes --all --json --state | jfirst tabof "$PANE_A")
-case "$TAB_A" in "" | *[!0-9]*) die "could not read the tab of pane $PANE_A" ;; esac
-# Two panes side by side in the stub tab fit; the focus check below needs two panes in one tab.
-PANE_B=$(pane_number "$(ZA new-pane --tab-id "$TAB_A" --direction right --no-focus --cwd "$R/work" --name sku-codex -- "$R/bin/codex")")
-PANE_G=$(new_tab_pane sku-gone "$R/bin/gone")
-# A /bin/sh pane with the claude stub typed into it: the common real case, a tool that is the shell's child.
-PANE_H=$(new_tab_pane sku-shell /bin/sh)
-echo "panes: nvim=$PANE_C claude=$PANE_A codex=$PANE_B gone=$PANE_G typed=$PANE_H (stub tab $TAB_A)"
+# Create the session with one form (bounded by a 20 s alarm in case a form waits for a terminal), then check it.
+LAYOUT_FORM=
+for attempt in "layout-flag skulive" "options-flag skulive-b" "config-default skulive-c"; do
+  # shellcheck disable=SC2086
+  set -- $attempt
+  form=$1
+  S=$2
+  write_config "$form"
+  set +e
+  case "$form" in
+    layout-flag)
+      say zellij --layout "$R/layout.kdl" attach --create-background "$S"
+      z_env /usr/bin/perl -e 'alarm 20; exec @ARGV' -- "$ZBIN" --config-dir "$R/config" --data-dir "$R/data" --layout "$R/layout.kdl" attach --create-background "$S"
+      ;;
+    options-flag)
+      say zellij attach --create-background "$S" options --default-layout "$R/layout.kdl"
+      z_env /usr/bin/perl -e 'alarm 20; exec @ARGV' -- "$ZBIN" --config-dir "$R/config" --data-dir "$R/data" attach --create-background "$S" options --default-layout "$R/layout.kdl"
+      ;;
+    config-default)
+      say zellij attach --create-background "$S" "(default_layout in $R/config/config.kdl)"
+      z_env /usr/bin/perl -e 'alarm 20; exec @ARGV' -- "$ZBIN" --config-dir "$R/config" --data-dir "$R/data" attach --create-background "$S"
+      ;;
+  esac
+  create_rc=$?
+  set -e
+  echo "layout form $form: create exit=$create_rc"
+  sleep 2
+  # Socket preflight: the session's socket must be under the root, or nothing below may run.
+  if ! find "$R/sock" -name "$S" 2>/dev/null | grep -q .; then
+    echo "layout form $form: no socket for $S under $R/sock" >&2
+    find "$R/sock" >&2 || true
+  elif layout_ok "$form"; then
+    LAYOUT_FORM=$form
+    break
+  fi
+  # A form that did not hold: kill its session (this name only) before the next form is tried.
+  Z kill-session "$S" >/dev/null 2>&1 || true
+  sleep 1
+done
+[ -n "$LAYOUT_FORM" ] || die "setup: no way of giving zellij the layout held (tried layout-flag, options-flag, config-default; see the lines above)"
+echo "layout form that held: $LAYOUT_FORM (session $S)"
+
+# Session preflight: the private socket dir lists exactly this session.
+set +e
+Z list-sessions -n -s >"$R/out/sessions.txt" 2>"$R/out/sessions.err"
+rc=$?
+set -e
+[ "$rc" = 0 ] || die "preflight: list-sessions exit=$rc: $(head -n 1 "$R/out/sessions.err")"
+[ "$(cat "$R/out/sessions.txt")" = "$S" ] || die "preflight: the private socket dir does not list exactly the session $S"
+
+echo "panes: nvim=$PANE_C claude=$PANE_A codex=$PANE_B gone=$PANE_G typed=$PANE_H"
 
 n=0
 until [ -f "$R/out/claude-$PANE_A.bytes" ] && [ -f "$R/out/codex-$PANE_B.bytes" ] && [ -f "$R/out/claude-$PANE_G.env" ]; do
   n=$((n + 1))
-  [ "$n" -le 40 ] || die "the stub panes did not start; their pane list is in $R/out"
+  [ "$n" -le 40 ] || die "setup: the stub panes did not start (no recorder file in $R/out)"
   sleep 0.5
 done
 
 # The one open question of the argv0 mapping: what a stub's pane_command starts with. Only argv0 is printed.
-ARGV0_A=$(ZA list-panes --all --json --command --state | jfirst argv0 "$PANE_A")
-ARGV0_B=$(ZA list-panes --all --json --command --state | jfirst argv0 "$PANE_B")
+snap "argv0 preflight" --command
+ARGV0_A=$(jf "argv0 preflight (claude)" argv0 "$PANE_A") || die "argv0 preflight: could not read the claude pane"
+ARGV0_B=$(jf "argv0 preflight (codex)" argv0 "$PANE_B") || die "argv0 preflight: could not read the codex pane"
 echo "observed argv0: claude pane=[$ARGV0_A] codex pane=[$ARGV0_B]"
 if [ "$ARGV0_A" != claude ] || [ "$ARGV0_B" != codex ]; then
   echo "UNVERIFIABLE: a stub's pane_command does not start with its name; discovery cannot be tested with this stub" >&2
@@ -539,18 +726,18 @@ fi
 
 # Type the stub into the shell pane and observe, as argv0 only, what its pane_command starts with. This is an
 # observation, not a gate: the driver reports whether discovery found the pane.
-ZA write-chars --pane-id "terminal_$PANE_H" -- claude
-ZA send-keys --pane-id "terminal_$PANE_H" Enter
+ZA write-chars --pane-id "terminal_$PANE_H" -- claude || die "setup: typing the stub into the shell pane"
+ZA send-keys --pane-id "terminal_$PANE_H" Enter || die "setup: pressing Enter in the shell pane"
 n=0
 until [ -f "$R/out/claude-$PANE_H.bytes" ]; do
   n=$((n + 1))
   [ "$n" -le 20 ] || break
   sleep 0.5
 done
-echo "observed argv0: typed-into-shell pane=[$(ZA list-panes --all --json --command --state | jfirst argv0 "$PANE_H")]"
+snap_try "argv0 of the typed pane" --command && echo "observed argv0: typed-into-shell pane=[$(jf "argv0 of the typed pane" argv0 "$PANE_H" || echo unreadable)]"
 
 # Make the gone pane exit, and let zellij settle.
-ZA write-chars --pane-id "terminal_$PANE_G" -- Q
+ZA write-chars --pane-id "terminal_$PANE_G" -- Q || die "setup: ending the gone pane"
 sleep 1
 
 # --- drive nvim outside the mux ---------------------------------------------------------------------------------
@@ -565,7 +752,7 @@ nv() {
 
 nv basic
 
-# --- drive nvim inside the mux: typed into the first pane, which gives it ZELLIJ and ZELLIJ_PANE_ID --------------------
+# --- drive nvim inside the mux: typed into the sku-nvim pane, which gives it ZELLIJ and ZELLIJ_PANE_ID --------------------
 # The command is typed into the pane's own shell, which expands the ZELLIJ variables there. Everything else is passed
 # through `env -i`, so nvim gets the same allowlist as the outside phase.
 # The unquoted echo folds the newline of Z_ENV into a space; the typed command must be one line.
@@ -575,8 +762,8 @@ Z_WORDS=$(echo $Z_ENV)
 CMD="env $Z_WORDS"' ZELLIJ="$ZELLIJ" ZELLIJ_SESSION_NAME="$ZELLIJ_SESSION_NAME" ZELLIJ_PANE_ID="$ZELLIJ_PANE_ID"'
 CMD="$CMD SKU_REPO=$REPO SKU_OUT=$R/out/start.txt SKU_PHASE=start SKU_CWD=$R/work SKU_OUTDIR=$R/out SKU_CLAUDE_PANE=$PANE_A"
 CMD="$CMD $NVIM --headless -u NONE -i NONE -l $R/drive.lua"
-ZA write-chars --pane-id "terminal_$PANE_C" -- "$CMD"
-ZA send-keys --pane-id "terminal_$PANE_C" Enter
+ZA write-chars --pane-id "terminal_$PANE_C" -- "$CMD" || die "inside phase: typing the nvim command into the sku-nvim pane"
+ZA send-keys --pane-id "terminal_$PANE_C" Enter || die "inside phase: pressing Enter in the sku-nvim pane"
 n=0
 until grep -q '^DONE' "$R/out/start.txt" 2>/dev/null; do
   n=$((n + 1))
@@ -588,39 +775,57 @@ until grep -q '^DONE' "$R/out/start.txt" 2>/dev/null; do
 done
 
 # --- the no-room case, once, on purpose ---------------------------------------------------------------------------
-# A scratch tab (the phases are over, nothing else lives there) is split right until a split prints no id, at most 6
+# In the "gone" tab (its only pane has ended, and the phases are over), split right until a split prints no id, at most 6
 # times. Every call is recorded: exit code, stdout, stderr first line, the session's terminal-pane count before and after,
-# and the panes of the tab (floating, suppressed, stacked, exited). It never fails the run, and no command line is read.
+# and the panes of the tab (floating, suppressed, stacked, exited). It never fails the run, an empty list answer is
+# printed and ends the loop, and no command line is read.
 noroom() {
   set +e
-  ZA new-tab --name sku-scratch --cwd "$R/work" >/dev/null 2>&1
-  sleep 0.5
-  tab=$(ZA list-panes --all --json --state | jfirst tabof "$(ZA list-panes --all --json --state | jfirst max)")
+  if ! snap_try "no-room: tab of the gone pane"; then
+    echo "no-room: list-panes stayed empty; nothing recorded"
+    return 0
+  fi
+  tab=$(jf "no-room: tab of the gone pane" tabof "$PANE_G")
+  case "$tab" in "" | *[!0-9]*)
+    echo "no-room: no tab for the gone pane ($tab); nothing recorded"
+    return 0
+    ;;
+  esac
   i=1
   while [ "$i" -le 6 ]; do
-    before=$(ZA list-panes --all --json --state | jfirst count)
+    snap_try "no-room: count before" || {
+      echo "no-room: count before is unavailable"
+      return 0
+    }
+    before=$(jf "no-room: count before" count)
     out=$(ZA new-pane --tab-id "$tab" --direction right --no-focus --cwd "$R/work" --name sku-room -- /bin/sleep 120 2>"$R/out/noroom.err")
     rc=$?
     err1=$(grep -v '^+ ' "$R/out/noroom.err" | head -n 1)
     sleep 0.5
-    after=$(ZA list-panes --all --json --state | jfirst count)
+    after=unavailable
+    if snap_try "no-room: count after"; then
+      after=$(jf "no-room: count after" count)
+    fi
     echo "split $i: exit=$rc stdout=[$out] stderr1=[$err1] terminal panes $before -> $after"
     case "$out" in
       terminal_[0-9]*) ;;
       *)
-        echo "no id on split $i; panes of the scratch tab:"
-        ZA list-panes --all --json --state | jfirst desc "$tab"
+        echo "no id on split $i; panes of the tab:"
+        if snap_try "no-room: panes of the tab"; then
+          jf "no-room: panes of the tab" desc "$tab"
+        fi
         break
         ;;
     esac
     i=$((i + 1))
   done
-  set -e
+  return 0
 }
 noroom >"$R/out/noroom.txt" 2>&1 || true
 
 # --- report ----------------------------------------------------------------------------------------------------
 fail=0
+echo "== layout form that held: $LAYOUT_FORM"
 echo "== list-sessions with no session (observed before the session was created)"
 cat "$R/out/nosession.txt"
 for phase in basic start; do

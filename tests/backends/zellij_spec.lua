@@ -98,7 +98,7 @@ local function write_chars(session, pane, text)
 end
 
 describe("zellij backend", function()
-  local rec, dir, bin
+  local rec, dir, bin, orig_sleep, slept
   local env = {}
   local VARS = { "ZELLIJ", "ZELLIJ_PANE_ID", "ZELLIJ_SESSION_NAME", "PATH" }
 
@@ -121,6 +121,11 @@ describe("zellij backend", function()
   end
 
   before_each(function()
+    -- `start` waits for the pane through zellij.sleep; the specs record the waits instead of taking them.
+    orig_sleep, slept = zellij.sleep, {}
+    zellij.sleep = function(ms)
+      table.insert(slept, ms)
+    end
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
     bin = dir .. "/zellij"
@@ -140,6 +145,7 @@ describe("zellij backend", function()
   end)
 
   after_each(function()
+    zellij.sleep = orig_sleep
     if rec then
       rec.restore()
       expect.equality(rec.unexpected, {})
@@ -311,6 +317,37 @@ describe("zellij backend", function()
     it("gives no session when no tool is configured", function()
       rec = record(routes())
       expect.equality(zellij.list({}), {})
+    end)
+
+    it(
+      "reports empty output of a successful list-sessions or list-panes as no answer, never as no sessions or panes",
+      function()
+        for _, case in ipairs({
+          { LIST_SESSIONS, "", "list-sessions" },
+          { LIST_SESSIONS, "\n  \n", "list-sessions" },
+          { PANES_A, "", "list-panes" },
+          { PANES_A, " \n", "list-panes" },
+        }) do
+          local r = routes()
+          r[case[1]] = case[2]
+          rec = record(r)
+          local list, err = zellij.list(tools.all())
+          rec.restore()
+          rec = nil
+          expect.equality(list, nil)
+          expect.equality({ err.id, err.cmd }, { "backend_error", case[3] })
+          expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
+        end
+      end
+    )
+
+    it("takes the text [] as an answer: a session without terminal panes", function()
+      local r = routes()
+      r[PANES_A] = "[]"
+      rec = record(r)
+      local list, err = zellij.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(#list, 1)
     end)
 
     it("lists nothing, without an error, when zellij has no session", function()
@@ -532,6 +569,15 @@ describe("zellij backend", function()
       )
     end)
 
+    it("stays true when list-panes exits 0 and prints nothing", function()
+      for _, empty in ipairs({ "", "\n" }) do
+        rec = record({ [PANES_A] = empty })
+        expect.equality(zellij.is_running(claude()), true)
+        rec.restore()
+        rec = nil
+      end
+    end)
+
     it("is false when the session is gone", function()
       rec = record({ [PANES_A] = NOT_FOUND })
       expect.equality(zellij.is_running(claude()), false)
@@ -631,26 +677,116 @@ describe("zellij backend", function()
       expect.equality(vim.list_slice(rec.calls[1].argv, 13), { "--", "/usr/bin/env", "A=1", "B=two", "/bin/sh" })
     end)
 
-    it("records the tool's command name, not env, while the pane still runs the env wrapper", function()
-      local wrapper = patched("list_panes_a_started.json", function(panes)
-        terminal(panes, 6).pane_command = "/usr/bin/env A=1 /bin/sh"
+    ---A started-pane listing whose pane 6 runs `command`.
+    ---@param command? string
+    local function with_command(command)
+      return patched("list_panes_a_started.json", function(panes)
+        terminal(panes, 6).pane_command = command
       end)
-      rec = record(routes(" /usr/bin/env A=1 /bin/sh", wrapper))
+    end
+
+    it("returns on the first poll, without waiting, when the pane already shows the tool", function()
+      rec = record(routes(" /bin/sh"))
+      expect.equality(start().proc_name, "claude")
+      expect.equality(#rec.subs, 2)
+      expect.equality(slept, {})
+    end)
+
+    it("waits through an env answer and a shell answer until the pane shows the tool", function()
+      local wrapper = with_command("/usr/bin/env A=1 /bin/sh")
+      local shell = with_command("/bin/bash")
+      local started = fixture("list_panes_a_started.json")
+      local seen = { wrapper, shell, started }
+      local r = routes(" /usr/bin/env A=1 /bin/sh")
+      r[PANES_A] = function(n)
+        return seen[n]
+      end
+      rec = record(r)
       local session, err = start({ A = "1" })
       expect.equality(err, nil)
-      expect.equality({ session.pane, session.proc_name }, { "terminal_6", "sh" })
+      expect.equality({ session.pane, session.proc_name }, { "terminal_6", "claude" })
+      expect.equality(slept, { 50, 50 })
+      expect.equality(#rec.subs, 4)
       rec.restore()
-
-      -- env then execs the tool: the same session counts as running. A program that is not the tool does not.
-      rec = record({ [PANES_A] = fixture("list_panes_a_started.json") })
+      -- The session it returns is running by the plain rule.
+      rec = record({ [PANES_A] = started })
       expect.equality(zellij.is_running(session), true)
+    end)
+
+    it(
+      "fails at the bound, naming the tool, the pane and the session, when the program never shows as the tool",
+      function()
+        rec = record(routes(" /bin/sh", with_command("node script.js")))
+        local session, err = start()
+        expect.equality(session, nil)
+        expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+        for _, part in ipairs({ "claude", "terminal_6", "skuA", "left open", "never showed" }) do
+          expect.equality({ part, err.msg:find(part, 1, true) ~= nil }, { part, true })
+        end
+        -- Not even the program's basename is echoed.
+        expect.equality(err.msg:find("node", 1, true), nil)
+        expect.equality(#slept, 40)
+        expect.equality(slept[1], 50)
+        expect.equality(#rec.subs, 1 + 41)
+      end
+    )
+
+    it("fails at once, naming the pane, when the pane exits or vanishes during the wait", function()
+      local wrapper = with_command("/usr/bin/env A=1 /bin/sh")
+      local exited = patched("list_panes_a_started.json", function(panes)
+        terminal(panes, 6).exited = true
+      end)
+      for _, second in ipairs({ exited, fixture("list_panes_a.json") }) do
+        local seen = { wrapper, second }
+        local r = routes(" /usr/bin/env A=1 /bin/sh")
+        r[PANES_A] = function(n)
+          return seen[n]
+        end
+        rec = record(r)
+        local session, err = start({ A = "1" })
+        rec.restore()
+        rec = nil
+        expect.equality(session, nil)
+        expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+        expect.equality(err.msg:find("terminal_6", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
+        expect.equality(slept, { 50 })
+        slept = {}
+      end
+    end)
+
+    it("asks again after an empty answer in the wait, and fails at the bound with no answer", function()
+      local seen = { "\n", with_command("/bin/bash"), "", fixture("list_panes_a_started.json") }
+      local r = routes(" /bin/sh")
+      r[PANES_A] = function(n)
+        return seen[n]
+      end
+      rec = record(r)
+      local session, err = start()
+      expect.equality(err, nil)
+      expect.equality(session.proc_name, "claude")
+      expect.equality(slept, { 50, 50, 50 })
       rec.restore()
-      rec = record({
-        [PANES_A] = patched("list_panes_a_started.json", function(panes)
-          terminal(panes, 6).pane_command = "/bin/sleep 300"
-        end),
-      })
-      expect.equality(zellij.is_running(session), false)
+      slept = {}
+
+      rec = record(routes(" /bin/sh", "\n"))
+      session, err = start()
+      expect.equality(session, nil)
+      expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
+      expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
+      expect.equality(#slept, 40)
+      expect.equality(#rec.subs, 1 + 41)
+    end)
+
+    it("stops at once when list-panes fails in the wait", function()
+      local r = routes(" /bin/sh")
+      r[PANES_A] = function(n)
+        return n == 1 and with_command("/bin/bash") or { code = 2, stdout = "", stderr = "boom\n" }
+      end
+      rec = record(r)
+      local session, err = start()
+      expect.equality(session, nil)
+      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 2 })
+      expect.equality(slept, { 50 })
     end)
 
     it("fails without a session name and runs nothing", function()
@@ -705,11 +841,12 @@ describe("zellij backend", function()
       end
     end)
 
-    it("reports a failing list-panes after new-pane", function()
-      rec = record(routes(" /bin/sh", ""))
+    it("reports a failing list-panes after new-pane at once", function()
+      rec = record(routes(" /bin/sh", { code = 2, stdout = "", stderr = "boom\n" }))
       local session, err = start()
       expect.equality(session, nil)
-      expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
+      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 2 })
+      expect.equality(slept, {})
     end)
 
     it("is picked by registry.start, which focuses the new pane afterwards", function()
@@ -821,6 +958,18 @@ describe("zellij backend", function()
       expect.equality({ err.id, err.cmd }, { "backend_error", "write-chars" })
       expect.equality(wrote(rec.keys()), false)
     end)
+
+    it(
+      "does not read an empty answer of the pane check as a gone pane: it reports no answer and writes nothing",
+      function()
+        rec = record({ [PANES_A] = "", [WRITE] = "" })
+        local ok_, err = zellij.send(claude(), "hello world")
+        expect.equality(ok_, nil)
+        expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
+        expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
+        expect.equality(wrote(rec.keys()), false)
+      end
+    )
 
     it("returns the error of a failing pane check and does not write", function()
       rec = record({ [PANES_A] = { code = 2, stdout = "", stderr = "boom\n" }, [WRITE] = "" })
@@ -1077,31 +1226,35 @@ describe("zellij backend", function()
       end
     end)
 
-    it("reach no session of start, even when the new pane still shows the env wrapper with a secret", function()
-      for _, case in ipairs({
-        { NEW_PANE_SH, "claude", function() end },
-        {
-          NEW_PANE_ENV,
-          "sh",
-          function(panes)
+    it(
+      "reach no session of start, even when the new pane shows the env wrapper with a secret before the tool",
+      function()
+        for _, case in ipairs({
+          { NEW_PANE_SH, {}, 0 },
+          { NEW_PANE_ENV, { TOKEN = SECRET }, 2 },
+        }) do
+          local wrapper = leaky("list_panes_a_started.json", function(panes)
             terminal(panes, 6).pane_command = "/usr/bin/env TOKEN=" .. SECRET .. " /bin/sh"
-          end,
-        },
-      }) do
-        rec = record({
-          [case[1]] = fixture("new_pane.txt"),
-          [PANES_A] = leaky("list_panes_a_started.json", case[3]),
-        })
-        local env_table = case[1] == NEW_PANE_ENV and { TOKEN = SECRET } or {}
-        vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
-        local session, err = zellij.start(tools.get("claude"), { cwd = "/tmp/sku-proj-a", env = env_table })
-        rec.restore()
-        rec = nil
-        expect.equality(err, nil)
-        expect.equality(session.proc_name, case[2])
-        expect_clean(session)
+          end)
+          local started = leaky("list_panes_a_started.json")
+          rec = record({
+            [case[1]] = fixture("new_pane.txt"),
+            [PANES_A] = function(n)
+              return n <= case[3] and wrapper or started
+            end,
+          })
+          vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
+          local session, err = zellij.start(tools.get("claude"), { cwd = "/tmp/sku-proj-a", env = case[2] })
+          rec.restore()
+          rec = nil
+          expect.equality(err, nil)
+          expect.equality(session.proc_name, "claude")
+          expect.equality(#slept, case[3])
+          expect_clean(session)
+          slept = {}
+        end
       end
-    end)
+    )
 
     it("reach no error of start", function()
       local cases = {
@@ -1125,6 +1278,18 @@ describe("zellij backend", function()
             terminal(panes, 6).pane_cwd = nil
           end)),
         },
+        -- the program never shows as the tool (env wrapper or interpreter carrying the secret), or no answer at all
+        {
+          start_routes(leaky("list_panes_a_started.json", function(panes)
+            terminal(panes, 6).pane_command = "/usr/bin/env TOKEN=" .. SECRET .. " /bin/sh"
+          end)),
+        },
+        {
+          start_routes(leaky("list_panes_a_started.json", function(panes)
+            terminal(panes, 6).pane_command = "node script.js --token " .. SECRET
+          end)),
+        },
+        { start_routes("\n") },
         -- the mapping call fails or prints something unreadable
         { start_routes({ code = 2, stdout = "out " .. SECRET, stderr = "boom\n" }) },
         { start_routes('[{"id":"x","pane_command":"/bin/sh --token ' .. SECRET .. '"}]') },

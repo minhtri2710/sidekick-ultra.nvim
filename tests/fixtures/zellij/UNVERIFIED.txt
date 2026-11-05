@@ -29,7 +29,35 @@ Settled by the live run at 24c6bd1 (~/.paseo/reports/sidekick-ultra/reviews/d8-z
                            all passed. "submit presses Enter" failed because the old stub could not record a CR
                            (bash `read` turns CR into LF); the new stub records raw bytes with dd.
 
+Settled by the live run at 3231491 (d8-zellij-3231491.log, setup only):
+  `new-tab` in a session with no attached client
+                           does not work in 0.45.1: the tab is 0x0 ("Not enough room for panes", zellij issues 5594 and
+                           5664), its panes never show in list-panes, and one list-panes printed nothing. The live script
+                           now builds all its tabs from a layout at session creation.
+
 Still unverified (the live run, tests/live/zellij.sh, must settle each):
+  which way gives the layout to a background session
+                           `--layout F attach --create-background S`, `attach --create-background S options
+                           --default-layout F` and `default_layout` in config.kdl were all read from the 0.45.1 docs and
+                           source, none was run. The script tries them in that order, checks list-panes right after
+                           (the five layout names, their tabs, a real width) and prints the form that held.
+  pane `name` as the list-panes `title`
+                           assumed (the probe showed the --name given to new-pane as the title, not a layout name). The
+                           script finds its panes by title and stops with a FATAL listing the titles when one is missing.
+  whether a creation-layout tab in a session with no client has a real size
+                           the script asserts pane_columns >= 10 for every layout pane.
+  an empty answer of list-panes or list-sessions (exit 0, nothing printed)
+                           seen once in the 3231491 run (list-panes). Cause unknown: the server's 1 s wait ends with an
+                           error to stderr and a non-zero exit in the source, but the run recorded no stderr. The backend
+                           treats it as "zellij did not answer" (a backend_error), never as no panes or no sessions; the
+                           script prints each empty answer with its exit code and first stderr line and retries it.
+  stub argv0 of `exec -a <name> /bin/dd`
+                           the stubs ran as bash scripts at 24c6bd1; the dd stubs have not been seen. The script gates on
+                           argv0 claude and codex before any phase.
+  the active tab after a cross-tab focus-pane-id
+                           list-tabs --json has an `active` flag per tab (zellij docs); the script observes it, no gate.
+                           Whether is_focused is per tab or per client is not known; the focus checks read it for panes
+                           of one tab only.
   `new-pane` that prints no id
                            at 24c6bd1 (inside start) and at 58637a7 (setup) a `new-pane --direction right` exited 0 with
                            empty stdout. Both were the 4th right split of a headless session 50 columns wide. Reading
@@ -37,16 +65,18 @@ Still unverified (the live run, tests/live/zellij.sh, must settle each):
                            freshly spawned pane and returns Ok, so no pane exists and no id is printed; with floating
                            panes visible, or a floating target pane, it returns early with nothing created. The server
                            also waits only 1 s for the pane (route.rs), so a slow server could print nothing for a
-                           pane it did create. The backend's error says all of this. The live script now keeps nvim's
-                           tab roomy (stubs in other tabs), and records one deliberate no-room split in a scratch tab:
-                           exit, stdout, stderr first line, pane counts before and after, and the tab's panes.
+                           pane it did create. The backend's error says all of this. The live script keeps nvim's tab
+                           roomy (its stubs are in other tabs of the creation layout), and records one deliberate
+                           no-room split in the "gone" tab: exit, stdout, stderr first line, pane counts before and
+                           after, and the tab's panes.
   pane_command for a tool started with env
-                           start puts "/usr/bin/env K=V claude" in front of the tool. Whether pane_command then shows
-                           "env" or the exec'd tool, and for how long, is unknown. The backend records the tool's
-                           command name as proc_name when argv0 is still "env", and is_running asks the tool's is_proc,
-                           so the session counts as running once env has exec'd the tool. While the pane still shows
-                           "env" (or the stub's bash), is_running is false. The live script observes the state at once
-                           and gates on running within 3 s.
+                           start puts "/usr/bin/env K=V claude" in front of the tool. Whether pane_command shows "env"
+                           or the exec'd tool, and for how long, is unknown. start polls list-panes (50 ms steps, at
+                           most 40 sleeps, about 2 s) until the new pane's argv0 satisfies the tool's is_proc, and
+                           only then returns, so the session is running at once. If the program never shows as the
+                           tool (env that stays, a shell, `node` for a script-installed tool), start fails and says
+                           the pane was left open. The live script records how long registry.start took and checks
+                           "running at once" and the N2 attach/refresh path.
   pane_command of a tool typed into a shell pane
                            every stub runs as the pane's own command. Whether pane_command shows the shell or its
                            foreground child when a tool is typed into /bin/sh is not known. The live script types the

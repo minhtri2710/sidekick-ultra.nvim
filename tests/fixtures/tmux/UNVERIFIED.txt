@@ -28,21 +28,20 @@ stubs named claude and codex):
                             printed. stderr_no_server.txt (`no server running on ...`, a socket nobody answers) and
                             stderr_no_socket.txt (`error connecting to ... (No such file or directory)`) are both
                             hand-written; the first has not been seen from a real tmux.
-  paste buffers             none were left in the server after a send, or after a failed paste.
+  paste buffers             none were left in the server after a send (24c6bd1).
   start                     split-window printed the id and pid; the new pane sat in nvim's window and was focused
                             afterwards (D7); the one-element command ran through the shell as a quoted word.
 
 Settled by the live run at 58637a7 (reviews/d8-tmux-58637a7.log, 56 checks passed):
-  display_pane_gone.txt     `display-message -p -t %999 '#{pane_in_mode}'` for a pane that does not exist exits 0 with
-                            EMPTY stdout (no stderr, no error), unlike `send-keys`, `paste-buffer` and `list-panes -t`,
-                            which exit 1 with `can't find pane: %N`. The backend reads empty output from the mode check
-                            as "pane not found" (`tmux pane %999 not found`). Because that check runs before
-                            load-buffer, a send to a missing pane never reaches paste-buffer or the delete-buffer
-                            cleanup in the live run; the cleanup after a failed paste is covered by the spec only.
-  list_panes.txt            the current format (pane id, pane pid, session name, window id, dead flag, then the working
-                            directory last as `#{?pane_current_path,#{pane_current_path},#{pane_start_path}}`, all
-                            TAB separated) was parsed by a real tmux 3.8: discovery found the expected panes with
-                            the expected cwd.
+  display_pane_gone.txt     `display-message -p -t %999 '#{pane_in_mode}'` for a pane that does not exist: stdout was
+                            empty. Exit 0 is inferred (the backend only reads stdout of a successful call, and the log
+                            shows its "tmux pane %999 not found" error, not an exit-code error). Stderr was not
+                            recorded, so whether tmux printed anything there is unknown. This differs from
+                            `send-keys`, `paste-buffer` and `list-panes -t`, which exit 1 with `can't find pane: %N`.
+                            The backend reads empty output from the mode check as "pane not found". Because that
+                            check runs before load-buffer, a send to a missing pane never reaches paste-buffer or the
+                            delete-buffer cleanup in the live run; the cleanup after a failed paste is covered by the
+                            spec only.
   copy mode                 with the pane in copy mode (`copy-mode -t %N`, mode count 1), `send` and `submit` left the
                             mode (count 0) and delivered the text and then the echoed line. `copy-mode -q` was only run
                             on a pane in a mode. How paste-buffer itself behaves in a mode was not observed (the mode

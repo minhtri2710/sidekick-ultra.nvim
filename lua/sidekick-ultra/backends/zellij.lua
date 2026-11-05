@@ -10,6 +10,16 @@ local tools = require("sidekick-ultra.tools")
 ---@type sidekick_ultra.Backend
 local M = { name = "zellij" }
 
+-- `start` waits for the new pane to show the tool as its program (the env wrapper and a shell show first): at most
+-- START_POLLS sleeps of START_STEP_MS.
+local START_STEP_MS = 50
+local START_POLLS = 40
+
+---Sleep for `ms`. A field so tests can observe the wait without taking it.
+M.sleep = function(ms)
+  vim.uv.sleep(ms)
+end
+
 ---@return boolean ok
 ---@return string? path
 ---@return string? source
@@ -79,14 +89,24 @@ end
 ---@param session string
 ---@return table[]? panes
 ---@return sidekick_ultra.Error? err
+---@return boolean? silent true when zellij exited 0 and printed nothing (no answer, worth asking again)
 local function panes_of(session)
   local argv, opts = command("list-panes", session, "action", "list-panes", "--all", "--json", "--command", "--state")
   if not argv then
     return nil, opts
   end
-  local decoded, err = exec.json(argv, opts)
-  if not decoded then
+  local res, err = exec.check(argv, opts)
+  if not res then
     return nil, err
+  end
+  -- zellij can exit 0 with nothing printed (the server gives up after 1 s). That is no answer, not "no panes": an
+  -- empty list is the text `[]`.
+  if vim.trim(res.stdout) == "" then
+    return nil, failure("list-panes", "zellij did not answer: list-panes printed nothing"), true
+  end
+  local ok, decoded = pcall(vim.json.decode, res.stdout, { luanil = { object = true, array = true } })
+  if not ok then
+    return nil, failure("list-panes", "zellij printed invalid JSON")
   end
   if type(decoded) ~= "table" or not vim.islist(decoded) then
     return nil, failure("list-panes", "zellij printed an unexpected pane list")
@@ -157,7 +177,12 @@ local function session_names()
         { code = res.code }
       )
   end
-  return vim.split(vim.trim(res.stdout), "\n", { plain = true, trimempty = true })
+  -- A successful list-sessions with nothing printed is no answer either: "no session" is exit 1 with a message.
+  local names = vim.split(vim.trim(res.stdout), "\n", { plain = true, trimempty = true })
+  if #names == 0 then
+    return nil, failure("list-sessions", "zellij did not answer: list-sessions printed nothing")
+  end
+  return names
 end
 
 ---ponytail: discovery costs one list-sessions call plus one list-panes call per zellij session. Fine for a handful of
@@ -204,7 +229,7 @@ function M.list(configured)
 end
 
 ---Whether the session's pane exists, has not exited, and its current program still satisfies the tool's `is_proc`.
----Not an equality with `proc_name`: a tool started with an env runs as `env` until env execs it.
+---Not an equality with `proc_name`: the tool's `is_proc` decides.
 ---@param session sidekick_ultra.Session
 ---@return boolean? alive
 ---@return sidekick_ultra.Error? err
@@ -242,7 +267,8 @@ end
 
 ---Split a new pane to the right of nvim's own, without focus, running the tool. `new-pane` is placed relative to the
 ---pane that issued it (`ZELLIJ_PANE_ID`, nvim's). It has no env flag, so a non-empty `opts.env` goes in front of the
----command as `/usr/bin/env K=V`. The registry focuses the new pane.
+---command as `/usr/bin/env K=V`. It returns once the pane's program matches the tool (see the wait below), so the
+---session is running at once. The registry focuses the new pane.
 ---@param tool sidekick_ultra.Tool
 ---@param opts sidekick_ultra.StartOpts
 function M.start(tool, opts)
@@ -293,25 +319,43 @@ function M.start(tool, opts)
       )
   end
 
-  -- The pane is "running" at once: record whatever it runs now. The next discovery replaces this record by id.
-  local panes, panes_err = panes_of(session)
-  if not panes then
-    return nil, panes_err
-  end
-  for _, pane in ipairs(panes) do
-    if pane.id == tonumber(number) then
-      local argv0 = argv0_of(pane)
+  -- Return only once the pane shows the tool as its program, so the session is running at once: the env wrapper, a
+  -- shell or a script's interpreter show first. An empty answer is asked again within the bound.
+  local last_err
+  for poll = 0, START_POLLS do
+    if poll > 0 then
+      M.sleep(START_STEP_MS)
+    end
+    local panes, panes_err, silent = panes_of(session)
+    if not panes then
+      if not silent then
+        return nil, panes_err
+      end
+      last_err = panes_err
+    else
+      last_err = nil
+      local seen
+      for _, pane in ipairs(panes) do
+        if pane.id == tonumber(number) then
+          seen = pane
+          break
+        end
+      end
+      local argv0 = seen and argv0_of(seen)
       if not argv0 then
-        break
+        return nil,
+          failure("new-pane", ("pane %s of session %s is not running; it was left open"):format(name, session))
       end
-      -- Still the `/usr/bin/env` wrapper of a tool env: record the tool's own command name, not `env`.
-      if not tools.matches(tool, { cmd = argv0 }) then
-        argv0 = vim.fs.basename(tool.cmd[1])
+      if tools.matches(tool, { cmd = argv0 }) then
+        return session_of(tool.name, session, seen, argv0)
       end
-      return session_of(tool.name, session, pane, argv0)
     end
   end
-  return nil, failure("new-pane", ("pane %s of session %s is not running; it was left open"):format(name, session))
+  return nil,
+    last_err or failure(
+      "new-pane",
+      ("pane %s of session %s was left open; its program never showed as %s"):format(name, session, tool.name)
+    )
 end
 
 ---`write-chars` to a missing pane exits 0 and drops the text (probe P-Z7), so check the pane first. This takes the
