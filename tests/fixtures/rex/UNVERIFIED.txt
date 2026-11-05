@@ -4,11 +4,12 @@ what that run printed; ids, pids, paths and the user are placeholders.
 
 Verified live:
   ls.json, ls_empty.json   `rex ls --json` -> .sessions[].{session_id,label}
-  view_*.json              `rex api call -s S session.view` -> windows -> layers{layer_id,kind,bounds,layout} ->
-                           blocks{block_id,label,creator_name,flavor,host_id,owner?}. Every live layer held one
-                           block, so the layout shape of a layer with several blocks has not been seen; each fixture layer
-                           has one. The backend ignores layout and reads every entry of a layer's blocks list; rex_spec
-                           covers that by appending a second block to a layer inside the test.
+  view_a/view_b.json       `rex api call -s S session.view` -> windows -> layers{layer_id,kind,bounds,layout} ->
+                           blocks{block_id,label,creator_name,flavor,host_id,owner?}. Each layer holds one block and
+                           a one-block layout (layout.block_id).
+  view_split.json          run 3: a layer holding two blocks, its layout a split{split_id,direction,ratio,before,after}
+                           with a block_id in each half. The backend ignores layout and reads every entry of a layer's
+                           blocks list; rex_spec routes this view to pin that.
   process_claude/codex/shell.json
                            `rex block call ... process` -> {last_exit,child,foreground,home}. foreground is
                            {pid,user_id,user,name,path,invoked_path,argv0,cwd}; there is no `ancestors`. A stub run
@@ -20,6 +21,8 @@ Verified live:
   `focus` flags from `--help` worked as the backend uses them.
 
 Still unverified:
+  rediscovery of a two-block layer
+                           the shape was seen live; discovery over it is pinned by the spec only.
   status_working/blocked/blocked_other.json
                            a non-empty program_status. Blocked: no stub could raise a record. The record fields
                            {state,kind,app,msg,owner.pid} are firstmate's findings on rex API revision 5

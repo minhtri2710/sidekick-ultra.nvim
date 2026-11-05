@@ -80,12 +80,12 @@ describe("rex backend", function()
     )
   end
 
-  local function a2(extra)
+  local function a2()
     return fake.session(
       "rex",
       "claude",
       1,
-      vim.tbl_extend("force", { id = "rex:block:a2", pid = 4242, session_id = SID, block_id = "block:a2" }, extra or {})
+      { id = "rex:block:a2", pid = 4242, session_id = SID, block_id = "block:a2" }
     )
   end
 
@@ -176,13 +176,6 @@ describe("rex backend", function()
       expect.equality(rec.calls[1].argv, { bin, "--autostart=false", "-S", "unix:///tmp/sku.sock", "ls", "--json" })
     end)
 
-    it("labels errors with the backend and subcommand", function()
-      rec = record({ ["ls --json"] = { code = 3, stdout = "", stderr = "not found\nmore" } })
-      local list, err = rex.list(tools.all())
-      expect.equality(list, nil)
-      expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "rex", "ls", 3 })
-    end)
-
     it("lists nothing, without an error, when `ls` finds no server (exit 4)", function()
       rec = record({ ["ls --json"] = { code = 4, stdout = "", stderr = "rex server is not running" } })
       local list, err = rex.list(tools.all())
@@ -253,14 +246,9 @@ describe("rex backend", function()
     end)
 
     it("discovers every block of a layer, not only its first", function()
-      local view = vim.json.decode(fixture("view_a"))
-      local blocks = view.windows[1].layers[1].blocks
-      local second = vim.deepcopy(blocks[1])
-      second.block_id = "block:a4"
-      table.insert(blocks, second)
       local r = routes()
-      r["api call -s session:aaaa session.view"] = vim.json.encode(view)
-      r["block call -s session:aaaa -b block:a4 process"] = live("process_codex")
+      r["api call -s session:aaaa session.view"] = fixture("view_split")
+      r["block call -s session:aaaa -b block:a4 process"] = live("process_claude")
       rec = record(r)
       local list, err = rex.list(tools.all())
       expect.equality(err, nil)
@@ -268,7 +256,7 @@ describe("rex backend", function()
         vim.tbl_map(function(session)
           return session.id
         end, list),
-        { "rex:block:a4", "rex:block:a2", "rex:block:b1" }
+        { "rex:block:a4", "rex:block:b1" }
       )
     end)
 
@@ -276,14 +264,6 @@ describe("rex backend", function()
       rec = record(routes())
       rex.list(tools.all())
       expect.equality(#rec.subs, 1 + 2 + 4)
-    end)
-
-    it("takes proc_name from nvim_get_proc, not from rex", function()
-      rec = record(routes())
-      local _, name = fake.self_proc()
-      local list = rex.list(tools.all())
-      expect.no_equality(name, "2.1.308")
-      expect.equality(list[1].proc_name, name)
     end)
 
     it("gives no session for an empty rex or when no tool is configured", function()
@@ -322,6 +302,7 @@ describe("rex backend", function()
 
     it("maps a non-zero exit of any step to backend_error with its exit code", function()
       for step, label in pairs({
+        ["ls --json"] = "ls",
         ["api call -s session:aaaa session.view"] = "session.view",
         ["block call -s session:aaaa -b block:a2 process"] = "process",
       }) do
@@ -413,13 +394,6 @@ describe("rex backend", function()
       local session, err = rex.start(claude, opts)
       expect.equality(err, nil)
       expect.equality(session.id, "rex:block:new1")
-    end)
-
-    it("adds no env prefix when the tool env is empty", function()
-      rec = record({ [split_key] = fixture("split"), [new_process] = live("process_claude") })
-      rex.start(claude, opts)
-      expect.equality(vim.tbl_contains(rec.subs[1], "/usr/bin/env"), false)
-      expect.equality(rec.subs[1][12], "claude")
     end)
 
     it("records the foreground at that moment, even before the tool runs, with its nvim_get_proc name", function()

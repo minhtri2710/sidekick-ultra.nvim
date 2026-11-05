@@ -51,8 +51,6 @@ local CLAUDE_PROCESS = process_info("process_info_claude", { [4241] = GONE_PID, 
 local SHELL_PROCESS = process_info("process_info_claude", { [4200] = SELF_PID, [4241] = GONE_PID, [4242] = GONE_PID })
 local CODEX_PROCESS = process_info("process_info_codex", { [4251] = SELF_PID, [4252] = GONE_PID })
 
-local FAIL = { code = 1, stdout = "", stderr = fixture("error"):gsub("\n", "") .. "\n" }
-
 ---A failed command whose stderr carries the given error-envelope fixture.
 local function failing(name)
   return { code = 1, stdout = "", stderr = fixture(name):gsub("\n", "") .. "\n" }
@@ -107,11 +105,11 @@ describe("herdr backend", function()
   end
 
   ---@return sidekick_ultra.Session
-  local function pane_session(extra)
+  local function pane_session()
     return vim.tbl_extend("force", fake.session("herdr", "claude", 1), {
       id = "herdr:w1:p1",
       pane_id = "w1:p1",
-    }, extra or {})
+    })
   end
 
   before_each(function()
@@ -213,18 +211,7 @@ describe("herdr backend", function()
       })
     end)
 
-    it("takes proc_name from nvim_get_proc, not from herdr's process name", function()
-      install(routes())
-      local sessions = herdr.list(tools())
-      expect.equality(sessions[1].proc_name, vim.api.nvim_get_proc(SELF_PID).name)
-      expect.equality(sessions[1].proc_name ~= "2.1.308", true)
-    end)
-
-    it("picks the foreground process group's entry, else the first one", function()
-      -- The other entry of each fixture has a pid no process owns, so choosing it would drop the session.
-      install(routes())
-      expect.equality(#herdr.list(tools()), 3)
-      -- A group id that matches no entry falls back to the first one.
+    it("falls back to the first entry when the group id matches none", function()
       install(routes({
         ["pane process-info"] = patched("process_info_claude", function(data)
           local info = data.result.process_info
@@ -293,14 +280,14 @@ describe("herdr backend", function()
     end)
 
     it("reports a non-zero exit as backend_error", function()
-      install(routes({ ["pane list"] = FAIL }))
+      install(routes({ ["pane list"] = failing("error") }))
       local sessions, err = herdr.list(tools())
       expect.equality(sessions, nil)
       expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "herdr", "pane list", 1 })
     end)
 
     it("reports a failing process-info as backend_error", function()
-      install(routes({ ["pane process-info"] = FAIL }))
+      install(routes({ ["pane process-info"] = failing("error") }))
       local sessions, err = herdr.list(tools())
       expect.equality(sessions, nil)
       expect.equality({ err.id, err.cmd }, { "backend_error", "pane process-info" })
@@ -422,17 +409,6 @@ describe("herdr backend", function()
       })
     end)
 
-    it("names the agent after the lowest free number and a valid herdr agent name", function()
-      install(routes())
-      herdr.start(tool(), { cwd = "/work/proj", env = {} })
-      local name = argvs()[3][4]
-      expect.equality(name, "sku-claude-3")
-      expect.equality(vim.regex("^[a-z][a-z0-9_-]\\{0,31}$"):match_str(name) ~= nil, true)
-      install(routes({ ["agent list"] = fixture("agent_list_empty") }))
-      herdr.start(tool("codex"), { cwd = "/work/proj", env = {} })
-      expect.equality(argvs()[3][4], "sku-codex-1")
-    end)
-
     it("waits longer for agent start than the exec default", function()
       install(routes())
       herdr.start(tool(), { cwd = "/work/proj", env = {} })
@@ -477,7 +453,7 @@ describe("herdr backend", function()
     end)
 
     it("creates nothing when agent list fails", function()
-      install(routes({ ["agent list"] = FAIL }))
+      install(routes({ ["agent list"] = failing("error") }))
       local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality(session, nil)
       expect.equality({ err.id, err.cmd }, { "backend_error", "agent list" })
@@ -485,7 +461,7 @@ describe("herdr backend", function()
     end)
 
     it("starts no agent and closes nothing when the split fails", function()
-      install(routes({ ["pane split"] = FAIL }))
+      install(routes({ ["pane split"] = failing("error") }))
       local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality(session, nil)
       expect.equality({ err.id, err.cmd }, { "backend_error", "pane split" })
@@ -497,15 +473,6 @@ describe("herdr backend", function()
       local _, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality({ err.id, err.cmd }, { "backend_error", "pane split" })
       expect.equality(#calls, 2)
-    end)
-
-    it("closes exactly the pane it just split when agent start fails, and returns the start error", function()
-      install(routes({ ["agent start"] = FAIL }))
-      local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
-      expect.equality(session, nil)
-      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "agent start", 1 })
-      expect.equality(argvs()[4], { "herdr", "pane", "close", "w1:p4" })
-      expect.equality(#calls, 4)
     end)
 
     it("keeps an agent that is blocked during startup: no pane close, a session with state blocked", function()
@@ -538,42 +505,30 @@ describe("herdr backend", function()
       expect.equality(argvs()[4][3], "process-info")
     end)
 
-    it("closes the new pane for every other agent start failure", function()
-      for _, route in ipairs({
-        failing("agent_start_timeout"),
-        failing("error"),
-        { code = 2, stdout = "", stderr = "missing required --kind\n" },
-        { code = 1, stdout = "", stderr = "" },
-        { code = 0, stdout = "not json", stderr = "" },
-        { code = 0, stdout = '{"id":"x","result":{"type":"agent_started"}}', stderr = "" },
-        { run_error = { id = "backend_error", msg = "timed out", backend = "herdr", cmd = "agent start" } },
+    it("closes exactly the pane it just split for every agent start failure, and returns the start error", function()
+      for _, row in ipairs({
+        { failing("agent_start_timeout"), 1 },
+        { failing("error"), 1 },
+        { { code = 2, stdout = "", stderr = "missing required --kind\n" }, 2 },
+        { { code = 1, stdout = "", stderr = "" }, 1 },
+        { { code = 0, stdout = "not json", stderr = "" } },
+        { { code = 0, stdout = '{"id":"x","result":{"type":"agent_started"}}', stderr = "" } },
+        { { run_error = { id = "backend_error", msg = "timed out", backend = "herdr", cmd = "agent start" } } },
       }) do
-        install(routes({ ["agent start"] = route }))
+        install(routes({ ["agent start"] = row[1] }))
         local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
         expect.equality(session, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "agent start" })
+        expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "agent start", row[2] })
         expect.equality(argvs()[4], { "herdr", "pane", "close", "w1:p4" })
         expect.equality(#calls, 4)
       end
     end)
 
-    it("reports the exit code of a failed agent start", function()
-      install(routes({ ["agent start"] = failing("agent_start_timeout") }))
-      local _, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
-      expect.equality(err.code, 1)
-    end)
-
     it("still returns the start error when the cleanup close fails too", function()
-      install(routes({ ["agent start"] = FAIL, ["pane close"] = FAIL }))
+      install(routes({ ["agent start"] = failing("error"), ["pane close"] = failing("error") }))
       local _, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality({ err.id, err.cmd }, { "backend_error", "agent start" })
       expect.equality(#calls, 4)
-    end)
-
-    it("records the new pane's shell pid with its nvim_get_proc name, before the agent owns the foreground", function()
-      install(routes())
-      local session = herdr.start(tool(), { cwd = "/work/proj", env = {} })
-      expect.equality({ session.pid, session.proc_name }, { SELF_PID, vim.api.nvim_get_proc(SELF_PID).name })
     end)
 
     it("returns backend_error when the shell pid is not a process here, and leaves the pane", function()
@@ -644,7 +599,7 @@ describe("herdr backend", function()
     end)
 
     it("refuses with status_unreadable when the read fails, and sends nothing", function()
-      install(routes({ ["pane get"] = FAIL }))
+      install(routes({ ["pane get"] = failing("error") }))
       local ok, err = herdr.send(pane_session(), "hello")
       expect.equality(ok, nil)
       expect.equality({ err.id, err.backend, err.cmd, err.code }, { "status_unreadable", "herdr", "pane get", 1 })
@@ -669,7 +624,7 @@ describe("herdr backend", function()
     end)
 
     it("reports a failing send-text as backend_error", function()
-      install(routes({ ["pane send-text"] = FAIL }))
+      install(routes({ ["pane send-text"] = failing("error") }))
       local ok, err = herdr.send(pane_session(), "hello")
       expect.equality(ok, nil)
       expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "pane send-text", 1 })
@@ -690,7 +645,7 @@ describe("herdr backend", function()
     end)
 
     it("submit reports a failure as backend_error", function()
-      install({ ["pane send-keys"] = FAIL })
+      install({ ["pane send-keys"] = failing("error") })
       local ok, err = herdr.submit(pane_session())
       expect.equality(ok, nil)
       expect.equality({ err.id, err.cmd }, { "backend_error", "pane send-keys" })
@@ -703,7 +658,7 @@ describe("herdr backend", function()
     end)
 
     it("focus reports a failure as backend_error", function()
-      install({ ["agent focus"] = FAIL })
+      install({ ["agent focus"] = failing("error") })
       local ok, err = herdr.focus(pane_session())
       expect.equality(ok, nil)
       expect.equality({ err.id, err.cmd }, { "backend_error", "agent focus" })

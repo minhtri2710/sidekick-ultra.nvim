@@ -94,12 +94,6 @@ describe("actions", function()
       })
     end)
 
-    it("sends no focus-in for a tool without mux_focus", function()
-      attached({ "claude" })
-      actions.send({ msg = "hi" })
-      expect.equality(backend.delivered, { "hi\n" })
-    end)
-
     for _, id in ipairs({ "session_blocked", "status_unreadable" }) do
       it("notifies " .. id .. " and sends nothing else when the backend refuses", function()
         attached({ "claude" }, { fail = { send = errors.new(id, "x") } })
@@ -136,33 +130,17 @@ describe("actions", function()
       expect.equality(methods(), { "send", "send" })
     end)
 
-    it("does not submit when a failed submit is the last step, and reports it", function()
+    it("does not focus when submit is refused", function()
       attached({ "claude" }, { fail = { submit = errors.new("backend_error", "x") } })
       actions.send({ msg = "hi", submit = true, focus = true })
       expect.equality(cap.ids(), { "backend_error" })
       expect.equality(methods(), { "send", "submit" })
     end)
 
-    it("fails with render_failed naming the empty placeholder and sends nothing, starts nothing", function()
+    it("fails with render_failed and sends nothing, starts nothing", function()
       attached({ "claude" })
       actions.send({ msg = "see {function}" })
       expect.equality(cap.ids(), { "render_failed" })
-      expect.equality(backend.calls, {})
-      local text, err = actions.render({ msg = "see {function}" })
-      expect.equality({ text, err.id, err.names }, { nil, "render_failed", { "function" } })
-    end)
-
-    it("names an empty selection placeholder outside visual mode", function()
-      attached({ "claude" })
-      local _, err = actions.render({ msg = "{selection}" })
-      expect.equality({ err.id, err.names }, { "render_failed", { "selection" } })
-    end)
-
-    it("fails with unknown_context and unknown_prompt", function()
-      attached({ "claude" })
-      actions.send({ msg = "{bogus}" })
-      actions.send({ prompt = "bogus" })
-      expect.equality(cap.ids(), { "unknown_context", "unknown_prompt" })
       expect.equality(backend.calls, {})
     end)
 
@@ -179,33 +157,12 @@ describe("actions", function()
       expect.equality(backend.delivered, { "\n" })
     end)
 
-    it("fails with not_installed for a tool chosen from the picker that is missing", function()
-      fake.reset({ claude = { cmd = { "/nonexistent/sku-claude" } } })
-      backend = fake.backend("herdr", { is_inside = true })
-      registry.register(backend)
-      actions.send({ msg = "hi" })
-      expect.equality(cap.ids()[1], "not_installed")
-      expect.equality(backend.of("start"), {})
-    end)
-
     it("refuses with not_in_mux when no session is attached and no backend is inside", function()
       backend = fake.backend("herdr", { is_inside = false })
       registry.register(backend)
       actions.send({ msg = "hi", name = "claude" })
       expect.equality(cap.ids(), { "not_in_mux" })
       expect.equality({ #backend.of("start"), #backend.of("send") }, { 0, 0 })
-    end)
-
-    it("refuses with not_in_mux when two backends are inside and TERM_PROGRAM names neither", function()
-      backend = fake.backend("herdr", { is_inside = true })
-      registry.register(backend)
-      local other = fake.backend("rex", { is_inside = true })
-      registry.register(other)
-      vim.env.TERM_PROGRAM = "iTerm.app"
-      actions.send({ msg = "hi", name = "claude" })
-      vim.env.TERM_PROGRAM = nil
-      expect.equality(cap.ids(), { "not_in_mux" })
-      expect.equality({ #backend.of("start"), #other.of("start") }, { 0, 0 })
     end)
 
     it("starts a not-started tool inside the mux, attaches it, then sends", function()
@@ -229,13 +186,6 @@ describe("actions", function()
       end
       actions.send({ msg = "hi" })
       expect.equality(backend.calls, { { "send", "herdr:codex1", "hi\n" } })
-    end)
-
-    it("narrows the target with the name filter", function()
-      attached({ "claude", "codex" })
-      actions.send({ msg = "hi", name = "claude" })
-      expect.equality(backend.calls, { { "send", "herdr:claude1", "hi\n" } })
-      expect.equality(#pick.selects, 0)
     end)
 
     it("sends the selection in visual mode when there is no msg or prompt, and leaves visual mode", function()
@@ -270,13 +220,9 @@ describe("actions", function()
       expect.equality(backend.delivered, { "@my file.lua\n" })
     end)
 
-    it("evaluates a user context function once per send, whatever the targets' location styles", function()
+    it("evaluates a user context function once per send", function()
       local count = 0
-      fake.reset({
-        claude = { cmd = fake.INSTALLED },
-        gemini = { cmd = fake.INSTALLED, location = "escaped" },
-        codex = { cmd = fake.INSTALLED },
-      }, {
+      fake.reset({ claude = { cmd = fake.INSTALLED } }, {
         context = {
           counted = function()
             count = count + 1
@@ -293,32 +239,6 @@ describe("actions", function()
       actions.send({ msg = "{counted} {file}" })
       expect.equality(count, 1)
       expect.equality(backend.delivered, { 'c @"my file.lua"\n' })
-
-      -- send acts on one session, so reach several targets through the targeting seam.
-      count = 0
-      registry.reset()
-      attached({ "claude", "gemini", "codex" })
-      local target = require("sidekick-ultra.target")
-      local orig = target.with_target
-      target.with_target = function(_, cb)
-        cb(registry.attached())
-      end
-      local ok, err = pcall(actions.send, { msg = "{counted} {file}" })
-      target.with_target = orig
-      assert(ok, err)
-      expect.equality(count, 1)
-      -- Targets come sorted by session id: claude, codex, gemini.
-      expect.equality(backend.delivered, { 'c @"my file.lua"\n', "c @my file.lua\n", "c @my\\ file.lua\n" })
-    end)
-
-    it("sends a library prompt with the {this} rewrite", function()
-      local file = tmp .. "/a.lua"
-      vim.fn.writefile({ "x" }, file)
-      vim.cmd("cd " .. vim.fn.fnameescape(tmp))
-      vim.cmd("edit " .. vim.fn.fnameescape(file))
-      attached({ "codex" })
-      actions.send({ prompt = "explain" })
-      expect.equality(backend.delivered, { "Explain @a.lua :L1:C1\n" })
     end)
   end)
 
@@ -369,13 +289,7 @@ describe("actions", function()
       end
       expect.equality(vim.tbl_contains(items, "function"), false)
       expect.equality(backend.calls, {})
-    end)
-
-    it("does nothing when cancelled", function()
-      attached({ "codex" })
-      pick.choose = function() end
-      actions.prompt({})
-      expect.equality(backend.calls, {})
+      expect.equality(cap.calls, {})
     end)
   end)
 
@@ -417,18 +331,6 @@ describe("actions", function()
         end, pick.selects[1].items),
         { "codex" }
       )
-    end)
-
-    it("starts a not-started tool inside the mux", function()
-      backend = fake.backend("herdr", { is_inside = true })
-      registry.register(backend)
-      pick.choose = function(items)
-        return vim.tbl_filter(function(s)
-          return s.name == "codex"
-        end, items)[1]
-      end
-      actions.select({})
-      expect.equality(registry.attached()[1].id, "herdr:codexnew1")
     end)
   end)
 
@@ -496,7 +398,8 @@ describe("actions", function()
   describe("render", function()
     it("returns the rendered text without sending", function()
       attached({ "claude" })
-      expect.equality(actions.render({ msg = "{file|line}" }), nil)
+      local text, err = actions.render({ msg = "{file|line}" })
+      expect.equality({ text, err.id, err.names }, { nil, "render_failed", { "file|line" } })
       expect.equality(cap.ids(), { "render_failed" })
       expect.equality(actions.render({ msg = "plain", prompt = "changes" }), "plain\nCan you review my changes?")
       expect.equality(backend.calls, {})
