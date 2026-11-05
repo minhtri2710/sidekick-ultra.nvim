@@ -35,6 +35,16 @@ describe("exec", function()
     expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "rex", "ls" })
   end)
 
+  it("maps a timeout to backend_error when the child ignores SIGTERM and is killed with SIGKILL", function()
+    local res, err = exec.run({ "/bin/sh", "-c", "trap '' TERM; exec /bin/sleep 5" }, {
+      timeout_ms = 100,
+      backend = "rex",
+      cmd = "ls",
+    })
+    expect.equality(res, nil)
+    expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "rex", "ls" })
+  end)
+
   it("maps a missing executable to backend_error", function()
     local res, err = exec.run({ "/nonexistent/sku-binary" })
     expect.equality(res, nil)

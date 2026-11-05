@@ -2,6 +2,7 @@
 local errors = require("sidekick-ultra.errors")
 local snapshot = require("sidekick-ultra.context.snapshot")
 local sources = require("sidekick-ultra.context.sources")
+local tools = require("sidekick-ultra.tools")
 
 ---@alias sidekick_ultra.Prompt string|{msg: string}|fun(snap: sidekick_ultra.Snapshot): string
 
@@ -96,29 +97,41 @@ local function alternatives(expr)
   return names
 end
 
----@param value any
----@return string[]?
-local function as_lines(value)
+---A source's value as flat output segments (lines joined by "\n"), or nil when it yields nothing.
+---@param value any string, or a list of lines
+---@return (string|sidekick_ultra.Location)[]?
+local function as_segments(value)
+  local lines = value
   if type(value) == "string" then
-    return vim.split(value, "\n", { plain = true })
+    lines = vim.split(value, "\n", { plain = true })
+  elseif type(value) ~= "table" then
+    return nil
   end
-  return type(value) == "table" and value or nil
+  local segments = {}
+  for i, line in ipairs(lines) do
+    if i > 1 then
+      table.insert(segments, "\n")
+    end
+    vim.list_extend(segments, type(line) == "string" and { line } or line)
+  end
+  for _, segment in ipairs(segments) do
+    if type(segment) == "table" then
+      return segments
+    end
+  end
+  -- Text only: empty when the lines join to "" (two empty lines are "\n", a value).
+  return table.concat(segments) ~= "" and segments or nil
 end
 
----@param lines string[]?
----@return boolean
-local function empty(lines)
-  return lines == nil or table.concat(lines, "\n") == ""
-end
-
----Render a message and/or a named prompt against a snapshot. Returns "" when there is nothing to render.
----Placeholder values are inserted as-is: braces inside them are not expanded again.
+---Render a message and/or a named prompt against a snapshot into output segments: strings and location
+---records, written out by `tools.format` in the target tool's style. Every placeholder is evaluated once, whatever
+---the style. Empty when there is nothing to render. Placeholder values are inserted as-is: braces inside them are
+---not expanded again.
 ---@param opts {msg?: string, prompt?: string}
 ---@param snap sidekick_ultra.Snapshot
----@param style? sidekick_ultra.LocationStyle
----@return string? text
+---@return (string|sidekick_ultra.Location)[]? segments
 ---@return sidekick_ultra.Error? err
-function M.render(opts, snap, style)
+function M.build(opts, snap)
   local parts = {}
   if opts.msg then
     table.insert(parts, opts.msg)
@@ -160,12 +173,11 @@ function M.render(opts, snap, style)
   local memo, details = {}, {}
   local function value(name)
     if memo[name] == nil then
-      local ok, ret = pcall(active[name], snap, { style = style })
+      local ok, ret = pcall(active[name], snap)
       if not ok then
         table.insert(details, ("%s: %s"):format(name, tostring(ret)))
       end
-      local lines = ok and as_lines(ret) or nil
-      memo[name] = not empty(lines) and table.concat(lines, "\n")
+      memo[name] = ok and as_segments(ret) or false
     end
     return memo[name]
   end
@@ -190,9 +202,36 @@ function M.render(opts, snap, style)
       })
   end
 
-  return (text:gsub("{([^{}]*)}", function(expr)
-    return resolved[expr]
-  end))
+  local out, pos = {}, 1
+  while true do
+    local first, last, expr = text:find("{([^{}]*)}", pos)
+    if not first then
+      break
+    end
+    table.insert(out, text:sub(pos, first - 1))
+    if resolved[expr] then
+      vim.list_extend(out, resolved[expr])
+    else
+      table.insert(out, text:sub(first, last))
+    end
+    pos = last + 1
+  end
+  table.insert(out, text:sub(pos))
+  return out
+end
+
+---`build`, written out in `style`. Returns "" when there is nothing to render.
+---@param opts {msg?: string, prompt?: string}
+---@param snap sidekick_ultra.Snapshot
+---@param style? sidekick_ultra.LocationStyle
+---@return string? text
+---@return sidekick_ultra.Error? err
+function M.render(opts, snap, style)
+  local segments, err = M.build(opts, snap)
+  if not segments then
+    return nil, err
+  end
+  return tools.format(segments, style)
 end
 
 return M

@@ -4,13 +4,15 @@ local M = {}
 local BACKENDS = { "herdr", "rex" }
 
 ---Validate the options, register the enabled and available backends, and create `:SidekickUltra`.
----Raises an error naming the key path when the options are invalid. Calling it again starts from a clean state.
+---Raises an error naming the key path when the options are invalid. Calling it again first detaches every attached
+---session (the detach events fire) and starts from a clean state.
 ---@param opts? table see `sidekick_ultra.Config`
 function M.setup(opts)
   local cfg = require("sidekick-ultra.config").setup(opts)
   require("sidekick-ultra.tools").setup(cfg.tools)
   require("sidekick-ultra.context.render").setup(cfg.prompts, cfg.context)
   local registry = require("sidekick-ultra.registry")
+  registry.detach_all()
   registry.reset()
   for _, name in ipairs(BACKENDS) do
     if cfg[name].enabled then

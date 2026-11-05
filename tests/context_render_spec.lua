@@ -197,20 +197,30 @@ describe("context.render", function()
       expect.equality(calls, 101)
     end)
 
-    it("accepts user sources returning a string, a list or nothing, and passes the style", function()
-      local seen
+    it("accepts user sources returning a string, a list or nothing", function()
       render.setup(nil, {
         list = function()
           return { "a", "b" }
         end,
-        styled = function(_, ctx)
-          seen = ctx.style
+        text = function()
           return "s"
         end,
       })
       expect.equality(run({ msg = "{list}" }), "a\nb")
-      run({ msg = "{styled}" }, "escaped")
-      expect.equality(seen, "escaped")
+      expect.equality(run({ msg = "{text}" }), "s")
+    end)
+
+    it("builds once: locations stay records until written out in a style", function()
+      local file = vim.fn.tempname() .. "/my file.lua"
+      vim.fn.mkdir(vim.fs.dirname(file), "p")
+      vim.fn.writefile({ "x" }, file)
+      vim.cmd.edit(file)
+      local segments = render.build({ msg = "see {file}" }, snapshot.capture())
+      local tools = require("sidekick-ultra.tools")
+      expect.equality(segments[1], "see ")
+      expect.equality(type(segments[2]), "table")
+      expect.equality(tools.format(segments, "plain"), "see @" .. snapshot.path(0, snapshot.capture().cwd))
+      expect.equality(tools.format(segments, "claude"):find('@"', 1, true) ~= nil, true)
     end)
 
     it("a user source overrides a built-in one", function()

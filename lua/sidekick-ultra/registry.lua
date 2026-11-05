@@ -37,11 +37,6 @@ function M.backend(name)
   end
 end
 
----@return sidekick_ultra.Backend[]
-function M.backends()
-  return vim.list_slice(backends)
-end
-
 ---Forget all backends and attached sessions and stop watching.
 function M.reset()
   backends = {}
@@ -101,6 +96,15 @@ function M.detach(id)
   watch.update(next(attached) ~= nil)
   fire(M.DETACH, id)
   return session
+end
+
+---Detach every attached session, firing the detach events (running or not).
+function M.detach_all()
+  local ids = vim.tbl_keys(attached)
+  table.sort(ids)
+  for _, id in ipairs(ids) do
+    M.detach(id)
+  end
 end
 
 ---The attached sessions sorted by id. Sessions that stopped running are detached first.

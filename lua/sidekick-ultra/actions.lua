@@ -60,17 +60,17 @@ local function call(session, method, ...)
   return true
 end
 
+---Render once into segments; each target's location style is applied when the text is written out.
 ---@param opts sidekick_ultra.ActionOpts
 ---@param snap sidekick_ultra.Snapshot
----@param style? sidekick_ultra.LocationStyle
----@return string? text
+---@return (string|sidekick_ultra.Location)[]? segments
 ---@return sidekick_ultra.Error? err
-local function compose(opts, snap, style)
+local function compose(opts, snap)
   local msg = opts.msg
   if not msg and not opts.prompt and snap.selection then
     msg = "{selection}"
   end
-  return render.render({ msg = msg, prompt = opts.prompt }, snap, style)
+  return render.build({ msg = msg, prompt = opts.prompt }, snap)
 end
 
 ---Deliver `text` to one session: [focus-in, wait], text and LF, [Enter], [focus]. Stops at the first refusal.
@@ -103,12 +103,12 @@ end
 function M.send(opts, snap)
   opts = opts or {}
   snap = snap or snapshot.capture()
-  local plain, err = compose(opts, snap)
-  if not plain then
+  local segments, err = compose(opts, snap)
+  if not segments then
     errors.notify(err)
     return
   end
-  if plain == "" then
+  if tools.format(segments) == "" then
     errors.notify(errors.new("nothing_to_send", "nothing to send"))
     return
   end
@@ -116,21 +116,9 @@ function M.send(opts, snap)
     if in_visual() then
       vim.cmd("normal! \27")
     end
-    local by_style = { plain = plain }
     for _, session in ipairs(sessions) do
       local tool = tools.get(session.tool)
-      local style = tool and tool.location or "plain"
-      if not by_style[style] then
-        local text, style_err = compose(opts, snap, style)
-        if text then
-          by_style[style] = text
-        else
-          errors.notify(style_err)
-        end
-      end
-      if by_style[style] then
-        deliver(session, by_style[style], opts)
-      end
+      deliver(session, tools.format(segments, tool and tool.location), opts)
     end
   end)
 end
@@ -198,11 +186,12 @@ end
 ---@return string? text
 ---@return sidekick_ultra.Error? err
 function M.render(opts)
-  local text, err = compose(opts or {}, snapshot.capture())
-  if not text then
+  local segments, err = compose(opts or {}, snapshot.capture())
+  if not segments then
     errors.notify(err)
+    return nil, err
   end
-  return text, err
+  return tools.format(segments), nil
 end
 
 return M

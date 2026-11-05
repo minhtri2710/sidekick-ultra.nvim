@@ -1,8 +1,11 @@
----Built-in placeholders. Each source takes a snapshot and `{style}` and returns lines, or nothing.
+---Built-in placeholders. Each source takes a snapshot and returns lines, or nothing.
 local snapshot = require("sidekick-ultra.context.snapshot")
-local tools = require("sidekick-ultra.tools")
 
----@alias sidekick_ultra.Source fun(snap: sidekick_ultra.Snapshot, ctx: {style?: sidekick_ultra.LocationStyle}): string[]?
+---A rendered line is a string, or a list of strings and location records. Records are written in the target
+---tool's location style only when the text is sent (`tools.format`), so a source never knows the style.
+---@alias sidekick_ultra.Line string|(string|sidekick_ultra.Location)[]
+
+---@alias sidekick_ultra.Source fun(snap: sidekick_ultra.Snapshot): sidekick_ultra.Line[]?
 
 local M = {}
 
@@ -19,10 +22,9 @@ local function clamp_col(buf, row, col)
 end
 
 ---@param snap sidekick_ultra.Snapshot
----@param ctx table
 ---@param kind "file"|"line"|"position"
----@return string[]?
-local function located(snap, ctx, kind)
+---@return sidekick_ultra.Line[]?
+local function located(snap, kind)
   if not snapshot.is_file(snap.buf) then
     return
   end
@@ -39,27 +41,27 @@ local function located(snap, ctx, kind)
     loc.r1 = snap.cursor[1]
     loc.c1 = snap.cursor[2]
   end
-  return { tools.location(loc, ctx.style) }
+  return { { loc } }
 end
 
-function M.builtin.position(snap, ctx)
-  return located(snap, ctx, "position")
+function M.builtin.position(snap)
+  return located(snap, "position")
 end
 
-function M.builtin.file(snap, ctx)
-  return located(snap, ctx, "file")
+function M.builtin.file(snap)
+  return located(snap, "file")
 end
 
-function M.builtin.line(snap, ctx)
-  return located(snap, ctx, "line")
+function M.builtin.line(snap)
+  return located(snap, "line")
 end
 
-function M.builtin.buffers(snap, ctx)
+function M.builtin.buffers(snap)
   local ret = {}
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if snapshot.is_file(buf) then
       local loc = { path = snapshot.path(buf, snap.cwd), kind = "file" }
-      table.insert(ret, "- " .. tools.location(loc, ctx.style))
+      table.insert(ret, { "- ", loc })
     end
   end
   return #ret > 0 and ret or nil
@@ -151,10 +153,9 @@ end
 M.builtin.selection = selected_text
 
 ---@param snap sidekick_ultra.Snapshot
----@param ctx table
 ---@param all boolean
----@return string[]?
-local function diagnostics(snap, ctx, all)
+---@return sidekick_ultra.Line[]?
+local function diagnostics(snap, all)
   local sel = snap.selection
   local list = vim.tbl_filter(function(d)
     return not sel or d.bufnr ~= snap.buf or (d.lnum + 1 >= sel.from[1] and d.lnum + 1 <= sel.to[1])
@@ -183,22 +184,21 @@ local function diagnostics(snap, ctx, all)
         table.insert(head, tostring(extra))
       end
     end
-    table.insert(head, tools.location(loc, ctx.style))
-    table.insert(ret, table.concat(head, " "))
+    table.insert(ret, { table.concat(head, " ") .. " ", loc })
     vim.list_extend(ret, msg, 2)
   end
   return #ret > 0 and ret or nil
 end
 
-function M.builtin.diagnostics(snap, ctx)
-  return diagnostics(snap, ctx, false)
+function M.builtin.diagnostics(snap)
+  return diagnostics(snap, false)
 end
 
-function M.builtin.diagnostics_all(snap, ctx)
-  return diagnostics(snap, ctx, true)
+function M.builtin.diagnostics_all(snap)
+  return diagnostics(snap, true)
 end
 
-function M.builtin.quickfix(snap, ctx)
+function M.builtin.quickfix(snap)
   local qf = vim.fn.getqflist({ title = 1, items = 1 })
   if #qf.items == 0 then
     return
@@ -221,12 +221,8 @@ function M.builtin.quickfix(snap, ctx)
       end
     end
     local msg = vim.split(item.text:gsub("%s+$", ""), "\n", { plain = true })
-    local head = { "-", tools.location(loc, ctx.style) }
-    if item.type ~= "" then
-      table.insert(head, "[" .. item.type:upper() .. "]")
-    end
-    table.insert(head, msg[1])
-    table.insert(ret, (table.concat(head, " "):gsub("%s+$", "")))
+    local tail = (item.type ~= "" and " [" .. item.type:upper() .. "]" or "") .. " " .. msg[1]
+    table.insert(ret, { "- ", loc, (tail:gsub("%s+$", "")) })
     for i = 2, #msg do
       table.insert(ret, "  " .. msg[i])
     end
@@ -256,10 +252,10 @@ end
 
 ---@param word string
 ---@param name? string
----@param location string
----@return string
-function M.describe(word, name, location)
-  return name and (word .. " " .. name .. " " .. location) or (word .. " " .. location)
+---@param loc sidekick_ultra.Location
+---@return sidekick_ultra.Line
+function M.describe(word, name, loc)
+  return { name and (word .. " " .. name .. " ") or (word .. " "), loc }
 end
 
 ---The smallest `<word>.outer` textobject around the cursor (or selection start). Needs a "textobjects" query for
@@ -267,7 +263,7 @@ end
 ---@param word "function"|"class"
 ---@return sidekick_ultra.Source
 local function textobject(word)
-  return function(snap, ctx)
+  return function(snap)
     local ok, node = pcall(function()
       local lang = vim.treesitter.language.get_lang(vim.bo[snap.buf].filetype)
       local query = lang and vim.treesitter.query.get(lang, "textobjects")
@@ -294,7 +290,7 @@ local function textobject(word)
       return vim.treesitter.get_node_text(n, snap.buf)
     end)
     local loc = { path = snapshot.path(snap.buf, snap.cwd), kind = "position", r1 = srow + 1, c1 = scol + 1 }
-    return { M.describe(word, name, tools.location(loc, ctx.style)) }
+    return { M.describe(word, name, loc) }
   end
 end
 

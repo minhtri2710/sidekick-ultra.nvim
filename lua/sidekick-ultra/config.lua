@@ -68,11 +68,8 @@ local function check_table(path, value, allowed)
     if type(key) ~= "string" then
       return fail(full, "string key", key)
     elseif allowed and not allowed[key] then
-      return {
-        path = full,
-        expected = "one of: " .. table.concat(sorted_keys(allowed), ", "),
-        msg = full .. ": unknown key",
-      }
+      local keys = table.concat(sorted_keys(allowed), ", ")
+      return { path = full, expected = "one of: " .. keys, msg = ("%s: unknown key (allowed: %s)"):format(full, keys) }
     end
   end
 end
@@ -232,22 +229,22 @@ end
 local current = defaults()
 
 ---Validate and store the configuration. Raises an error naming the key path when it is invalid.
----The stored table is private to the plugin; read it with `get()` and never modify it.
 ---@param opts? table
----@return sidekick_ultra.Config
+---@return sidekick_ultra.Config copy of the stored configuration, see `get()`
 function M.setup(opts)
   local cfg, err = M.validate(opts)
   if not cfg then
     error("sidekick-ultra: invalid config: " .. err.msg, 0)
   end
   current = cfg
-  return cfg
+  return M.get()
 end
 
----The configuration from the last `setup()`, or the defaults before one.
+---The configuration from the last `setup()`, or the defaults before one. Every call returns a fresh deep copy
+---(functions stay references), so changing the result never changes the plugin's configuration.
 ---@return sidekick_ultra.Config
 function M.get()
-  return current
+  return vim.deepcopy(current)
 end
 
 return M

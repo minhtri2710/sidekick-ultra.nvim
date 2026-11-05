@@ -80,6 +80,15 @@ describe("config", function()
     expect.equality(path_of({ context = { x = false } }), "context.x")
   end)
 
+  it("lists the allowed keys, sorted, in an unknown-key error", function()
+    local _, err = config.validate({ nope = 1 })
+    expect.equality(err.msg:find("allowed: context, herdr, prompts, rex, tools, watch", 1, true) ~= nil, true)
+    _, err = config.validate({ rex = { nope = 1 } })
+    expect.equality(err.msg:find("allowed: bin, enabled, server", 1, true) ~= nil, true)
+    _, err = config.validate({ tools = { claude = { nope = 1 } } })
+    expect.equality(err.msg:find("allowed: cmd, env, is_proc, location, mux_focus, url", 1, true) ~= nil, true)
+  end)
+
   it("rejects unknown keys at every level", function()
     expect.equality(path_of({ nope = 1 }), "nope")
     expect.equality(path_of({ herdr = { nope = 1 } }), "herdr.nope")
@@ -95,6 +104,23 @@ describe("config", function()
 
   it("rejects options that are not a table", function()
     expect.equality(path_of(1), "opts")
+  end)
+
+  it("returns a copy: mutating the result of get() changes nothing", function()
+    local fn = function() end
+    config.setup({ watch = true, context = { mine = fn }, tools = { claude = { env = { A = "1" } } } })
+    local first = config.get()
+    first.watch = false
+    first.herdr.enabled = false
+    first.tools.claude.env.A = "changed"
+    first.context.mine = nil
+    local second = config.get()
+    expect.equality(second.watch, true)
+    expect.equality(second.herdr.enabled, true)
+    expect.equality(second.tools.claude.env.A, "1")
+    expect.equality(second.context.mine == fn, true)
+    expect.equality(vim.tbl_count(second.tools), 1)
+    config.setup({})
   end)
 
   it("raises from setup naming the key path, and keeps the previous configuration", function()

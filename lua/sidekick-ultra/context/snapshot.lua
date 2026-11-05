@@ -16,10 +16,10 @@ local M = {}
 
 local KIND = { v = "char", V = "line", ["\22"] = "block" }
 
----@param win? integer defaults to the current window
+---Capture the current window.
 ---@return sidekick_ultra.Snapshot
-function M.capture(win)
-  win = win or vim.api.nvim_get_current_win()
+function M.capture()
+  local win = vim.api.nvim_get_current_win()
   local cursor = vim.api.nvim_win_get_cursor(win)
   ---@type sidekick_ultra.Snapshot
   local snap = {
@@ -30,7 +30,7 @@ function M.capture(win)
   }
 
   local kind = KIND[vim.fn.mode()]
-  if kind and win == vim.api.nvim_get_current_win() then
+  if kind then
     local a, b = vim.fn.getpos("v"), vim.fn.getpos(".")
     local from, to = { a[2], a[3] }, { b[2], b[3] }
     if from[1] > to[1] or (from[1] == to[1] and from[2] > to[2]) then

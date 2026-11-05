@@ -9,12 +9,19 @@ describe("test harness", function()
     end
   end)
 
-  it("makes a stub that is reached exit 97", function()
+  it("makes a stub that is reached exit 97 and leave a marker in HOME", function()
+    -- The run's own HOME carries the marker that fails the suite, so these deliberate calls use another one.
+    local home = vim.fn.tempname()
+    vim.fn.mkdir(home, "p")
     for _, name in ipairs({ "herdr", "rex" }) do
-      local res = require("sidekick-ultra.exec").run({ name, "anything" })
+      vim.fn.delete(home .. "/.sku-stub-reached")
+      local res = require("sidekick-ultra.exec").run({ name, "anything" }, { env = { HOME = home } })
       expect.equality(res.code, 97)
       expect.equality(res.stderr:find("stub reached", 1, true) ~= nil, true)
+      expect.equality(vim.uv.fs_stat(home .. "/.sku-stub-reached") ~= nil, true)
     end
+    vim.fn.delete(home, "rf")
+    expect.equality(vim.uv.fs_stat(vim.env.HOME .. "/.sku-stub-reached"), nil)
   end)
 
   it("runs with the mux environment cleared", function()

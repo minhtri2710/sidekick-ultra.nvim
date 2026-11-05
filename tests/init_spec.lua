@@ -1,4 +1,5 @@
 local fake = require("tests.helpers.fake")
+local notify = require("tests.helpers.notify")
 local registry = require("sidekick-ultra.registry")
 local sidekick = require("sidekick-ultra")
 
@@ -25,9 +26,9 @@ describe("setup", function()
   end)
 
   local function names()
-    return vim.tbl_map(function(b)
-      return b.name
-    end, registry.backends())
+    return vim.tbl_filter(function(name)
+      return registry.backend(name) ~= nil
+    end, { "herdr", "rex" })
   end
 
   it("registers each enabled backend that is available", function()
@@ -70,6 +71,7 @@ describe("setup", function()
     local ok, err = pcall(sidekick.setup, { rex = { server = 1 } })
     expect.equality(ok, false)
     expect.equality(err:find("rex.server", 1, true) ~= nil, true)
+    expect.equality(names(), {})
   end)
 
   it("applies tool, prompt and context configuration", function()
@@ -81,18 +83,40 @@ describe("setup", function()
         end,
       },
     })
+    local cap = notify.capture()
     expect.equality(require("sidekick-ultra.tools").get("mine").location, "claude")
     expect.equality(sidekick.render({ prompt = "greet" }), "hello world")
     local _, err = sidekick.render({ prompt = "fix" })
+    cap.restore()
     expect.equality(err.id, "unknown_prompt")
+    expect.equality(cap.ids(), { "unknown_prompt" })
   end)
 
-  it("starts from a clean state when called again", function()
+  it("detaches every attached session through the normal path when called again", function()
     fake.reset({ claude = { cmd = fake.INSTALLED } })
+    local events = {}
+    local group = vim.api.nvim_create_augroup("sku-spec-setup-events", { clear = true })
+    vim.api.nvim_create_autocmd("User", {
+      group = group,
+      pattern = registry.DETACH,
+      callback = function(ev)
+        table.insert(events, ev.data.id)
+      end,
+    })
     registry.attach(fake.session("herdr", "claude"))
-    expect.equality(#registry.attached(), 1)
-    fake.reset()
+    vim.wait(50, function()
+      return false
+    end)
+    expect.equality(#require("sidekick-ultra.status").cli(), 1)
+    sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+    vim.wait(1000, function()
+      return #events > 0
+    end)
+    vim.api.nvim_del_augroup_by_id(group)
+    expect.equality(events, { "herdr:claude1" })
     expect.equality(registry.attached(), {})
+    expect.equality(require("sidekick-ultra.watch").active(), false)
+    expect.equality(require("sidekick-ultra.status").cli(), {})
   end)
 
   it("exposes the actions on the module", function()

@@ -9,6 +9,10 @@ root=$(cd "$(dirname "$0")/.." && pwd -P)
 nvim_bin=${NVIM:-$(command -v nvim)}
 deps=$root/.tests/deps/mini.test
 
+if [ -n "${SKU_SPEC:-}" ]; then
+  echo "SKU_SPEC=$SKU_SPEC (narrowed run)"
+fi
+
 if [ ! -d "$deps/.git" ]; then
   mkdir -p "$root/.tests/deps"
   git clone --quiet "$MINI_TEST_URL" "$deps"

@@ -31,6 +31,8 @@ describe("status", function()
 
   it("lists attached sessions with id, tool, cwd, backend and state, refreshed by the attach event", function()
     local s = fake.session("herdr", "claude", 1, { state = "working" })
+    -- Prime a fresh cache first: only the attach event can then update it.
+    expect.equality(status.cli(), {})
     registry.attach(s)
     settle()
     expect.equality(status.cli(), {

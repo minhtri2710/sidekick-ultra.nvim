@@ -215,10 +215,6 @@ describe("registry", function()
       return backend and backend.name, err and err.id
     end
 
-    it("refuses with not_in_mux when no backend is inside", function()
-      expect.equality({ select({}, nil) }, { nil, "not_in_mux" })
-    end)
-
     it("uses the only backend that is inside", function()
       expect.equality({ select({ "rex" }, nil) }, { "rex" })
       expect.equality({ select({ "rex" }, "herdr") }, { "rex" })

@@ -270,6 +270,46 @@ describe("actions", function()
       expect.equality(backend.delivered, { "@my file.lua\n" })
     end)
 
+    it("evaluates a user context function once per send, whatever the targets' location styles", function()
+      local count = 0
+      fake.reset({
+        claude = { cmd = fake.INSTALLED },
+        gemini = { cmd = fake.INSTALLED, location = "escaped" },
+        codex = { cmd = fake.INSTALLED },
+      }, {
+        context = {
+          counted = function()
+            count = count + 1
+            return "c"
+          end,
+        },
+      })
+      local file = tmp .. "/my file.lua"
+      vim.fn.writefile({ "x" }, file)
+      vim.cmd("cd " .. vim.fn.fnameescape(tmp))
+      vim.cmd("edit " .. vim.fn.fnameescape(file))
+
+      attached({ "claude" })
+      actions.send({ msg = "{counted} {file}" })
+      expect.equality(count, 1)
+      expect.equality(backend.delivered, { 'c @"my file.lua"\n' })
+
+      -- send acts on one session, so reach several targets through the targeting seam.
+      count = 0
+      registry.reset()
+      attached({ "claude", "gemini", "codex" })
+      local target = require("sidekick-ultra.target")
+      local orig = target.with_target
+      target.with_target = function(_, cb)
+        cb(registry.attached())
+      end
+      actions.send({ msg = "{counted} {file}" })
+      target.with_target = orig
+      expect.equality(count, 1)
+      -- Targets come sorted by session id: claude, codex, gemini.
+      expect.equality(backend.delivered, { 'c @"my file.lua"\n', "c @my file.lua\n", "c @my\\ file.lua\n" })
+    end)
+
     it("sends a library prompt with the {this} rewrite", function()
       local file = tmp .. "/a.lua"
       vim.fn.writefile({ "x" }, file)

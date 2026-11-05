@@ -1,6 +1,7 @@
 local expect = MiniTest.expect
 local snapshot = require("sidekick-ultra.context.snapshot")
 local sources = require("sidekick-ultra.context.sources")
+local tools = require("sidekick-ultra.tools")
 
 local builtin = sources.builtin
 
@@ -22,7 +23,13 @@ describe("context.sources", function()
   ---@param name string
   ---@param style? string
   local function run(name, style)
-    return builtin[name](snapshot.capture(), { style = style })
+    local lines = builtin[name](snapshot.capture())
+    if not lines then
+      return nil
+    end
+    return vim.tbl_map(function(line)
+      return type(line) == "string" and line or tools.format(line, style)
+    end, lines)
   end
 
   before_each(function()
@@ -394,8 +401,9 @@ describe("context.sources", function()
     end)
 
     it("describe keeps the word and location when there is no name", function()
-      expect.equality(sources.describe("function", "f", "@a.lua :L1:C1"), "function f @a.lua :L1:C1")
-      expect.equality(sources.describe("class", nil, "@a.lua :L1:C1"), "class @a.lua :L1:C1")
+      local loc = { path = "a.lua", kind = "position", r1 = 1, c1 = 1 }
+      expect.equality(tools.format(sources.describe("function", "f", loc)), "function f @a.lua :L1:C1")
+      expect.equality(tools.format(sources.describe("class", nil, loc)), "class @a.lua :L1:C1")
     end)
   end)
 end)

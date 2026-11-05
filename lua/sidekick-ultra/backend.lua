@@ -17,7 +17,9 @@
 ---@field tool string configured tool name
 ---@field cwd string absolute working directory of the pane or block
 ---@field pid integer foreground process id recorded at discovery
----@field proc_name string foreground process name recorded at discovery; `is_running` needs both
+---@field proc_name string foreground process name; must equal `vim.api.nvim_get_proc(pid).name` as nvim reads it
+---   at discovery time, because `registry.is_running` compares exactly that. Never copy the mux's own process name
+---   (it can differ: truncated on macOS, or retitled by the tool); read it in nvim.
 ---@field state? sidekick_ultra.AgentState last agent state the backend reported
 ---@field sid? string `<tool> <hex>`; set by the registry on discovery, backends leave it nil
 
@@ -39,7 +41,9 @@
 ---(`tools.matches(tool, {pid = ..., cmd = ...})`, or the backend's own detection). `{}` is a valid answer.
 ---@field list fun(tools: table<string, sidekick_ultra.Tool>): sidekick_ultra.Session[]?, sidekick_ultra.Error?
 ---Create a pane or block beside nvim's own, without taking focus, running `tool.cmd`. Only called when `inside()`
----is true. Returns the new session.
+---is true. Returns the new session. Its `pid` and `proc_name` are those of the new pane or block's current
+---foreground (or shell) process, with the name read through `vim.api.nvim_get_proc(pid)`, so the session counts as
+---running at once and is not auto-detached before the tool has started. The next discovery replaces the record by id.
 ---@field start fun(tool: sidekick_ultra.Tool, opts: sidekick_ultra.StartOpts): sidekick_ultra.Session?, sidekick_ultra.Error?
 ---Deliver `text` as literal input, with no implicit Enter. The blocked guard lives here: re-read the session's
 ---state first, and refuse with `session_blocked` when it is blocked or `status_unreadable` when the state cannot

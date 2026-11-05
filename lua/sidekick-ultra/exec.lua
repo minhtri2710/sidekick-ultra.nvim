@@ -52,8 +52,8 @@ function M.run(argv, opts)
     return nil, failure(opts, argv, ("cannot run %s: %s"):format(tostring(argv[1]), tostring(proc)))
   end
   local res = proc:wait()
-  -- vim.system reports a timeout as exit 124 after killing the process with SIGTERM.
-  if res.code == 124 and res.signal == 15 then
+  -- vim.system reports a timeout as exit 124 after killing the process: SIGTERM, or SIGKILL when it ignores that.
+  if res.code == 124 and res.signal ~= 0 then
     return nil, failure(opts, argv, ("%s timed out after %d ms"):format(argv[1], timeout))
   end
   return { code = res.code, stdout = res.stdout or "", stderr = res.stderr or "" }

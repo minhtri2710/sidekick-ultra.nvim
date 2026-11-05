@@ -6,10 +6,11 @@ fmt:
 lint:
 	selene lua tests
 
+# The acceptance lanes ignore SKU_SPEC (the dev filter in tests/minit.lua).
 test:
-	scripts/test
+	env -u SKU_SPEC scripts/test
 
 test-floor:
-	NVIM=/tmp/sku-nvim-0.11/nvim-macos-arm64/bin/nvim scripts/test
+	env -u SKU_SPEC NVIM=/tmp/sku-nvim-0.11/nvim-macos-arm64/bin/nvim scripts/test
 
 check: fmt lint test

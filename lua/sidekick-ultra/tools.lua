@@ -209,4 +209,16 @@ function M.location(loc, style)
   return text
 end
 
+---Text of rendered output: strings as they are, location records written in `style`.
+---@param segments (string|sidekick_ultra.Location)[]
+---@param style? sidekick_ultra.LocationStyle
+---@return string
+function M.format(segments, style)
+  local out = {}
+  for i, segment in ipairs(segments) do
+    out[i] = type(segment) == "string" and segment or M.location(segment, style)
+  end
+  return table.concat(out)
+end
+
 return M
