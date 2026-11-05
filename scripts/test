@@ -1,0 +1,33 @@
+#!/bin/sh
+# Runs the suite in an isolated HOME with stub herdr/rex on PATH, under a 300 s bound.
+set -eu
+
+MINI_TEST_SHA=4d0fbfbae53ef872250fb3701dc1756262d36bf4
+MINI_TEST_URL=https://github.com/echasnovski/mini.test
+
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+nvim_bin=${NVIM:-$(command -v nvim)}
+deps=$root/.tests/deps/mini.test
+
+if [ ! -d "$deps/.git" ]; then
+  mkdir -p "$root/.tests/deps"
+  git clone --quiet "$MINI_TEST_URL" "$deps"
+  git -C "$deps" -c advice.detachedHead=false checkout --quiet "$MINI_TEST_SHA"
+fi
+if [ "$(git -C "$deps" rev-parse HEAD)" != "$MINI_TEST_SHA" ]; then
+  echo "mini.test is not at $MINI_TEST_SHA" >&2
+  exit 1
+fi
+
+tmp=$(mktemp -d /tmp/sku-test-XXXXXX)
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+# perl's alarm survives exec, so it bounds nvim at 300 s (macOS has no timeout(1)).
+PATH="$root/tests/bin:/usr/bin:/bin" \
+  HOME="$tmp" XDG_CONFIG_HOME="$tmp/config" XDG_DATA_HOME="$tmp/data" \
+  XDG_STATE_HOME="$tmp/state" XDG_CACHE_HOME="$tmp/cache" \
+  env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_SESSION \
+  -u HERDR_SOCKET_PATH -u HERDR_CLIENT_SOCKET_PATH -u HERDR_BIN_PATH -u HERDR_CONFIG_PATH \
+  -u REX_SERVER -u REX_SESSION -u REX_BLOCK -u REX_CLIENT -u TERM_PROGRAM \
+  /usr/bin/perl -e 'alarm 300; exec @ARGV' -- \
+  "$nvim_bin" --headless -u NONE -i NONE -l "$root/tests/minit.lua"
