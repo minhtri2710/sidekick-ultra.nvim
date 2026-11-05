@@ -13,9 +13,12 @@ local function set(list)
   return out
 end
 
----Flags of node that take a value as the next word: every option `node --help` (v26.13.0) lists with a `=...` or
----`=[host:]port` value, for example `--title=...` and `-r, --require=...`; bun shares the table. `--run` is not here: it
----runs a package.json task and takes no script (NODE_EVAL_FLAGS).
+---Flags of node that take a value as the next word: the options `node --help` (v26.13.0) lists with a `=...` or
+---`=[host:]port` value (`--title=...`, `-r, --require=...`), each probed on node v26.13.0 itself: `node <flag>
+---zz-none-probe.js` consumed the word (per-flag table: reviews/d10-help/node-probe.txt). The help line
+---`--experimental-config-file, --experimental-default-config-file, --config-file=...` is wrong: those three take no
+---separate value (the next word is the script), so they are not here. bun shares the table (unverified). `--run` is not
+---here: it runs a package.json task and takes no script (NODE_EVAL_FLAGS).
 local NODE_VALUE_FLAGS = set({
   "-C",
   "-r",
@@ -30,7 +33,6 @@ local NODE_VALUE_FLAGS = set({
   "--build-sea",
   "--build-snapshot-config",
   "--conditions",
-  "--config-file",
   "--cpu-prof-dir",
   "--cpu-prof-interval",
   "--cpu-prof-name",
@@ -41,8 +43,6 @@ local NODE_VALUE_FLAGS = set({
   "--dns-result-order",
   "--env-file",
   "--env-file-if-exists",
-  "--experimental-config-file",
-  "--experimental-default-config-file",
   "--experimental-loader",
   "--experimental-package-map",
   "--experimental-sea-config",
@@ -177,13 +177,31 @@ local function node_script(words)
   end
 end
 
----Whether a python word runs code or reads the script from stdin (a lone `-`), or names a module in the same word: `-c`, or a cluster with `c` or `m`, which takes
----the rest of the word as its code or module (`-uc`, `-cCODE`, `-maider`). A cluster is not split at the first letter
----that takes a value (`-Wc` is `-W` with the value `c` in python 3.9.6, observed), because the help does not say so.
+---Whether a python word runs code, reads stdin (a lone `-`), or names a module in the same word: `-c`, or a cluster
+---with `c` or `m`, which takes the rest of the word as its code or module (`-uc`, `-cCODE`, `-maider`).
 ---@param word string
 ---@return boolean
 local function python_eval(word)
   return word == "-c" or word == "-" or (is_cluster(word) and word:find("[cm]", 2) ~= nil)
+end
+
+---How many words a python flag word takes. `python3 --help` (3.9.6) is silent on clusters, so this follows the getopt
+---that python 3.9.6 was observed to use (`-Wc` is `-W` with the value `c`; `-uW ignore` and `-uX dev` run with the
+---next word as the value): a cluster is scanned left to right, and at the first `W` or `X` the rest of the word is its
+---value, or the next word when it is the last letter. A cluster with `c` or `m` never gets here (python_eval).
+---@param word string a word that starts with `-`
+---@return integer words
+local function python_flag_words(word)
+  if PYTHON_VALUE_FLAGS[word] then
+    return 2
+  end
+  if is_cluster(word) then
+    local at = word:find("[WX]", 2)
+    if at == #word then
+      return 2
+    end
+  end
+  return 1
 end
 
 ---The script, or the module of `-m`, after the flags of a python command line.
@@ -194,12 +212,12 @@ local function python_script(words)
   while words[i] do
     local word = words[i]
     -- `-m <module>` needs no branch: -m is skipped as a flag and the module is the first word that is not one.
-    if python_eval(word) then
+    if word == "--" then
+      return words[i + 1] and script_name(words[i + 1])
+    elseif python_eval(word) then
       return nil
-    elseif PYTHON_VALUE_FLAGS[word] then
-      i = i + 2
     elseif word:sub(1, 1) == "-" then
-      i = i + 1
+      i = i + python_flag_words(word)
     else
       return script_name(word)
     end

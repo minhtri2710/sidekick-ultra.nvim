@@ -151,8 +151,9 @@ describe("procname", function()
       end
     )
 
-    -- Each flag is listed with a value in `node --help` (v26.13.0), for example `--title=...`.
-    it("node and bun: the flags `node --help` lists with a value skip it", function()
+    -- Each flag is listed with a value in `node --help` (v26.13.0), for example `--title=...`, and was probed on node
+    -- v26.13.0: `node <flag> zz-none-probe.js` consumed the word (reviews/d10-help/node-probe.txt).
+    it("node and bun: the flags node was probed to take a value skip it", function()
       for _, flag in ipairs({
         "--title",
         "--env-file",
@@ -161,8 +162,6 @@ describe("procname", function()
         "--inspect-port",
         "--debug-port",
         "--disable-warning",
-        "--experimental-default-config-file",
-        "--config-file",
         "--test-isolation",
         "--report-dir",
         "--unhandled-rejections",
@@ -173,6 +172,21 @@ describe("procname", function()
       end
       check({ { "node --title gemini /x/bin/other", "other" }, { "node --env-file .env /x/bin/gemini", "gemini" } })
     end)
+
+    -- The help line `--experimental-config-file, --experimental-default-config-file, --config-file=...` is wrong for
+    -- these three: on node v26.13.0 the next word is the script (the config path comes from `--config-file=path`).
+    it(
+      "node and bun: --config-file, --experimental-config-file and --experimental-default-config-file take no value",
+      function()
+        for _, flag in ipairs({ "--config-file", "--experimental-config-file", "--experimental-default-config-file" }) do
+          check({
+            { "node " .. flag .. " /x/bin/gemini --key /x/bin/qwen", "gemini" },
+            { "node " .. flag .. "=node.config.json /x/bin/gemini", "gemini" },
+            { "node " .. flag, "" },
+          })
+        end
+      end
+    )
 
     it("node and bun: any other dash word is skipped alone", function()
       check({
@@ -244,6 +258,28 @@ describe("procname", function()
         })
       end
     )
+
+    -- python 3.9.6 (observed; `python3 --help` is silent on clusters) scans a cluster left to right: at the first W or X
+    -- the rest of the word is its value, and the next word when W or X is the last letter.
+    it("python: a cluster scanned left to right takes the next word after a trailing W or X", function()
+      check({
+        { "python3 -uW ignore /x/bin/aider", "aider" },
+        { "python3 -uX gemini /x/bin/aider", "aider" },
+        { "python3 -bX dev -m aider", "aider" },
+        { "python3 -uXW /x/bin/aider", "aider" },
+        { "python3 -uW", "" },
+        { "python3 -uX", "" },
+      })
+    end)
+
+    it("python: -- makes the next word the script, even a dash word", function()
+      check({
+        { "python3 -- /x/bin/aider --token value", "aider" },
+        { "python3 -u -- /x/bin/aider", "aider" },
+        { "python3 -- -c", "-c" },
+        { "python3 --", "" },
+      })
+    end)
 
     it("python: a short cluster without c or m is skipped as one word", function()
       check({

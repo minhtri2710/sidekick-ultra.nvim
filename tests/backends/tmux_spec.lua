@@ -443,10 +443,12 @@ describe("tmux backend", function()
     local PS = { "ps", "-ww", "-o", "args=", "-p", "58100" }
 
     before_each(function()
-      fake.reset(
-        { claude = { cmd = fake.INSTALLED }, gemini = { cmd = fake.INSTALLED }, aider = { cmd = fake.INSTALLED } },
-        { tmux = { enabled = false } }
-      )
+      fake.reset({
+        claude = { cmd = fake.INSTALLED },
+        gemini = { cmd = fake.INSTALLED },
+        aider = { cmd = fake.INSTALLED },
+        qwen = { cmd = fake.INSTALLED },
+      }, { tmux = { enabled = false } })
     end)
 
     ---ps answers per pid, from the pid in the call (`-p <pid>`); a pid without an answer fails like a missing process.
@@ -773,20 +775,22 @@ describe("tmux backend", function()
         { "node", 'node -e "' .. SECRET .. '"', nil },
         { "python3", "python3 -m aider --token " .. SECRET, "aider" },
         { "python3", 'python3 -c "' .. SECRET .. '"', nil },
-        { "node", 'node -pe "' .. SECRET .. '"', nil },
-        { "node", 'node -ep "' .. SECRET .. '"', nil },
-        { "node", "node --eval=" .. SECRET, nil },
-        { "node", "node --print=" .. SECRET, nil },
-        { "node", "node --run " .. SECRET, nil },
+        { "node", 'node -pe "/x/' .. SECRET .. '/gemini"', nil },
+        { "node", 'node -ep "/x/' .. SECRET .. '/gemini"', nil },
+        { "node", "node --eval=0 /x/" .. SECRET .. "/gemini", nil },
+        { "node", "node --print=0 /x/" .. SECRET .. "/gemini", nil },
+        { "node", "node --run /x/" .. SECRET .. "/gemini", nil },
         { "node", "node --env-file " .. SECRET .. " /x/bin/gemini", "gemini" },
         { "node", "node --title " .. SECRET .. " /x/bin/gemini", "gemini" },
-        { "python3", 'python3 -uc "' .. SECRET .. '"', nil },
-        { "python3", "python3 -c" .. SECRET, nil },
+        { "node", "node --config-file /x/bin/qwen --x /x/" .. SECRET .. "/gemini", "qwen" },
+        { "node", "node - /x/" .. SECRET .. "/gemini", nil },
+        { "python3", 'python3 -uc "/x/' .. SECRET .. '/gemini"', nil },
+        { "python3", "python3 -c/x/" .. SECRET .. "/gemini", nil },
         { "python3", "python3 -Wc /x/bin/aider --token " .. SECRET, nil },
-        { "python3", "python3 -maider --token " .. SECRET, nil },
+        { "python3", "python3 -maider /x/" .. SECRET .. "/gemini", nil },
+        { "python3", "python3 -uX /x/" .. SECRET .. "/gemini /x/bin/aider", "aider" },
         { "python3", "python3 --check-hash-based-pycs " .. SECRET .. " /x/bin/aider", "aider" },
-        { "node", "node - " .. SECRET, nil },
-        { "python3", "python3 - " .. SECRET, nil },
+        { "python3", "python3 - /x/" .. SECRET .. "/gemini", nil },
       }
 
       it("reach no session and no recorded call of list", function()
