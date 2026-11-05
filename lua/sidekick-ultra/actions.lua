@@ -14,7 +14,7 @@ local M = {}
 ---@field msg? string message template
 ---@field prompt? string prompt name
 ---@field submit? boolean press Enter after sending
----@field focus? boolean focus the session's pane or block afterwards
+---@field focus? boolean focus the session's pane or block; false also skips the focus of a tool this starts
 ---@field all? boolean (close) detach every match
 
 ---Sleep for `ms`. A field so tests can observe the wait.
@@ -112,7 +112,7 @@ function M.send(opts, snap)
     errors.notify(errors.new("nothing_to_send", "nothing to send"))
     return
   end
-  target.with_target({ filter = filter_of(opts), attach = true }, function(sessions)
+  target.with_target({ filter = filter_of(opts), attach = true, focus = opts.focus }, function(sessions)
     if in_visual() then
       vim.cmd("normal! \27")
     end
@@ -145,23 +145,24 @@ function M.prompt(opts)
   end)
 end
 
----Pick a state, attach it, and optionally focus it.
+---Pick a state and attach it. A tool it starts is focused unless `focus = false`; `focus = true` also focuses a
+---session that was already running.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.select(opts)
   opts = opts or {}
   target.pick(target.states(filter_of(opts)), {}, function(state)
-    local session = target.attach_state(state)
-    if session and opts.focus then
+    local session, started = target.attach_state(state, { focus = opts.focus })
+    if session and opts.focus and not started then
       call(session, "focus")
     end
   end)
 end
 
----Focus the pane or block of the target session.
+---Focus the pane or block of the target session. The focus at start is skipped: this focuses every session itself.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.focus(opts)
   opts = opts or {}
-  target.with_target({ filter = filter_of(opts), attach = true }, function(sessions)
+  target.with_target({ filter = filter_of(opts), attach = true, focus = false }, function(sessions)
     for _, session in ipairs(sessions) do
       call(session, "focus")
     end

@@ -179,6 +179,51 @@ describe("actions", function()
       expect.equality(registry.attached()[1].id, "herdr:codexnew1")
     end)
 
+    describe("start focus", function()
+      local function started_backend(opts)
+        backend = fake.backend("herdr", vim.tbl_extend("force", { is_inside = true }, opts or {}))
+        registry.register(backend)
+      end
+
+      it("focuses the new session after the start and before the text", function()
+        started_backend()
+        actions.send({ msg = "hi", name = "codex" })
+        expect.equality(methods(), { "list", "start", "focus", "send" })
+        expect.equality(backend.of("focus"), { { "focus", "herdr:codexnew1" } })
+      end)
+
+      it("focuses at start and again after delivery with focus = true", function()
+        started_backend()
+        actions.send({ msg = "hi", name = "codex", focus = true })
+        expect.equality(methods(), { "list", "start", "focus", "send", "focus" })
+      end)
+
+      it("does not focus at start with focus = false, and still delivers", function()
+        started_backend()
+        actions.send({ msg = "hi", name = "codex", focus = false })
+        expect.equality(methods(), { "list", "start", "send" })
+        expect.equality(backend.delivered, { "hi\n" })
+      end)
+
+      it("notifies a refused focus, keeps the session attached and still delivers", function()
+        started_backend({ fail = { focus = errors.new("backend_error", "x") } })
+        actions.send({ msg = "hi", name = "codex" })
+        expect.equality(cap.ids(), { "backend_error" })
+        expect.equality(registry.attached()[1].id, "herdr:codexnew1")
+        expect.equality(backend.delivered, { "hi\n" })
+      end)
+
+      it("gives prompt the same start focus", function()
+        started_backend()
+        pick.choose = function(items)
+          return items[1]
+        end
+        actions.prompt({ name = "codex", focus = false })
+        expect.equality(backend.of("focus"), {})
+        expect.equality(#backend.of("start"), 1)
+      end)
+    end)
+
     it("picks among several attached sessions", function()
       attached({ "claude", "codex" })
       pick.choose = function(items)
@@ -320,6 +365,64 @@ describe("actions", function()
       expect.equality(backend.of("focus"), { { "focus", "herdr:claude1" } })
     end)
 
+    describe("start focus", function()
+      local function codex_row(items)
+        return vim.tbl_filter(function(s)
+          return s.name == "codex"
+        end, items)[1]
+      end
+      local function started_backend()
+        backend = fake.backend("herdr", { is_inside = true })
+        registry.register(backend)
+        pick.choose = codex_row
+      end
+
+      it("focuses a tool it starts exactly once by default", function()
+        started_backend()
+        actions.select({})
+        expect.equality(backend.of("focus"), { { "focus", "herdr:codexnew1" } })
+      end)
+
+      it("focuses a tool it starts exactly once with focus = true", function()
+        started_backend()
+        actions.select({ focus = true })
+        expect.equality(backend.of("focus"), { { "focus", "herdr:codexnew1" } })
+      end)
+
+      it("does not focus a tool it starts with focus = false, and attaches it", function()
+        started_backend()
+        actions.select({ focus = false })
+        expect.equality(backend.of("focus"), {})
+        expect.equality(registry.attached()[1].id, "herdr:codexnew1")
+      end)
+
+      it("receives focus = false from :SidekickUltra select focus=false", function()
+        started_backend()
+        require("sidekick-ultra.command").run("select focus=false")
+        expect.equality({ #backend.of("start"), #backend.of("focus") }, { 1, 0 })
+      end)
+
+      it("notifies a refused focus and still attaches the started session", function()
+        started_backend()
+        backend.fail.focus = errors.new("backend_error", "x")
+        actions.select({})
+        expect.equality(cap.ids(), { "backend_error" })
+        expect.equality(registry.attached()[1].id, "herdr:codexnew1")
+      end)
+
+      it("does not focus an already running session by default", function()
+        backend = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
+        registry.register(backend)
+        pick.choose = function(items)
+          return vim.tbl_filter(function(s)
+            return s.started
+          end, items)[1]
+        end
+        actions.select({})
+        expect.equality(backend.of("focus"), {})
+      end)
+    end)
+
     it("applies the name filter to the picker", function()
       backend = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
       registry.register(backend)
@@ -347,6 +450,14 @@ describe("actions", function()
       actions.focus({ name = "claude" })
       expect.equality(backend.of("focus"), { { "focus", "herdr:claude1" } })
       expect.equality(#registry.attached(), 1)
+    end)
+
+    it("focuses a tool it starts exactly once", function()
+      backend = fake.backend("herdr", { is_inside = true })
+      registry.register(backend)
+      actions.focus({ name = "codex" })
+      expect.equality(backend.of("focus"), { { "focus", "herdr:codexnew1" } })
+      expect.equality(registry.attached()[1].id, "herdr:codexnew1")
     end)
 
     it("reports a failing focus", function()

@@ -7,7 +7,16 @@ return {
     local opts = require("lazy.core.plugin").values(plugin, "opts", false)
     local keymaps = dofile(plugin.dir .. "/lua/sidekick-ultra/keys.lua")
     local cfg = opts.keys == nil and {} or opts.keys
-    local prefix = type(cfg) == "table" and (cfg.prefix == nil and keymaps.DEFAULT_PREFIX or cfg.prefix)
+    -- `setup()` rejects `keys` that is not a table or false, has a key besides `prefix`, or has a bad `prefix`.
+    if type(cfg) ~= "table" then
+      return keys
+    end
+    for k in pairs(cfg) do
+      if k ~= "prefix" then
+        return keys
+      end
+    end
+    local prefix = cfg.prefix == nil and keymaps.DEFAULT_PREFIX or cfg.prefix
     if type(prefix) ~= "string" or prefix == "" then
       return keys
     end

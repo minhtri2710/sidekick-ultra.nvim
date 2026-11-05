@@ -190,7 +190,43 @@ describe("target", function()
       local session = target.attach_state(target.states({ name = "codex" })[1])
       expect.equality(session.id, "herdr:codexnew1")
       expect.equality(#b.of("start"), 1)
+      expect.equality(b.of("focus"), { { "focus", "herdr:codexnew1" } })
       expect.equality(registry.attached()[1].id, "herdr:codexnew1")
+    end)
+
+    it("reports a started tool as started and an existing session as not", function()
+      local b = fake.backend("herdr", { is_inside = true, sessions = { fake.session("herdr", "claude") } })
+      registry.register(b)
+      local _, started = target.attach_state(target.states({ name = "codex" })[1])
+      local _, existing = target.attach_state(target.states({ started = true })[1])
+      expect.equality({ started, existing }, { true, false })
+      expect.equality(#b.of("focus"), 1)
+    end)
+
+    it("does not focus a started tool with focus = false, but attaches it", function()
+      local b = fake.backend("herdr", { is_inside = true })
+      registry.register(b)
+      local session = target.attach_state(target.states({ name = "codex" })[1], { focus = false })
+      expect.equality(
+        { b.of("focus"), registry.attached()[1].id, session.id },
+        { {}, "herdr:codexnew1", "herdr:codexnew1" }
+      )
+    end)
+
+    it("keeps the started session attached when its focus is refused", function()
+      local b = fake.backend("herdr", { is_inside = true, fail = { focus = errors.new("backend_error", "x") } })
+      registry.register(b)
+      local session = target.attach_state(target.states({ name = "codex" })[1])
+      expect.equality({ session.id, registry.attached()[1].id }, { "herdr:codexnew1", "herdr:codexnew1" })
+      expect.equality(cap.ids(), { "backend_error" })
+      expect.equality(#b.of("send"), 0)
+    end)
+
+    it("does not focus an already running session", function()
+      local b = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
+      registry.register(b)
+      target.attach_state(target.states({ started = true })[1])
+      expect.equality(b.of("focus"), {})
     end)
 
     it("refuses to start with not_in_mux and creates nothing", function()
@@ -235,6 +271,20 @@ describe("target", function()
       expect.equality(run({ attach = true }), { "herdr:claude1" })
       expect.equality(#pick.selects, 1)
       expect.equality(#registry.attached(), 1)
+    end)
+
+    it("focuses a tool it starts, unless the action passes focus = false", function()
+      local b = fake.backend("herdr", { is_inside = true })
+      registry.register(b)
+      pick.choose = function(items)
+        return items[1]
+      end
+      expect.equality(run({ attach = true, filter = { name = "codex" } }), { "herdr:codexnew1" })
+      expect.equality(b.of("focus"), { { "focus", "herdr:codexnew1" } })
+      registry.detach("herdr:codexnew1")
+      b.calls = {}
+      expect.equality(run({ attach = true, filter = { name = "codex" }, focus = false }), { "herdr:codexnew2" })
+      expect.equality({ #b.of("start"), #b.of("focus") }, { 1, 0 })
     end)
 
     it("reports no_match when nothing is attached and the action may not attach", function()
