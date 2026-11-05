@@ -1,1 +1,1 @@
-{"foreground":{"pid":4242,"name":"zsh","path":"/bin/zsh","argv0":"-zsh","cwd":"/tmp/sku-proj-a"},"ancestors":[],"last_exit":null}
+{"last_exit":null,"child":{"pid":4242,"user_id":502,"user":"tester","name":"zsh","path":"/bin/zsh","invoked_path":"/bin/zsh","argv0":"-zsh","cwd":"/tmp/sku-proj-a"},"foreground":{"pid":4242,"user_id":502,"user":"tester","name":"zsh","path":"/bin/zsh","invoked_path":"/bin/zsh","argv0":"-zsh","cwd":"/tmp/sku-proj-a"},"home":"/tmp/sku-home"}

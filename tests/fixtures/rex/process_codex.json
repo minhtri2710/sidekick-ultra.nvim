@@ -1,1 +1,1 @@
-{"foreground":{"pid":4242,"name":"codex","path":"/opt/homebrew/bin/node","argv0":"node","cwd":"/tmp/sku-proj-b"},"ancestors":[],"last_exit":null}
+{"last_exit":null,"child":{"pid":4242,"user_id":502,"user":"tester","name":"codex","path":"/opt/homebrew/bin/node","invoked_path":"/opt/homebrew/bin/node","argv0":"node","cwd":"/tmp/sku-proj-b"},"foreground":{"pid":4242,"user_id":502,"user":"tester","name":"codex","path":"/opt/homebrew/bin/node","invoked_path":"/opt/homebrew/bin/node","argv0":"node","cwd":"/tmp/sku-proj-b"},"home":"/tmp/sku-home"}

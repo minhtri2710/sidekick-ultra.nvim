@@ -1,5 +1,5 @@
--- Every rex shape in tests/fixtures/rex is UNVERIFIED (see UNVERIFIED.txt there): these specs prove the backend
--- agrees with those fixtures, not with a live rex.
+-- The fixtures in tests/fixtures/rex follow the shapes a live rex 0.0.1793377904-ge6592f (Rex Beta build 1696) printed
+-- in D3. What is still unverified is listed in UNVERIFIED.txt there.
 local backend = require("sidekick-ultra.backend")
 local exec = require("sidekick-ultra.exec")
 local fake = require("tests.helpers.fake")
@@ -250,6 +250,26 @@ describe("rex backend", function()
           block_id = "block:b1",
         },
       })
+    end)
+
+    it("discovers every block of a layer, not only its first", function()
+      local view = vim.json.decode(fixture("view_a"))
+      local blocks = view.windows[1].layers[1].blocks
+      local second = vim.deepcopy(blocks[1])
+      second.block_id = "block:a4"
+      table.insert(blocks, second)
+      local r = routes()
+      r["api call -s session:aaaa session.view"] = vim.json.encode(view)
+      r["block call -s session:aaaa -b block:a4 process"] = live("process_codex")
+      rec = record(r)
+      local list, err = rex.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(
+        vim.tbl_map(function(session)
+          return session.id
+        end, list),
+        { "rex:block:a4", "rex:block:a2", "rex:block:b1" }
+      )
     end)
 
     it("reads each session and each block once", function()

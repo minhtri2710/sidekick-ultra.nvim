@@ -1,17 +1,36 @@
-Every fixture in this directory is UNVERIFIED.
+These fixtures are partly verified. The delivery-3 live run (2026-11-05, main 65ba6a5) read a private rex server with
+stub agents. The CLI reported version 0.0.1793377904-ge6592f (Rex Beta build 1696). Field names and nesting follow
+what that run printed; ids, pids, paths and the user are placeholders.
 
-Rex has no source. The shapes follow firstmate's live findings on rex API revision 5
-(~/Work/firstmate/docs/verification/runtime-backends.md, section Rex) and the help text embedded in the installed
-Rex Beta 0.1.0 build 1696 binary. Nothing here was observed on build 1696. The delivery-3 live run settles each
-file; until then a green spec only proves the plugin agrees with these guesses.
+Verified live:
+  ls.json, ls_empty.json   `rex ls --json` -> .sessions[].{session_id,label}
+  view_*.json              `rex api call -s S session.view` -> windows -> layers{layer_id,kind,bounds,layout} ->
+                           blocks{block_id,label,creator_name,flavor,host_id,owner?}. Every live layer held one
+                           block, so the layout shape of a layer with several blocks has not been seen; each fixture layer
+                           has one. The backend ignores layout and reads every entry of a layer's blocks list; rex_spec
+                           covers that by appending a second block to a layer inside the test.
+  process_claude/codex/shell.json
+                           `rex block call ... process` -> {last_exit,child,foreground,home}. foreground is
+                           {pid,user_id,user,name,path,invoked_path,argv0,cwd}; there is no `ancestors`. A stub run
+                           through bash reported name "bash" and argv0 "claude"; name "2.1.308" for a real Claude
+                           Code block is firstmate's finding, not seen live.
+  process_bad.json         a deliberately malformed reply (string pid), not a rex shape.
+  status_empty.json        `rex block call ... program_status` -> {"records":[]}
+  `whoami` and `api call server.stop` worked as the live script uses them (the backend calls neither). The `split` and
+  `focus` flags from `--help` worked as the backend uses them.
 
-Per file:
-  ls.json                  firstmate: `rex ls --json` -> .sessions[].session_id (extra fields are a guess)
-  view_*.json              firstmate: `rex api call -s S session.view` -> .windows[].layers[].blocks[].block_id
-  process_*.json           firstmate: `rex block call ... process` -> .foreground{pid,name,path,argv0,cwd}
-                           (a Claude Code block read name "2.1.308", argv0 "claude"). The pid is a placeholder
-                           that specs replace with a real pid.
-  status_*.json            firstmate: `rex block call ... program_status` -> .records[].{state,kind,app,msg,owner.pid}
-                           (an absent or empty records list is assumed to mean "no record")
-  split.json               binary help text: `rex split --json` returns .block_ids; the key holding the original
-                           pane is not known and is left out
+Still unverified:
+  status_working/blocked/blocked_other.json
+                           a non-empty program_status. Blocked: no stub could raise a record. The record fields
+                           {state,kind,app,msg,owner.pid} are firstmate's findings on rex API revision 5
+                           (~/Work/firstmate/docs/verification/runtime-backends.md, section Rex). status_bad.json is
+                           malformed on purpose.
+  process_none.json        the process reply of a block with no foreground. The live run never saw one, so the
+                           missing `foreground` key and the {"code":0} shape of last_exit are guesses.
+  split.json               the raw `rex split --json` reply. The live run only parsed it (start succeeded and read
+                           .block_ids[0]); it was never dumped. The key holding the original block is not known and
+                           is left out.
+  `rex send -- TEXT` without Enter
+                           the first run sent text with a trailing newline, which hides whether send presses Enter.
+                           The driver now sends without one and captures the screen before and after submit; the
+                           next live run settles it.

@@ -12,7 +12,8 @@
 # Needs: jq, nvim, and the rex CLI from the Rex Beta bundle (override with SKU_REX_BIN).
 # What it settles (unverified until it runs): the `split` and `focus` commands and flags, the shapes of `ls`,
 # `session.view`, `process`, `program_status` and the `split --json` reply, argv0 reporting for a re-exec'd stub,
-# and whether a block started with a bare command name finds it on the server's PATH.
+# whether a block started with a bare command name finds it on the server's PATH, and that `send` types text without
+# pressing Enter (the driver captures each screen between send and submit).
 set -eu
 set -o pipefail
 
@@ -183,6 +184,16 @@ local function step(label, res, err)
   return res
 end
 
+---Run one rex client call now and write its stdout to out/<name> (empty on failure). The shell cannot read a screen
+---between send and submit, or a view while nvim's block is still open, so the driver takes them.
+local function save(name, ...)
+  local res = vim.system({ REX, "--autostart=false", "-S", SOCK, ... }, { text = true }):wait()
+  local f = assert(io.open(ROOT .. "/out/" .. name, "w"))
+  f:write(res.code == 0 and res.stdout or "")
+  f:close()
+  log("%s: exit %d", name, res.code)
+end
+
 local function main()
   vim.opt.runtimepath:prepend(PLUGIN)
   require("sidekick-ultra").setup({
@@ -201,8 +212,9 @@ local function main()
   end
   local claude = assert(by_tool.claude, "claude block not discovered")
   step("attach", registry.attach(claude))
-  step("send", rex.send(claude, "hello from sku\n"))
-  vim.wait(300)
+  step("send", rex.send(claude, "hello from sku"))
+  vim.wait(500)
+  save("claude_after_send", "capture", "-s", claude.session_id, "-b", claude.block_id, "--trim")
   step("submit", rex.submit(claude))
   vim.wait(300)
   step("focus", rex.focus(claude))
@@ -213,10 +225,12 @@ local function main()
     local f = assert(io.open(ROOT .. "/out/started", "w"))
     f:write(started.session_id, "\n", started.block_id, "\n")
     f:close()
+    save("split_view", "api", "call", "-s", started.session_id, "session.view")
     registry.attach(started)
     vim.wait(300)
-    step("send2", rex.send(started, "second line\n"))
-    vim.wait(300)
+    step("send2", rex.send(started, "second line"))
+    vim.wait(500)
+    save("started_after_send", "capture", "-s", started.session_id, "-b", started.block_id, "--trim")
     step("submit2", rex.submit(started))
   end
   vim.wait(500)
@@ -246,6 +260,9 @@ cat "$ROOT/out/driver.log"
 echo "---- nvim log"
 cat "$ROOT/out/nvim.log" || true
 
+started_sid=$(sed -n 1p "$ROOT/out/started" 2>/dev/null || true)
+started_block=$(sed -n 2p "$ROOT/out/started" 2>/dev/null || true)
+
 # Evidence: raw shapes, to compare against tests/fixtures/rex.
 echo "---- evidence: ls --json"
 rexc ls --json
@@ -257,20 +274,26 @@ echo "---- evidence: program_status (claude block)"
 rexc block call -s "$AGENTS_SID" -b "$CLAUDE_BLOCK" program_status
 echo "---- evidence: session inspect (focus result)"
 rexc session inspect "$AGENTS_SID" --json
+echo "---- evidence: session.view (session that start split)"
+cat "$ROOT/out/split_view" 2>/dev/null || true
 echo "---- evidence: help text"
 rexc split --help
 rexc focus --help
 
 claude_screen=$(rexc capture -s "$AGENTS_SID" -b "$CLAUDE_BLOCK" --trim)
-started_sid=$(sed -n 1p "$ROOT/out/started" 2>/dev/null || true)
-started_block=$(sed -n 2p "$ROOT/out/started" 2>/dev/null || true)
 started_screen=
 if [ -n "$started_block" ]; then
   started_screen=$(rexc capture -s "$started_sid" -b "$started_block" --trim)
 fi
-echo "---- claude block screen"
+claude_sent=$(cat "$ROOT/out/claude_after_send" 2>/dev/null || true)
+started_sent=$(cat "$ROOT/out/started_after_send" 2>/dev/null || true)
+echo "---- claude block screen after send, before submit"
+printf '%s\n' "$claude_sent"
+echo "---- claude block screen after submit"
 printf '%s\n' "$claude_screen"
-echo "---- started block screen"
+echo "---- started block screen after send, before submit"
+printf '%s\n' "$started_sent"
+echo "---- started block screen after submit"
 printf '%s\n' "$started_screen"
 
 FAILS=0
@@ -284,19 +307,30 @@ check() { # name, then a command that succeeds when the check holds
     FAILS=$((FAILS + 1))
   fi
 }
+# A bare `got:` line is an empty line the stub read: with `send` pressing Enter, `submit` sends a second, empty one.
+no_empty_submit() { ! printf '%s\n' "$1" | grep -qx 'got:'; }
 log_has() { grep -qF -- "$1" "$ROOT/out/driver.log"; }
 screen_has() { printf '%s' "$1" | grep -qF -- "$2"; }
+# The text is typed but not submitted: it is on the screen and the stub has not echoed it back as `got: <text>`.
+# An empty capture fails the first half, so a failed capture cannot pass this.
+unsubmitted() { screen_has "$1" "$2" && ! screen_has "$1" "got: $2"; }
 
 check "inside() true in the nvim block" log_has "inside=true"
 check "discover lists the claude block" log_has "discovered rex:$CLAUDE_BLOCK tool=claude"
 check "discover lists the codex block" log_has "discovered rex:$CODEX_BLOCK tool=codex"
 check "attach" log_has "attach: ok"
 check "send" log_has "send: ok"
+check "claude screen was captured before submit" log_has "claude_after_send: exit 0"
+check "send did not press Enter in the claude block" unsubmitted "$claude_sent" "hello from sku"
 check "submit" log_has "submit: ok"
 check "focus" log_has "focus: ok"
 check "start" log_has "start: ok"
 check "send2" log_has "send2: ok"
+check "started screen was captured before submit" log_has "started_after_send: exit 0"
+check "send did not press Enter in the started block" unsubmitted "$started_sent" "second line"
 check "submit2" log_has "submit2: ok"
+check "submit sent the line once in the claude block" no_empty_submit "$claude_screen"
+check "submit sent the line once in the started block" no_empty_submit "$started_screen"
 check "text reached the claude stub" screen_has "$claude_screen" "got: hello from sku"
 check "started block runs the codex stub" screen_has "$started_screen" "stub codex ready"
 check "text reached the started stub" screen_has "$started_screen" "got: second line"
@@ -306,4 +340,3 @@ if [ "$FAILS" -ne 0 ]; then
   exit 1
 fi
 echo "all checks passed"
-EOF

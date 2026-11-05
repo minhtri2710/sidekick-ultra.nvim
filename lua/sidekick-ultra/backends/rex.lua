@@ -1,6 +1,6 @@
 ---The rex backend: sessions are rex blocks. Every command is `<bin> --autostart=false [-S <server>] <subcommand>`.
----Everything here is UNVERIFIED against a live rex until delivery 3: the shapes come from another build's evidence and
----the help text inside the installed binary (see tests/fixtures/rex/UNVERIFIED.txt).
+---The shapes were checked against a live rex 0.0.1793377904-ge6592f (Rex Beta build 1696) in D3. What is still
+---unverified is listed in tests/fixtures/rex/UNVERIFIED.txt.
 local config = require("sidekick-ultra.config")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
