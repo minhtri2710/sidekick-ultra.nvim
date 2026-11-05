@@ -1306,6 +1306,20 @@ describe("zellij backend", function()
         { 'node -e "' .. SECRET .. '"', nil },
         { "python3 -m aider --token " .. SECRET, "aider" },
         { 'python3 -c "' .. SECRET .. '"', nil },
+        { 'node -pe "' .. SECRET .. '"', nil },
+        { 'node -ep "' .. SECRET .. '"', nil },
+        { "node --eval=" .. SECRET, nil },
+        { "node --print=" .. SECRET, nil },
+        { "node --run " .. SECRET, nil },
+        { "node --env-file " .. SECRET .. " /x/bin/gemini", "gemini" },
+        { "node --title " .. SECRET .. " /x/bin/gemini", "gemini" },
+        { 'python3 -uc "' .. SECRET .. '"', nil },
+        { "python3 -c" .. SECRET, nil },
+        { "python3 -Wc /x/bin/aider --token " .. SECRET, nil },
+        { "python3 -maider --token " .. SECRET, nil },
+        { "python3 --check-hash-based-pycs " .. SECRET .. " /x/bin/aider", "aider" },
+        { "node - " .. SECRET, nil },
+        { "python3 - " .. SECRET, nil },
       }
 
       ---@param value any

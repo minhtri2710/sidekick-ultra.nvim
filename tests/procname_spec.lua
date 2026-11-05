@@ -111,14 +111,73 @@ describe("procname", function()
       check({ { "node -r -e /x/bin/gemini", "gemini" } })
     end)
 
-    it("node and bun: any other dash word, with or without =value, is skipped alone", function()
+    it("node and bun: --eval=, --print= and --run= run code and give no script", function()
       check({
-        { "node --inspect=9229 /x/bin/gemini", "gemini" },
-        { "node --max-old-space-size=4096 --no-warnings /x/bin/gemini", "gemini" },
+        { "node --eval=code /x/bin/gemini", "" },
+        { "node --inspect --print=code /x/bin/gemini", "" },
+        { "bun --eval=code /x/bin/gemini", "" },
+        { "node --run dev /x/bin/gemini", "" },
+        { "node --run=dev /x/bin/gemini", "" },
+      })
+    end)
+
+    it("node and bun: a lone - reads the script from stdin and gives no script", function()
+      check({ { "node - /x/bin/gemini", "" }, { "node --inspect - /x/bin/gemini", "" }, { "bun - /x/bin/gemini", "" } })
+    end)
+
+    it("node and bun: a short cluster with e or p runs code and gives no script", function()
+      check({
+        { "node -pe code /x/bin/gemini", "" },
+        { "node -ep code /x/bin/gemini", "" },
+        { "node --inspect -pi code /x/bin/gemini", "" },
+        { "bun -pe code /x/bin/gemini", "" },
+      })
+    end)
+
+    it("node and bun: a short cluster without e or p is skipped as one word", function()
+      check({ { "node -ic /x/bin/gemini", "gemini" }, { "node -hv /x/bin/gemini", "gemini" }, { "node -ic", "" } })
+    end)
+
+    it(
+      "node and bun: a flag=value word is skipped as one word, a known value flag does not take the next word",
+      function()
+        check({
+          { "node --inspect=9229 /x/bin/gemini", "gemini" },
+          { "node --max-old-space-size=4096 --no-warnings /x/bin/gemini", "gemini" },
+          { "node --require=./hook.js /x/bin/gemini", "gemini" },
+          { "node --title=x --env-file=.env /x/bin/gemini", "gemini" },
+          { "node --require=./hook.js", "" },
+        })
+      end
+    )
+
+    -- Each flag is listed with a value in `node --help` (v26.13.0), for example `--title=...`.
+    it("node and bun: the flags `node --help` lists with a value skip it", function()
+      for _, flag in ipairs({
+        "--title",
+        "--env-file",
+        "--env-file-if-exists",
+        "--input-type",
+        "--inspect-port",
+        "--debug-port",
+        "--disable-warning",
+        "--experimental-default-config-file",
+        "--config-file",
+        "--test-isolation",
+        "--report-dir",
+        "--unhandled-rejections",
+        "-C",
+        "-r",
+      }) do
+        check({ { "node " .. flag .. " value /x/bin/gemini", "gemini" }, { "node " .. flag .. " value", "" } })
+      end
+      check({ { "node --title gemini /x/bin/other", "other" }, { "node --env-file .env /x/bin/gemini", "gemini" } })
+    end)
+
+    it("node and bun: any other dash word is skipped alone", function()
+      check({
         { "node --no-warnings /x/bin/gemini", "gemini" },
         { "bun --bun /x/bin/gemini", "gemini" },
-        { "node -pe /x/bin/gemini", "gemini" },
-        { "node --require=./hook.js /x/bin/gemini", "gemini" },
         { "node", "" },
         { "node --inspect", "" },
       })
@@ -159,12 +218,59 @@ describe("procname", function()
       })
     end)
 
-    it("python: -W and -X skip their value", function()
+    it("python: a lone - reads the script from stdin and gives no script", function()
+      check({ { "python3 - /x/bin/aider", "" }, { "python3 -u - /x/bin/aider", "" } })
+    end)
+
+    it("python: a short cluster with c runs code and gives no script", function()
+      check({
+        { "python3 -uc code /x/bin/aider", "" },
+        { "python3 -Ic code /x/bin/aider", "" },
+        { "python3 -cCODE /x/bin/aider", "" },
+        { "python3 -u -Bc code /x/bin/aider", "" },
+      })
+    end)
+
+    -- `python3 --help` (3.9.6) shows `-W arg` and `-X opt` but not how a cluster splits, so a cluster with c or m fails
+    -- closed: -Wc is -W with the value c (observed), and still gives no script.
+    it(
+      "python: a cluster with c or m gives no script, even after a value letter, or with the module attached",
+      function()
+        check({
+          { "python3 -Wc /x/bin/aider", "" },
+          { "python3 -Xdev=c /x/bin/aider", "" },
+          { "python3 -maider /x/bin/other", "" },
+          { "python3 -um aider", "" },
+        })
+      end
+    )
+
+    it("python: a short cluster without c or m is skipped as one word", function()
+      check({
+        { "python3 -uB /x/bin/aider", "aider" },
+        { "python3 -Wignore /x/bin/aider", "aider" },
+        { "python3 -Xfoo /x/bin/aider", "aider" },
+        { "python3 -OO -Ib /x/bin/aider", "aider" },
+        { "python3 -uB", "" },
+      })
+    end)
+
+    it("python: -W, -X and --check-hash-based-pycs skip their value", function()
       check({
         { "python3 -W ignore /x/bin/aider", "aider" },
         { "python3 -X dev -W error /x/bin/aider", "aider" },
         { "python3 -X dev -m aider", "aider" },
+        { "python3 --check-hash-based-pycs always /x/bin/aider", "aider" },
+        { "python3 --check-hash-based-pycs always -m aider", "aider" },
         { "python3 -W", "" },
+        { "python3 --check-hash-based-pycs always", "" },
+      })
+    end)
+
+    it("python: a --flag=value word is skipped as one word", function()
+      check({
+        { "python3 --check-hash-based-pycs=always /x/bin/aider", "aider" },
+        { "python3 --check-hash-based-pycs=always", "" },
       })
     end)
 
@@ -172,7 +278,6 @@ describe("procname", function()
       check({
         { "python3 -u /x/bin/aider", "aider" },
         { "python3 -B -OO -I /x/bin/aider", "aider" },
-        { "python3 -Wignore /x/bin/aider", "aider" },
         { "python3 /x/bin/aider -m other", "aider" },
         { "python3 /x/bin/aider -c other", "aider" },
         { "python3", "" },

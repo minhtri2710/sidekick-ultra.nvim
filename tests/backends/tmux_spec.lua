@@ -773,6 +773,20 @@ describe("tmux backend", function()
         { "node", 'node -e "' .. SECRET .. '"', nil },
         { "python3", "python3 -m aider --token " .. SECRET, "aider" },
         { "python3", 'python3 -c "' .. SECRET .. '"', nil },
+        { "node", 'node -pe "' .. SECRET .. '"', nil },
+        { "node", 'node -ep "' .. SECRET .. '"', nil },
+        { "node", "node --eval=" .. SECRET, nil },
+        { "node", "node --print=" .. SECRET, nil },
+        { "node", "node --run " .. SECRET, nil },
+        { "node", "node --env-file " .. SECRET .. " /x/bin/gemini", "gemini" },
+        { "node", "node --title " .. SECRET .. " /x/bin/gemini", "gemini" },
+        { "python3", 'python3 -uc "' .. SECRET .. '"', nil },
+        { "python3", "python3 -c" .. SECRET, nil },
+        { "python3", "python3 -Wc /x/bin/aider --token " .. SECRET, nil },
+        { "python3", "python3 -maider --token " .. SECRET, nil },
+        { "python3", "python3 --check-hash-based-pycs " .. SECRET .. " /x/bin/aider", "aider" },
+        { "node", "node - " .. SECRET, nil },
+        { "python3", "python3 - " .. SECRET, nil },
       }
 
       it("reach no session and no recorded call of list", function()
