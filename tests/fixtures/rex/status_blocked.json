@@ -1,0 +1,1 @@
+{"records":[{"state":"working","kind":"turn","app":"codex","msg":"","owner":{"pid":1}},{"state":"blocked","kind":"question","app":"claude-code","msg":"answer: red or blue?","owner":{"pid":4242,"name":"2.1.308"}}]}

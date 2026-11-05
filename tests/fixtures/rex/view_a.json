@@ -1,0 +1,1 @@
+{"session_id":"session:aaaa","label":"work","windows":[{"window_id":"window:w1","layers":[{"blocks":[{"block_id":"block:a1","label":"nvim"},{"block_id":"block:a2","label":"agent"}]}]},{"window_id":"window:w2","layers":[{"blocks":[{"block_id":"block:a3","label":"shell"}]}]}]}

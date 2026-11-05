@@ -1,0 +1,7 @@
+{"id":"cli:agent:list","result":{"type":"agent_list","agents":[
+  {"terminal_id":"t1","workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1","focused":true,"agent":"claude","agent_status":"idle","name":"sku-claude-1","revision":1},
+  {"terminal_id":"t5","workspace_id":"w2","tab_id":"w2:t1","pane_id":"w2:p2","focused":false,"agent":"claude","agent_status":"blocked","name":"sku-claude-2","revision":1},
+  {"terminal_id":"t2","workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p2","focused":false,"agent":"codex","agent_status":"working","name":null,"revision":1},
+  {"terminal_id":"t7","workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p9","focused":false,"agent":"claude","agent_status":"idle","name":"sku-claude-4","revision":1},
+  {"terminal_id":"t8","workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p8","focused":false,"agent":"claude","agent_status":"idle","name":"reviewer","revision":1}
+]}}

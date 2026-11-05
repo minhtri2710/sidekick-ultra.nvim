@@ -1,0 +1,1 @@
+{"id":"cli:pane:get","result":{"type":"pane_info","pane":{"pane_id":"w1:p1","terminal_id":"t1","workspace_id":"w1","tab_id":"w1:t1","focused":false,"agent":"claude","agent_status":"bogus","cwd":"/work/proj","revision":11}}}

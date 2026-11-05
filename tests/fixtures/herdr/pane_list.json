@@ -1,0 +1,7 @@
+{"id":"cli:pane:list","result":{"type":"pane_list","panes":[
+  {"pane_id":"w1:p1","terminal_id":"t1","workspace_id":"w1","tab_id":"w1:t1","focused":true,"agent":"claude","agent_status":"idle","cwd":"/work/shell-dir","foreground_cwd":"/work/proj","revision":3},
+  {"pane_id":"w1:p2","terminal_id":"t2","workspace_id":"w1","tab_id":"w1:t1","focused":false,"agent":"codex","agent_status":"working","cwd":"/work/other","foreground_cwd":null,"revision":1},
+  {"pane_id":"w1:p3","terminal_id":"t3","workspace_id":"w1","tab_id":"w1:t1","focused":false,"agent":null,"agent_status":"unknown","cwd":"/work/proj","foreground_cwd":null,"revision":1},
+  {"pane_id":"w2:p1","terminal_id":"t4","workspace_id":"w2","tab_id":"w2:t1","focused":false,"agent":"gemini","agent_status":"idle","cwd":"/work/g","foreground_cwd":"/work/g","revision":1},
+  {"pane_id":"w2:p2","terminal_id":"t5","workspace_id":"w2","tab_id":"w2:t1","focused":false,"agent":"claude","agent_status":"blocked","cwd":"/work/two","foreground_cwd":"/work/two","revision":7}
+]}}

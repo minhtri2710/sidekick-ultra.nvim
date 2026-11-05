@@ -1,0 +1,6 @@
+{"id":"cli:pane:process_info","result":{"type":"pane_process_info","process_info":{
+  "pane_id":"w1:p2","shell_pid":4250,"foreground_process_group_id":null,"tty":"/dev/ttys043",
+  "foreground_processes":[
+    {"pid":4251,"name":"codex","argv0":"codex","argv":["codex"],"cmdline":"codex","cwd":"/work/other"},
+    {"pid":4252,"name":"codex-helper","argv0":"codex-helper","argv":["codex-helper"],"cmdline":"codex-helper","cwd":"/work/other"}
+  ]}}}

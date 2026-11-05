@@ -1,0 +1,1 @@
+{"id":"cli:agent:start","result":{"type":"agent_started","argv":["claude"],"agent":{"terminal_id":"t6","workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p4","focused":false,"agent":"claude","agent_status":"idle","name":"sku-claude-3","cwd":"/work/proj","foreground_cwd":"/work/proj-real","interactive_ready":true,"launch_pending":false,"revision":4}}}

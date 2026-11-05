@@ -1,0 +1,6 @@
+{"id":"cli:pane:process_info","result":{"type":"pane_process_info","process_info":{
+  "pane_id":"w1:p1","shell_pid":4200,"foreground_process_group_id":4242,"tty":"/dev/ttys042",
+  "foreground_processes":[
+    {"pid":4241,"name":"node","argv0":"node","argv":["node","/opt/ARGV_MARKER/helper.js"],"cmdline":"node /opt/ARGV_MARKER/helper.js","cwd":"/work/helper"},
+    {"pid":4242,"name":"2.1.308","argv0":"claude","argv":["claude","--token","ARGV_MARKER"],"cmdline":"claude --token ARGV_MARKER","cwd":"/work/proj"}
+  ]}}}

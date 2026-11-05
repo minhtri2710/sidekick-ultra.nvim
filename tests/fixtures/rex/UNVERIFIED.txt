@@ -1,0 +1,17 @@
+Every fixture in this directory is UNVERIFIED.
+
+Rex has no source. The shapes follow firstmate's live findings on rex API revision 5
+(~/Work/firstmate/docs/verification/runtime-backends.md, section Rex) and the help text embedded in the installed
+Rex Beta 0.1.0 build 1696 binary. Nothing here was observed on build 1696. The delivery-3 live run settles each
+file; until then a green spec only proves the plugin agrees with these guesses.
+
+Per file:
+  ls.json                  firstmate: `rex ls --json` -> .sessions[].session_id (extra fields are a guess)
+  view_*.json              firstmate: `rex api call -s S session.view` -> .windows[].layers[].blocks[].block_id
+  process_*.json           firstmate: `rex block call ... process` -> .foreground{pid,name,path,argv0,cwd}
+                           (a Claude Code block read name "2.1.308", argv0 "claude"). The pid is a placeholder
+                           that specs replace with a real pid.
+  status_*.json            firstmate: `rex block call ... program_status` -> .records[].{state,kind,app,msg,owner.pid}
+                           (an absent or empty records list is assumed to mean "no record")
+  split.json               binary help text: `rex split --json` returns .block_ids; the key holding the original
+                           pane is not known and is left out
