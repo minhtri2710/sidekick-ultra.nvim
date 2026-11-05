@@ -13,6 +13,7 @@
 ---@field prompts table<string, sidekick_ultra.PromptConfig|false>
 ---@field context table<string, fun(snap: sidekick_ultra.Snapshot): string|string[]|nil>
 ---@field watch boolean reload files the agent edits while a session is attached
+---@field keys { prefix: string }|false default keymaps under `prefix`, or false for none
 ---@field herdr { enabled: boolean }
 ---@field rex { enabled: boolean, bin?: string, server?: string } `bin` and `server` are passed to the rex backend as is
 
@@ -31,6 +32,7 @@ local function defaults()
     prompts = {},
     context = {},
     watch = true,
+    keys = { prefix = require("sidekick-ultra.keys").DEFAULT_PREFIX },
     herdr = { enabled = true },
     rex = { enabled = true },
   }
@@ -162,7 +164,7 @@ end
 function M.validate(opts)
   opts = opts or {}
   local cfg = defaults()
-  local err = check_table("", opts, set("tools", "prompts", "context", "watch", "herdr", "rex"))
+  local err = check_table("", opts, set("tools", "prompts", "context", "watch", "keys", "herdr", "rex"))
   if err then
     return nil, err
   end
@@ -173,6 +175,24 @@ function M.validate(opts)
       return nil, err
     end
     cfg.watch = opts.watch
+  end
+
+  if opts.keys ~= nil then
+    if opts.keys == false then
+      cfg.keys = false
+    elseif type(opts.keys) ~= "table" then
+      return nil, fail("keys", "table or false", opts.keys)
+    else
+      err = check_table("keys", opts.keys, set("prefix"))
+      if err then
+        return nil, err
+      end
+      local prefix = opts.keys.prefix
+      if prefix ~= nil and (type(prefix) ~= "string" or prefix == "") then
+        return nil, fail("keys.prefix", "non-empty string", prefix)
+      end
+      cfg.keys.prefix = prefix or cfg.keys.prefix
+    end
   end
 
   for _, section in ipairs({ "tools", "prompts", "context" }) do
