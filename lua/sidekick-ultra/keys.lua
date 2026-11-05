@@ -72,19 +72,18 @@ local KEYS = {
 
 local function noop() end
 
----The maps `setup` defined last: `{ mode, lhs, rhs }`, with `lhs` as the global map reports it (`<leader>` expanded).
+---The maps `setup` defined last: `{ mode, lhsraw, rhs }`, with `lhsraw` as `maparg` reports it right after the set (`<leader>` expanded).
 ---@type { [1]: string, [2]: string, [3]: function }[]
 local defined = {}
 
----The lhs of the global map in `mode` whose callback is `rhs` (and whose lhs is `lhs`, if given), or nil.
+---The global (never buffer-local) map in `mode` whose raw lhs is `lhsraw`, or nil.
 ---@param mode string
----@param rhs function
----@param lhs? string
----@return string?
-local function find(mode, rhs, lhs)
+---@param lhsraw string
+---@return table?
+local function global(mode, lhsraw)
   for _, m in ipairs(vim.api.nvim_get_keymap(mode)) do
-    if m.callback == rhs and (lhs == nil or m.lhs == lhs) then
-      return m.lhs
+    if m.lhsraw == lhsraw then
+      return m
     end
   end
 end
@@ -104,9 +103,10 @@ end
 ---@param cfg { prefix: string }|false
 function M.setup(cfg)
   for _, map in ipairs(defined) do
-    local mode, lhs, rhs = unpack(map)
-    if find(mode, rhs, lhs) then
-      vim.keymap.del(mode, lhs)
+    local mode, lhsraw, rhs = unpack(map)
+    local m = global(mode, lhsraw)
+    if m and m.callback == rhs then
+      vim.keymap.del(mode, m.lhs)
     end
   end
   defined = {}
@@ -116,8 +116,10 @@ function M.setup(cfg)
   for _, key in ipairs(KEYS) do
     local rhs = key.action or noop
     for _, mode in ipairs(key.modes) do
-      vim.keymap.set(mode, cfg.prefix .. key.suffix, rhs, { desc = key.desc })
-      table.insert(defined, { mode, find(mode, rhs), rhs })
+      local lhs = cfg.prefix .. key.suffix
+      vim.keymap.set(mode, lhs, rhs, { desc = key.desc })
+      -- A buffer-local map at the same lhs shadows the global one here but has the same lhsraw.
+      table.insert(defined, { mode, vim.fn.maparg(lhs, mode, false, true).lhsraw, rhs })
     end
   end
 end
