@@ -314,6 +314,12 @@ screen_has() { printf '%s' "$1" | grep -qF -- "$2"; }
 # The text is typed but not submitted: it is on the screen and the stub has not echoed it back as `got: <text>`.
 # An empty capture fails the first half, so a failed capture cannot pass this.
 unsubmitted() { screen_has "$1" "$2" && ! screen_has "$1" "got: $2"; }
+# The window that holds the started block has that block focused. A missing view or block fails.
+started_block_focused() {
+  jq -e --arg b "$started_block" \
+    '[.windows[] | select(any(.layers[].blocks[]; .block_id == $b)) | .focused_block_id == $b] == [true]' \
+    "$ROOT/out/split_view" >/dev/null
+}
 
 check "inside() true in the nvim block" log_has "inside=true"
 check "discover lists the claude block" log_has "discovered rex:$CLAUDE_BLOCK tool=claude"
@@ -325,6 +331,7 @@ check "send did not press Enter in the claude block" unsubmitted "$claude_sent" 
 check "submit" log_has "submit: ok"
 check "focus" log_has "focus: ok"
 check "start" log_has "start: ok"
+check "start focused the started block" started_block_focused
 check "send2" log_has "send2: ok"
 check "started screen was captured before submit" log_has "started_after_send: exit 0"
 check "send did not press Enter in the started block" unsubmitted "$started_sent" "second line"

@@ -274,6 +274,13 @@ local function run()
     observe("started session", session)
     check("started session is running at once", registry.is_running(session), session)
     check("start created exactly one pane", pane_count() == before + 1)
+    local _, panes = pane_count()
+    local focused = {}
+    for _, pane in ipairs(panes) do
+      focused[pane.pane_id] = pane.focused
+    end
+    local nvim_pane = os.getenv("HERDR_PANE_ID")
+    check("start focused the new pane, not nvim's", focused[session.pane_id] == true and focused[nvim_pane] == false, focused)
     if session.state == "blocked" then
       -- agent_not_ready: the agent is running but blocked during startup, so the guard rightly refuses to send.
       log("UNVERIFIABLE start: agent blocked at startup; rediscovery, send and submit not exercised")

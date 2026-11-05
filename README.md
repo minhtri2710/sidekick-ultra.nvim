@@ -89,6 +89,8 @@ With lazy.nvim the keys exist before the plugin loads, even with only `cmd = "Si
 
 lazy.nvim reads the `lazy.lua` at the repository root when it installs or updates the plugin. It adds the same keys, from your merged `opts.keys`, as triggers without a right-hand side. Pressing one loads the plugin, `setup()` defines the real map, and lazy.nvim replays the key. `keys = false` adds no triggers.
 
+Under lazy.nvim, set `keys` through `opts`. The triggers come from `opts.keys`, not from the arguments of a `setup()` call in your own `config`: with `config = function() require("sidekick-ultra").setup({ keys = false }) end` and no `opts`, the triggers still appear at `<leader>a`, and pressing one loads the plugin without defining the map.
+
 ## Commands
 
 `:SidekickUltra <sub> [key=value ...]`. Values may be double-quoted, with `\"` and `\\` escapes. `true` and `false` are booleans for boolean keys. Arguments are parsed, never evaluated. With a range (`:'<,'>SidekickUltra send ...`) the last visual selection is restored first, so `{selection}` works.
@@ -100,6 +102,8 @@ lazy.nvim reads the `lazy.lua` at the repository root when it installs or update
 | `prompt` | `name`, `submit`, `focus` | pick a prompt and send it |
 | `focus` | `name` | focus the target's pane or block |
 | `close` | `name`, `all` | detach (the tool keeps running) |
+
+A tool that `select`, `send`, `prompt` or `focus` starts is focused once it is up. The new pane or block is created unfocused and then focused through the multiplexer. Pass `focus=false` (Lua: `focus = false`) to `select`, `send` or `prompt` to keep your own focus. A failed focus is reported, and the session stays attached and still receives the text. `focus` takes no `focus` key: it always focuses. On `send`, `focus=true` also focuses the session after delivery, whether or not the tool was just started.
 
 The target is the attached session. With none attached, a picker opens over the matching sessions and tools. With several, you choose one (except `close all=true`).
 

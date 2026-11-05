@@ -72,9 +72,22 @@ local KEYS = {
 
 local function noop() end
 
----The maps `setup` defined last: `{ mode, lhs, rhs }`.
+---The maps `setup` defined last: `{ mode, lhs, rhs }`, with `lhs` as the global map reports it (`<leader>` expanded).
 ---@type { [1]: string, [2]: string, [3]: function }[]
 local defined = {}
+
+---The lhs of the global map in `mode` whose callback is `rhs` (and whose lhs is `lhs`, if given), or nil.
+---@param mode string
+---@param rhs function
+---@param lhs? string
+---@return string?
+local function find(mode, rhs, lhs)
+  for _, m in ipairs(vim.api.nvim_get_keymap(mode)) do
+    if m.callback == rhs and (lhs == nil or m.lhs == lhs) then
+      return m.lhs
+    end
+  end
+end
 
 ---lazy.nvim key specs (lhs, mode, desc; no rhs) for a prefix.
 ---@param prefix string
@@ -87,12 +100,12 @@ function M.triggers(prefix)
 end
 
 ---Delete the maps the previous `setup` defined, then define the new set: `{ prefix = string }`, or false for none.
----A map the user has since replaced is left alone.
+---A map the user has since replaced, and any buffer-local map, is left alone.
 ---@param cfg { prefix: string }|false
 function M.setup(cfg)
   for _, map in ipairs(defined) do
     local mode, lhs, rhs = unpack(map)
-    if vim.fn.maparg(lhs, mode, false, true).callback == rhs then
+    if find(mode, rhs, lhs) then
       vim.keymap.del(mode, lhs)
     end
   end
@@ -101,10 +114,10 @@ function M.setup(cfg)
     return
   end
   for _, key in ipairs(KEYS) do
-    local lhs, rhs = cfg.prefix .. key.suffix, key.action or noop
+    local rhs = key.action or noop
     for _, mode in ipairs(key.modes) do
-      vim.keymap.set(mode, lhs, rhs, { desc = key.desc })
-      table.insert(defined, { mode, lhs, rhs })
+      vim.keymap.set(mode, cfg.prefix .. key.suffix, rhs, { desc = key.desc })
+      table.insert(defined, { mode, find(mode, rhs), rhs })
     end
   end
 end

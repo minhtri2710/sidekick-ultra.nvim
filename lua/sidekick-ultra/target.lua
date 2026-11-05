@@ -31,6 +31,7 @@ local M = {}
 ---@field filter? sidekick_ultra.Filter
 ---@field all? boolean act on every attached match instead of choosing one
 ---@field attach? boolean the action may attach (or start) a session when none is attached
+---@field focus? boolean focus a session this starts; false skips it
 
 ---@param path string
 ---@return string
@@ -183,10 +184,12 @@ function M.pick(states, opts, cb)
 end
 
 ---Attach the chosen state, starting its tool first when it has no session. A missing tool is `not_installed` (its
----url is opened when it has one).
+---url is opened when it has one). A tool it starts is focused unless `opts.focus == false`.
 ---@param state sidekick_ultra.State
+---@param opts? { focus?: boolean }
 ---@return sidekick_ultra.Session? session
-function M.attach_state(state)
+---@return boolean? started the session was started by this call
+function M.attach_state(state, opts)
   if not state.installed then
     errors.notify(
       errors.new("not_installed", state.name .. " is not installed", { tool = state.name, url = state.tool.url })
@@ -201,19 +204,20 @@ function M.attach_state(state)
     end
     return nil
   end
-  local session = state.session
+  local session, started = state.session, false
   if not session then
-    local started, err = registry.start(state.tool)
-    if not started then
+    local err
+    session, err = registry.start(state.tool, opts)
+    if not session then
       errors.notify(err)
       return nil
     end
-    session = started
+    started = true
   end
   if registry.attach(session) then
     errors.info("Attached to " .. session.tool)
   end
-  return session
+  return session, started
 end
 
 ---Resolve the sessions an action acts on and pass them to `cb`:
@@ -229,7 +233,7 @@ function M.with_target(opts, cb)
       return
     end
     M.pick(M.states(opts.filter), { auto = true }, function(state)
-      local session = M.attach_state(state)
+      local session = M.attach_state(state, { focus = opts.focus })
       if session then
         cb({ session })
       end

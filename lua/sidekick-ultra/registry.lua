@@ -183,11 +183,13 @@ function M.start_backend()
   return nil, errors.new("not_in_mux", "nvim does not run inside a supported multiplexer; cannot start a tool")
 end
 
----Create a session of `tool` next to nvim through the selected backend. Does not attach it.
+---Create a session of `tool` next to nvim through the selected backend and focus it unless `opts.focus == false`.
+---A focus refusal is notified; the session is still returned. Does not attach it.
 ---@param tool sidekick_ultra.Tool
+---@param opts? { focus?: boolean }
 ---@return sidekick_ultra.Session? session
 ---@return sidekick_ultra.Error? err
-function M.start(tool)
+function M.start(tool, opts)
   local backend, err = M.start_backend()
   if not backend then
     return nil, err
@@ -197,6 +199,12 @@ function M.start(tool)
     return nil, start_err
   end
   session.sid = M.sid(session.tool, session.cwd)
+  if not (opts and opts.focus == false) then
+    local ok, focus_err = backend.focus(session)
+    if not ok then
+      errors.notify(focus_err)
+    end
+  end
   return session
 end
 

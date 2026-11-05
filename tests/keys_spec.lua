@@ -24,6 +24,17 @@ local function map(mode, lhs)
   return vim.fn.maparg(lhs, mode, false, true)
 end
 
+---@return table map the global (not buffer-local) map for lhs in mode, with <leader> expanded now, or {}
+local function global(mode, lhs)
+  local want = vim.fn.keytrans(vim.api.nvim_replace_termcodes(lhs, true, true, true))
+  for _, m in ipairs(vim.api.nvim_get_keymap(mode)) do
+    if m.lhs == want then
+      return m
+    end
+  end
+  return {}
+end
+
 ---Every global n/x map the plugin owns, found by its desc (the prefix and the seven of behavior section 5: 11 in all).
 local function ours()
   local descs = { [PREFIX_DESC] = true }
@@ -42,9 +53,10 @@ local function ours()
 end
 
 describe("keys", function()
-  local calls, orig
+  local calls, orig, leader
   before_each(function()
     fake.reset()
+    leader = vim.g.mapleader
     calls = {}
     orig = {}
     for _, name in ipairs({ "select", "send", "prompt", "focus", "close" }) do
@@ -59,6 +71,7 @@ describe("keys", function()
       actions[name] = fn
     end
     keys.setup(false)
+    vim.g.mapleader = leader
   end)
 
   describe("setup()", function()
@@ -127,10 +140,31 @@ describe("keys", function()
       vim.keymap.del("n", "<leader>as")
     end)
 
-    it("keeps the previous maps when the options are invalid", function()
+    it("removes the global maps of the previous setup past a buffer-local map at the same lhs", function()
+      local mine = function() end
       sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
-      expect.equality(pcall(sidekick.setup, { keys = { prefix = "" } }), false)
-      expect.equality(map("n", "<leader>as").desc, "Select Session")
+      vim.keymap.set("n", "<leader>as", mine, { buffer = 0, desc = "mine" })
+      sidekick.setup({ keys = { prefix = "<leader>S" }, herdr = { enabled = false }, rex = { enabled = false } })
+      expect.equality(#ours(), 11)
+      expect.equality(global("n", "<leader>as"), {})
+      expect.equality(map("n", "<leader>as").callback == mine, true)
+      vim.keymap.del("n", "<leader>as", { buffer = 0 })
+    end)
+
+    it("removes the previous set after mapleader changed, at the lhs it was defined at", function()
+      for _, again in ipairs({ { keys = { prefix = "<leader>S" } }, { keys = false } }) do
+        vim.g.mapleader = "\\"
+        sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+        expect.equality(#ours(), 11)
+        vim.g.mapleader = " "
+        sidekick.setup(vim.tbl_extend("force", again, { herdr = { enabled = false }, rex = { enabled = false } }))
+        expect.equality(#ours(), again.keys and 11 or 0)
+        for _, suffix in ipairs({ "", "s", "t", "f", "v", "p", "o", "d" }) do
+          for _, mode in ipairs({ "n", "x" }) do
+            expect.equality(global(mode, "\\a" .. suffix), {})
+          end
+        end
+      end
     end)
   end)
 
@@ -161,7 +195,7 @@ describe("keys", function()
       end, vim.list_slice(ret, 2))
     end
 
-    it("lists the triggers for the default prefix: lhs, mode, desc", function()
+    it("lists the triggers for the default prefix: lhs, mode, desc, and no rhs", function()
       local list = triggers({})
       expect.equality(list, {
         { lhs = "<leader>a", mode = { "n", "x" }, desc = PREFIX_DESC },
@@ -194,10 +228,9 @@ describe("keys", function()
       expect.equality(triggers({ keys = true }), {})
     end)
 
-    it("gives no trigger a rhs", function()
-      for _, t in ipairs(triggers({})) do
-        expect.equality(t.rhs, nil)
-      end
+    it("adds nothing when opts.keys has a key besides prefix, which setup() then rejects", function()
+      expect.equality(triggers({ keys = { prefix = "<leader>S", nope = 1 } }), {})
+      expect.equality(triggers({ keys = { prefx = "<leader>S" } }), {})
     end)
 
     it("declares exactly the lhs and modes that setup() defines", function()
