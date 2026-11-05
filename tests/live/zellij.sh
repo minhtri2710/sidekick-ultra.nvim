@@ -4,7 +4,13 @@
 #
 # What it does: creates a background zellij session under the literal root /tmp/sku-live-zellij (own HOME, XDG dirs,
 # config dir, data dir and ZELLIJ_SOCKET_DIR), adds stub-agent panes (claude, codex, a claude that exits on its first
-# byte, and a /bin/sh pane that has the claude stub typed into it), and drives headless nvim with the plugin:
+# byte, and a /bin/sh pane that has the claude stub typed into it), and drives headless nvim with the plugin.
+# Layout: the session is a headless 50 columns wide, and `new-pane --direction right` creates nothing when the tab has
+# no room (zellij closes the freshly spawned pane and prints no id). So nvim's tab (the first one) holds only nvim's
+# pane, which keeps the room for the inside start. The stubs live in other tabs, one tab for claude and codex (two panes
+# side by side), one for the pane that exits, one for the shell pane. Floating panes are not used: with a floating pane
+# visible, zellij silently creates no tiled pane at all. After the phases, a scratch tab is split right until a split
+# prints no id, to record what a no-room `new-pane` does (a bounded observation, never a gate).
 #   outside the mux: discover, attach, send (no Enter), submit, focus, the gone-pane guard, the not_in_mux start refusal;
 #   inside the mux (nvim typed into the session's first pane): inside(), discover, start through registry.start (the new
 #                    pane is focused per D7, beside nvim's pane and in its tab, with a tool env), running within 3 s,
@@ -135,20 +141,60 @@ for name in claude codex; do
   fi
 done
 
-# Prints the id of the first terminal pane, or the basename of the first word of a pane's command line, from the JSON of
-# `list-panes` on stdin. Only argv0 is ever printed, never the rest of a command line.
+# Reads the JSON of `list-panes` on stdin and prints one answer by mode. Never a command line: argv0 is the basename of
+# the first word of a pane_command, and nothing else of it is printed.
+#   first        id of the first terminal pane           max          highest terminal pane id (or -1)
+#   newer N      id of the first terminal pane above N   tabof N     tab_id of terminal pane N
+#   argv0 N      argv0 of terminal pane N                count [T]    number of terminal panes (of tab T)
+#   desc T       one line per terminal pane of tab T: id, floating, suppressed, stacked, exited
 cat >"$R/zjson.lua" <<'EOF'
 local panes = vim.json.decode(io.read("*a"))
 local mode, want = arg[1], tonumber(arg[2])
+local terminals = {}
 for _, pane in ipairs(panes) do
   if not pane.is_plugin then
-    if mode == "first" then
+    table.insert(terminals, pane)
+  end
+end
+if mode == "first" then
+  io.write(terminals[1] and tostring(terminals[1].id) or "")
+elseif mode == "max" then
+  local max = -1
+  for _, pane in ipairs(terminals) do
+    max = math.max(max, pane.id)
+  end
+  io.write(tostring(max))
+elseif mode == "newer" then
+  for _, pane in ipairs(terminals) do
+    if pane.id > want then
       io.write(tostring(pane.id))
       return
-    elseif mode == "argv0" and pane.id == want then
-      local word = (pane.pane_command or ""):match("^%s*(%S+)")
-      io.write(word and vim.fs.basename(word) or "")
+    end
+  end
+elseif mode == "tabof" or mode == "argv0" then
+  for _, pane in ipairs(terminals) do
+    if pane.id == want then
+      if mode == "tabof" then
+        io.write(tostring(pane.tab_id))
+      else
+        local word = (pane.pane_command or ""):match("^%s*(%S+)")
+        io.write(word and vim.fs.basename(word) or "")
+      end
       return
+    end
+  end
+elseif mode == "count" then
+  local n = 0
+  for _, pane in ipairs(terminals) do
+    if want == nil or pane.tab_id == want then
+      n = n + 1
+    end
+  end
+  io.write(tostring(n))
+elseif mode == "desc" then
+  for _, pane in ipairs(terminals) do
+    if pane.tab_id == want then
+      io.write(("id=%s floating=%s suppressed=%s stacked=%s exited=%s\n"):format(pane.id, tostring(pane.is_floating), tostring(pane.is_suppressed), tostring(pane.is_stacked), tostring(pane.exited)))
     end
   end
 end
@@ -156,7 +202,7 @@ EOF
 
 cat >"$R/drive.lua" <<'EOF'
 -- Driver run by headless nvim. Environment: SKU_REPO, SKU_OUT, SKU_PHASE, SKU_CWD, SKU_OUTDIR, SKU_SESSION (outside
--- phase), SKU_CLAUDE_PANE, SKU_CODEX_PANE, SKU_GONE_PANE, SKU_SHELL_PANE (pane numbers).
+-- phase), SKU_CLAUDE_PANE, SKU_CODEX_PANE, SKU_GONE_PANE, SKU_SHELL_PANE, SKU_NVIM_PANE (pane numbers).
 local repo, out, phase = os.getenv("SKU_REPO"), os.getenv("SKU_OUT"), os.getenv("SKU_PHASE")
 local outdir = os.getenv("SKU_OUTDIR")
 vim.opt.rtp:prepend(repo)
@@ -264,13 +310,19 @@ local function run()
     bytes = received("claude", a)
     check("submit presses Enter", bytes ~= nil and bytes:find("\r", 1, true) ~= nil, bytes)
 
+    -- Start from nvim's own pane, which is in another tab than the stubs, so the focus below crosses tabs.
+    local c = os.getenv("SKU_NVIM_PANE")
+    zellij(session_name, "focus-pane-id", "terminal_" .. c)
     ok, err = backend.focus(codex)
     check("focus succeeds", ok == true, err)
-    local focused = {}
+    local focused, tab_of = {}, {}
     for _, pane in ipairs(terminals(session_name)) do
       focused[tostring(pane.id)] = pane.is_focused
+      tab_of[tostring(pane.id)] = pane.tab_id
     end
-    check("focus moved to the codex pane", focused[b] == true and focused[a] == false, focused)
+    check("focus moved to the codex pane, not the claude pane", focused[b] == true and focused[a] == false, focused)
+    observe("focus crossed tabs (codex tab vs nvim's tab)", { tab_of[b], tab_of[c] })
+    observe("nvim's pane still flagged focused after the cross-tab focus", focused[c])
 
     -- The pane in SKU_GONE_PANE ran a stub that exited on `Q`: it is exited or closed, and the guard must refuse.
     local gone = vim.tbl_extend("force", claude, {
@@ -320,6 +372,20 @@ local function run()
       })
       return res, run_err
     end
+    -- The product path is start, attach, the ATTACH event, status.refresh, is_running. Watch the events.
+    local detached, attach_fired = {}, false
+    vim.api.nvim_create_autocmd("User", {
+      pattern = registry.DETACH,
+      callback = function(ev)
+        detached[ev.data.id] = true
+      end,
+    })
+    vim.api.nvim_create_autocmd("User", {
+      pattern = registry.ATTACH,
+      callback = function()
+        attach_fired = true
+      end,
+    })
     local session, err = registry.start(tools.get("claude"))
     exec.run = run
     check("start returns a session", session ~= nil, err)
@@ -327,6 +393,19 @@ local function run()
       return
     end
     observe("started session", session)
+    -- At once, as the product does: attach, then let the event loop run the status refresh (its autocmd was
+    -- registered before this one, so it has run when this one fires).
+    check("attach started session", registry.attach(session) == true)
+    vim.wait(3000, function()
+      return attach_fired
+    end, 20)
+    check("the ATTACH event ran", attach_fired)
+    observe("is_running right after the status refresh", registry.is_running(session))
+    local still = false
+    for _, attached in ipairs(registry.attached()) do
+      still = still or attached.id == session.id
+    end
+    check("the started session is still attached after the status refresh", still and not detached[session.id], { still, detached })
     -- The pane may still show the env wrapper or the stub's bash for a moment (the tool env is set through env).
     observe("started session is running at once", registry.is_running(session))
     check("started session is running within 3 s", vim.wait(3000, function()
@@ -345,7 +424,6 @@ local function run()
     local n = session.pane:match("^terminal_(%d+)$")
     vim.wait(1500)
     check("the tool env reached the process", content(("%s/claude-%s.env"):format(outdir, n)) == "1", content(("%s/claude-%s.env"):format(outdir, n)))
-    check("attach started session", registry.attach(session) == true)
     local fresh = find(registry.discover(), session.id)
     check("rediscovery lists the started pane", fresh ~= nil and fresh.tool == "claude", fresh)
     if fresh then
@@ -414,12 +492,34 @@ pane_number() { # <new-pane output>
 
 PANE_C=$(ZA list-panes --all --json --state | jfirst first)
 case "$PANE_C" in "" | *[!0-9]*) die "could not read the first pane id" ;; esac
-PANE_A=$(pane_number "$(ZA new-pane --direction right --no-focus --cwd "$R/work" --name sku-claude -- "$R/bin/claude")")
-PANE_B=$(pane_number "$(ZA new-pane --direction right --no-focus --cwd "$R/work" --name sku-codex -- "$R/bin/codex")")
-PANE_G=$(pane_number "$(ZA new-pane --direction right --no-focus --cwd "$R/work" --name sku-gone -- "$R/bin/gone")")
+
+# A new tab whose only terminal pane runs the given command; prints that pane's number. The new pane is found as the
+# first terminal pane above the highest id before the call (ids are never reused), and the tab keeps all of its room.
+new_tab_pane() { # <tab name> <command and arguments>
+  name=$1
+  shift
+  above=$(ZA list-panes --all --json --state | jfirst max)
+  ZA new-tab --name "$name" --cwd "$R/work" -- "$@" >/dev/null
+  tries=0
+  while :; do
+    found=$(ZA list-panes --all --json --state | jfirst newer "$above")
+    case "$found" in "" | *[!0-9]*) ;; *) break ;; esac
+    tries=$((tries + 1))
+    [ "$tries" -le 20 ] || die "new-tab $name created no terminal pane"
+    sleep 0.3
+  done
+  echo "$found"
+}
+
+PANE_A=$(new_tab_pane sku-stubs "$R/bin/claude")
+TAB_A=$(ZA list-panes --all --json --state | jfirst tabof "$PANE_A")
+case "$TAB_A" in "" | *[!0-9]*) die "could not read the tab of pane $PANE_A" ;; esac
+# Two panes side by side in the stub tab fit; the focus check below needs two panes in one tab.
+PANE_B=$(pane_number "$(ZA new-pane --tab-id "$TAB_A" --direction right --no-focus --cwd "$R/work" --name sku-codex -- "$R/bin/codex")")
+PANE_G=$(new_tab_pane sku-gone "$R/bin/gone")
 # A /bin/sh pane with the claude stub typed into it: the common real case, a tool that is the shell's child.
-PANE_H=$(pane_number "$(ZA new-pane --direction right --no-focus --cwd "$R/work" --name sku-shell -- /bin/sh)")
-echo "panes: shell=$PANE_C claude=$PANE_A codex=$PANE_B gone=$PANE_G typed=$PANE_H"
+PANE_H=$(new_tab_pane sku-shell /bin/sh)
+echo "panes: nvim=$PANE_C claude=$PANE_A codex=$PANE_B gone=$PANE_G typed=$PANE_H (stub tab $TAB_A)"
 
 n=0
 until [ -f "$R/out/claude-$PANE_A.bytes" ] && [ -f "$R/out/codex-$PANE_B.bytes" ] && [ -f "$R/out/claude-$PANE_G.env" ]; do
@@ -459,7 +559,7 @@ nv() {
   say nvim "(headless, phase $phase, output $R/out/$phase.txt)"
   z_env \
     SKU_REPO="$REPO" SKU_OUT="$R/out/$phase.txt" SKU_PHASE="$phase" SKU_CWD="$R/work" SKU_OUTDIR="$R/out" \
-    SKU_SESSION="$S" SKU_CLAUDE_PANE="$PANE_A" SKU_CODEX_PANE="$PANE_B" SKU_GONE_PANE="$PANE_G" SKU_SHELL_PANE="$PANE_H" \
+    SKU_SESSION="$S" SKU_CLAUDE_PANE="$PANE_A" SKU_CODEX_PANE="$PANE_B" SKU_GONE_PANE="$PANE_G" SKU_SHELL_PANE="$PANE_H" SKU_NVIM_PANE="$PANE_C" \
     /usr/bin/perl -e 'alarm 90; exec @ARGV' -- "$NVIM" --headless -u NONE -i NONE -l "$R/drive.lua" || true
 }
 
@@ -487,6 +587,38 @@ until grep -q '^DONE' "$R/out/start.txt" 2>/dev/null; do
   sleep 0.5
 done
 
+# --- the no-room case, once, on purpose ---------------------------------------------------------------------------
+# A scratch tab (the phases are over, nothing else lives there) is split right until a split prints no id, at most 6
+# times. Every call is recorded: exit code, stdout, stderr first line, the session's terminal-pane count before and after,
+# and the panes of the tab (floating, suppressed, stacked, exited). It never fails the run, and no command line is read.
+noroom() {
+  set +e
+  ZA new-tab --name sku-scratch --cwd "$R/work" >/dev/null 2>&1
+  sleep 0.5
+  tab=$(ZA list-panes --all --json --state | jfirst tabof "$(ZA list-panes --all --json --state | jfirst max)")
+  i=1
+  while [ "$i" -le 6 ]; do
+    before=$(ZA list-panes --all --json --state | jfirst count)
+    out=$(ZA new-pane --tab-id "$tab" --direction right --no-focus --cwd "$R/work" --name sku-room -- /bin/sleep 120 2>"$R/out/noroom.err")
+    rc=$?
+    err1=$(grep -v '^+ ' "$R/out/noroom.err" | head -n 1)
+    sleep 0.5
+    after=$(ZA list-panes --all --json --state | jfirst count)
+    echo "split $i: exit=$rc stdout=[$out] stderr1=[$err1] terminal panes $before -> $after"
+    case "$out" in
+      terminal_[0-9]*) ;;
+      *)
+        echo "no id on split $i; panes of the scratch tab:"
+        ZA list-panes --all --json --state | jfirst desc "$tab"
+        break
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  set -e
+}
+noroom >"$R/out/noroom.txt" 2>&1 || true
+
 # --- report ----------------------------------------------------------------------------------------------------
 fail=0
 echo "== list-sessions with no session (observed before the session was created)"
@@ -500,6 +632,8 @@ for phase in basic start; do
   if grep -q '^FAIL' "$R/out/$phase.txt" 2>/dev/null; then fail=1; fi
   grep -q '^DONE' "$R/out/$phase.txt" 2>/dev/null || fail=1
 done
+echo "== no-room new-pane (observation)"
+cat "$R/out/noroom.txt"
 if [ "$fail" = 0 ]; then
   echo "LIVE zellij: all checks passed"
 else

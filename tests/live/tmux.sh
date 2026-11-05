@@ -289,7 +289,15 @@ local function run()
     ok, err = backend.send(gone, "nope-live")
     check("send to a missing pane fails", ok == nil and err and err.id == "backend_error", err)
     observe("missing pane error", err and err.msg)
-    check("a failed send leaves no paste buffer", tmux("list-buffers") == "", tmux("list-buffers"))
+    -- tmux answers the mode check for a missing pane with exit 0 and no output (seen live at 58637a7); the backend names
+    -- the pane. The check fails first, so no buffer is loaded: this no longer reaches the delete-buffer cleanup after a
+    -- failed paste (a dead pane might, but whether tmux then fails the paste or skips it is not known).
+    check(
+      "the missing pane is named plainly",
+      err ~= nil and err.cmd == "display-message" and err.msg == "tmux pane %999 not found",
+      err
+    )
+    check("a send to a missing pane loads no paste buffer", tmux("list-buffers") == "", tmux("list-buffers"))
 
     ok, err = backend.focus(codex)
     check("focus a pane in another session", ok == true, err)

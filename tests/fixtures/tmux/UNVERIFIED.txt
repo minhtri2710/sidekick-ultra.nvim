@@ -21,7 +21,8 @@ stubs named claude and codex):
                             pane's own process in a second session (depth 0); nvim_get_proc reported "claude" and
                             "codex" for the symlinks. A real AI CLI was not run, so what nvim reads as the name of
                             Claude Code, or of a tool installed as a node script, is still not confirmed.
-  stderr_missing_pane.txt   `tmux exited with 1: can't find pane: %999` for a paste to a missing pane, as the probe saw.
+  stderr_missing_pane.txt   `tmux exited with 1: can't find pane: %999` for a paste-buffer to a missing pane (24c6bd1, as
+                            the probe saw). `send` no longer gets there: see display_pane_gone.txt.
   no server                 `list-panes -a` against a socket path with no server returned an empty list and notified
                             nothing. The log does not record which of the two accepted first stderr lines tmux
                             printed. stderr_no_server.txt (`no server running on ...`, a socket nobody answers) and
@@ -31,29 +32,29 @@ stubs named claude and codex):
   start                     split-window printed the id and pid; the new pane sat in nvim's window and was focused
                             afterwards (D7); the one-element command ran through the shell as a quoted word.
 
+Settled by the live run at 58637a7 (reviews/d8-tmux-58637a7.log, 56 checks passed):
+  display_pane_gone.txt     `display-message -p -t %999 '#{pane_in_mode}'` for a pane that does not exist exits 0 with
+                            EMPTY stdout (no stderr, no error), unlike `send-keys`, `paste-buffer` and `list-panes -t`,
+                            which exit 1 with `can't find pane: %N`. The backend reads empty output from the mode check
+                            as "pane not found" (`tmux pane %999 not found`). Because that check runs before
+                            load-buffer, a send to a missing pane never reaches paste-buffer or the delete-buffer
+                            cleanup in the live run; the cleanup after a failed paste is covered by the spec only.
+  list_panes.txt            the current format (pane id, pane pid, session name, window id, dead flag, then the working
+                            directory last as `#{?pane_current_path,#{pane_current_path},#{pane_start_path}}`, all
+                            TAB separated) was parsed by a real tmux 3.8: discovery found the expected panes with
+                            the expected cwd.
+  copy mode                 with the pane in copy mode (`copy-mode -t %N`, mode count 1), `send` and `submit` left the
+                            mode (count 0) and delivered the text and then the echoed line. `copy-mode -q` was only run
+                            on a pane in a mode. How paste-buffer itself behaves in a mode was not observed (the mode
+                            is always left first).
+  raw paste (-S)            a text holding an ESC byte reached the program as the byte: the pane's tty echoed `^[`, no
+                            backslash form appeared, and cat's output had the SGR sequence consumed by the terminal.
+                            tmux 3.7 is the floor (README, `MIN_VERSION`, health warning).
+
 Not settled; a live run must still show:
-  list_panes.txt            the field order and the working-directory fallback. The live run above used the earlier
-                            order (pane id, pid, current path, session, window, dead). The current format is
-                            pane id, pane pid, session name, window id, dead flag, then the working directory LAST as
-                            `#{?pane_current_path,#{pane_current_path},#{pane_start_path}}` (the start path when tmux
-                            cannot read the current one), so a path that holds a tab stays whole. Fields are
-                            separated by a real TAB character. This format has not been run against a real tmux.
   display_session.txt       `display-message -p -t $TMUX_PANE '#{session_name}'` output, and `switch-client -t %N`
                             from a pane in another session. No client is attached to the private server, so the live
                             run logged UNVERIFIABLE; the probe checked focus only inside one session.
-  a pane in copy mode       `send` and `submit` first read `#{pane_in_mode}` (display-message -p -t %N) and run
-                            `copy-mode -q -t %N` only when it is above zero, because in a mode keys and pastes go to the
-                            mode (Enter would end copy mode and never reach the tool). The man page does not say
-                            whether `copy-mode -q` is harmless on a pane in no mode, so it is never run then. The live
-                            script checks, on the stub claude pane, that after `copy-mode -t %N` the mode count is 1,
-                            that send and submit succeed, leave the mode (count 0) and deliver the text and then the
-                            echoed line. Not yet run against a real tmux; how `paste-buffer` behaves in a mode, which
-                            is why the mode is left first, is not observed either.
-  control characters in a paste
-                            tmux 3.7 made `paste-buffer` pass the buffer through vis(3) unless `-S` is given (CHANGES FROM
-                            3.6b TO 3.7, in the 3.8 install's CHANGES; the man page repeats it). The backend passes `-S`,
-                            so tmux 3.7 is the floor (README, `MIN_VERSION`, health warning). The probe pasted only
-                            printable text and LF. The live script now sends `esc-live-<ESC>[0m-end`: a raw ESC is
-                            echoed by the pane's tty as `^[` (echoctl) and, after Enter, printed by cat as an SGR reset
-                            the terminal consumes (`esc-live--end`); vis text would show a backslash form. Not yet run
-                            against a real tmux, so ECHOCTL on the pane's tty and the exact screen text are assumed.
+  the working-directory fallback
+                            `#{pane_start_path}` when `pane_current_path` is empty: the branch was never taken live.
+  a real AI CLI             see the stub row above.

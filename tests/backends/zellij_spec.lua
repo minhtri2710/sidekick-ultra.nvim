@@ -297,6 +297,17 @@ describe("zellij backend", function()
       expect.equality(zellij.list(tools.all())[1].pane, "terminal_2")
     end)
 
+    it("lists a floating pane that runs a tool", function()
+      rec = record({
+        [LIST_SESSIONS] = "skuA\n",
+        [PANES_A] = patched("list_panes_a.json", function(panes)
+          terminal(panes, 1).is_floating = true
+        end),
+      })
+      local list = zellij.list(tools.all())
+      expect.equality(list[1].pane, "terminal_1")
+    end)
+
     it("gives no session when no tool is configured", function()
       rec = record(routes())
       expect.equality(zellij.list({}), {})
@@ -667,8 +678,10 @@ describe("zellij backend", function()
         rec = nil
         expect.equality(session, nil)
         expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
-        expect.equality(err.msg:find("sku-claude", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
-        expect.equality(err.msg:find("skuA", 1, true) ~= nil, true)
+        -- The text must say why zellij prints nothing, and that a pane may still be open.
+        for _, part in ipairs({ "no room", "floating", "sku-claude", "left open", "skuA" }) do
+          expect.equality({ part, err.msg:find(part, 1, true) ~= nil }, { part, true })
+        end
       end
     end)
 

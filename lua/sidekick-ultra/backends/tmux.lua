@@ -247,9 +247,14 @@ local function leave_mode(pane)
   if not res then
     return nil, err
   end
-  local modes = tonumber(vim.trim(res.stdout))
+  local out = vim.trim(res.stdout)
+  -- tmux 3.8 answers a pane that does not exist with exit 0 and no output (seen live), not with an error.
+  if out == "" then
+    return nil, failure("display-message", ("tmux pane %s not found"):format(pane))
+  end
+  local modes = tonumber(out)
   if not modes then
-    return nil, failure("display-message", "tmux printed no mode count for pane " .. pane)
+    return nil, failure("display-message", ("tmux printed an unexpected mode count for pane %s: %s"):format(pane, out))
   end
   if modes > 0 then
     local _, quit_err = run("copy-mode", { "copy-mode", "-q", "-t", pane })

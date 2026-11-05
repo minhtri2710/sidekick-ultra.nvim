@@ -278,13 +278,18 @@ function M.start(tool, opts)
   local name = vim.trim(res.stdout)
   local number = name:match("^terminal_(%d+)$")
   if not number then
+    -- zellij prints the id only once it has made the pane. It makes none, silently and with exit 0, when the tab has no
+    -- room for the split, when floating panes are visible there, or when nvim's own pane is floating (zellij-server
+    -- tab/mod.rs). A slow server (it waits 1 s for the pane) can also print nothing for a pane it did create. The text
+    -- is true in every case.
     return nil,
       failure(
         "new-pane",
-        ("zellij printed no id for the new pane; if it created one, a pane named sku-%s may have been left open in session %s"):format(
-          tool.name,
-          session
-        )
+        (
+          "zellij printed no id and probably created no pane: it creates none when there is no room in the tab beside "
+          .. "nvim's pane, when floating panes are visible there, or when nvim's pane is floating; if it created one "
+          .. "anyway, a pane named sku-%s was left open in session %s"
+        ):format(tool.name, session)
       )
   end
 

@@ -30,14 +30,16 @@ Settled by the live run at 24c6bd1 (~/.paseo/reports/sidekick-ultra/reviews/d8-z
                            (bash `read` turns CR into LF); the new stub records raw bytes with dd.
 
 Still unverified (the live run, tests/live/zellij.sh, must settle each):
-  `new-pane` from inside nvim
-                           at 24c6bd1 it exited 0 and printed no `terminal_N` (the same flags print the id from outside
-                           and from a pane's shell in the probe). The cause is not known. Reading zellij v0.45.1: the
-                           id is a Log line the server sends once the pane is created, and the client waits one
-                           second at most (ACTION_COMPLETION_TIMEOUT in route.rs); a spawn error or a timeout ends
-                           with exit 0 and no output. The live script now observes the call (exit, stdout, stderr first
-                           line, milliseconds, pane counts before and after). Whether a pane was created is read from
-                           those counts.
+  `new-pane` that prints no id
+                           at 24c6bd1 (inside start) and at 58637a7 (setup) a `new-pane --direction right` exited 0 with
+                           empty stdout. Both were the 4th right split of a headless session 50 columns wide. Reading
+                           zellij v0.45.1 (zellij-server/src/tab/mod.rs): with no room to split, zellij closes the
+                           freshly spawned pane and returns Ok, so no pane exists and no id is printed; with floating
+                           panes visible, or a floating target pane, it returns early with nothing created. The server
+                           also waits only 1 s for the pane (route.rs), so a slow server could print nothing for a
+                           pane it did create. The backend's error says all of this. The live script now keeps nvim's
+                           tab roomy (stubs in other tabs), and records one deliberate no-room split in a scratch tab:
+                           exit, stdout, stderr first line, pane counts before and after, and the tab's panes.
   pane_command for a tool started with env
                            start puts "/usr/bin/env K=V claude" in front of the tool. Whether pane_command then shows
                            "env" or the exec'd tool, and for how long, is unknown. The backend records the tool's

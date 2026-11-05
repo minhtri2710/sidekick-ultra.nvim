@@ -606,7 +606,6 @@ describe("tmux backend", function()
     it("sends nothing when the mode cannot be read or left", function()
       for _, routes in ipairs({
         { ["display-message"] = bad(fixture("stderr_missing_pane")) },
-        { ["display-message"] = "\n" },
         { ["display-message"] = "yes\n" },
         { ["display-message"] = "1\n", ["copy-mode"] = bad("pane is busy\n") },
       }) do
@@ -625,6 +624,23 @@ describe("tmux backend", function()
         rec.restore()
       end
       rec = nil
+    end)
+
+    it("reports a pane tmux no longer knows (exit 0, empty output) as not found, and loads nothing", function()
+      -- tmux 3.8 answers display-message -p -t <missing pane> with exit 0 and no output, not an error.
+      rec = record({ ["display-message"] = fixture("display_pane_gone") })
+      local res, err = tmux.send({ pane = "%999" }, "x")
+      expect.equality(
+        { res, err.id, err.cmd, err.msg },
+        { nil, "backend_error", "display-message", "tmux pane %999 not found" }
+      )
+      expect.equality(#rec.calls, 1)
+    end)
+
+    it("names an unreadable mode count in the error", function()
+      rec = record({ ["display-message"] = "yes\n" })
+      local _, err = tmux.send({ pane = "%2" }, "x")
+      expect.equality(err.msg, "tmux printed an unexpected mode count for pane %2: yes")
     end)
 
     it("uses a different buffer for each send", function()
@@ -680,6 +696,16 @@ describe("tmux backend", function()
         { "tmux", "copy-mode", "-q", "-t", "%2" },
         { "tmux", "send-keys", "-t", "%2", "Enter" },
       })
+    end)
+
+    it("reports a pane tmux no longer knows (exit 0, empty output) as not found, and presses no Enter", function()
+      rec = record({ ["display-message"] = fixture("display_pane_gone") })
+      local res, err = tmux.submit({ pane = "%999" })
+      expect.equality(
+        { res, err.id, err.cmd, err.msg },
+        { nil, "backend_error", "display-message", "tmux pane %999 not found" }
+      )
+      expect.equality(#rec.calls, 1)
     end)
 
     it("presses no Enter when the mode cannot be read or left", function()
