@@ -14,6 +14,11 @@
 # Every tmux call it makes (and the plugin makes, outside) names the private socket with -S. It never uses -L, the
 # default server, the Human's sessions or any /tmp/munsu-e2e.* server. The stubs are symlinks to /bin/cat, so a typed
 # line is echoed by the tty and printed again by cat once Enter arrives; nothing is interpreted by a shell.
+#
+# D9 adds two script stubs, each the own process of a pane in the session "other": `gemini` (a python script,
+# `#!/usr/bin/python3`) and `qwen` (a node script, `#!/usr/bin/env node`, run by a symlink named node to the mise node
+# binary). They run as their interpreter, so discovery must read the script name through one `ps` call. They read stdin
+# and never print their own arguments; the driver logs only the session fields and the interpreter's process name.
 set -eu
 
 [ "${SKU_LIVE:-}" = 1 ] || {
@@ -112,6 +117,27 @@ for name in claude codex; do
   ln -s /bin/cat "$R/bin/$name"
 done
 
+# Script stubs (D9). The python one runs under the system python3; the node one under the mise node binary, linked as
+# `node` into the root's bin. `#!/usr/bin/env node` rather than a literal `#!$R/bin/node`: it is the form npm gives a
+# global bin, so the process is `node <script>` with argv0 `node`, as in real use; the isolated PATH below makes env find
+# the link, and the preflight refuses to go on unless it does.
+NODE_BIN=/Users/beowulf/.local/share/mise/installs/node/lts/bin/node
+[ -x "$NODE_BIN" ] || die "preflight: $NODE_BIN is not executable"
+[ -x /usr/bin/python3 ] || die "preflight: /usr/bin/python3 is not executable"
+ln -s "$NODE_BIN" "$R/bin/node"
+cat >"$R/bin/gemini" <<'STUB_PY'
+#!/usr/bin/python3
+import sys
+
+while sys.stdin.readline():
+    pass
+STUB_PY
+cat >"$R/bin/qwen" <<'STUB_JS'
+#!/usr/bin/env node
+process.stdin.resume();
+STUB_JS
+chmod 755 "$R/bin/gemini" "$R/bin/qwen"
+
 # Refuse unless the stubs win: under the exact isolated PATH, claude, codex and tmux must resolve to the files made
 # above. The pane shells type the bare names, so a missing or unusable stub would run a real CLI.
 for name in claude codex tmux; do
@@ -136,6 +162,32 @@ for name in claude codex; do
   }
 done
 
+# Script stub preflight: gemini, qwen and node must resolve to the files made above under the exact isolated PATH; node
+# must be exactly a symlink to the mise node binary; each script must start with the expected interpreter line, and run
+# and end at once on an empty stdin under the pane environment.
+for name in gemini qwen node; do
+  found=$(
+    PATH=$ISO_PATH
+    command -v "$name"
+  ) || found=
+  if [ "$found" != "$R/bin/$name" ] || [ ! -x "$R/bin/$name" ]; then
+    echo "refusing: $name resolves to '$found' under PATH=$ISO_PATH, not to $R/bin/$name" >&2
+    exit 2
+  fi
+done
+if [ ! -L "$R/bin/node" ] || [ "$(readlink "$R/bin/node")" != "$NODE_BIN" ]; then
+  echo "refusing: $R/bin/node is not a symlink to $NODE_BIN" >&2
+  exit 2
+fi
+[ "$(head -n 1 "$R/bin/gemini")" = "#!/usr/bin/python3" ] || die "preflight: the gemini stub has an unexpected first line"
+[ "$(head -n 1 "$R/bin/qwen")" = "#!/usr/bin/env node" ] || die "preflight: the qwen stub has an unexpected first line"
+for name in gemini qwen; do
+  tm_env "$R/bin/$name" </dev/null || {
+    echo "refusing: the stub $R/bin/$name does not run under the pane environment" >&2
+    exit 2
+  }
+done
+
 # Socket preflight: the path must be under the root and short enough for a unix socket.
 case "$SOCK" in
   /tmp/sku-live-tmux/*) ;;
@@ -146,7 +198,8 @@ esac
 
 cat >"$R/drive.lua" <<'EOF'
 -- Driver run by headless nvim. Environment: SKU_REPO, SKU_OUT, SKU_PHASE, SKU_SOCK, SKU_CWD, SKU_CLAUDE_PANE,
--- SKU_CODEX_PANE, SKU_SHELL_PANE. Every tmux call of this driver names the private socket.
+-- SKU_CODEX_PANE, SKU_SHELL_PANE, SKU_GEMINI_PANE, SKU_QWEN_PANE. Every tmux call of this driver names the private
+-- socket.
 local repo, out, phase = os.getenv("SKU_REPO"), os.getenv("SKU_OUT"), os.getenv("SKU_PHASE")
 local sock = os.getenv("SKU_SOCK")
 vim.opt.rtp:prepend(repo)
@@ -222,7 +275,18 @@ local function run()
     local claude, codex = find(sessions, claude_id), find(sessions, codex_id)
     check("discover finds the stub claude below a shell", claude ~= nil and claude.tool == "claude", sessions)
     check("discover finds the stub codex in the other session", codex ~= nil and codex.tool == "codex", sessions)
-    check("discover finds nothing else", #sessions == 2, sessions)
+    -- D9: tools installed as scripts run as their interpreter; discovery reads the script name through one ps call. The
+    -- sessions hold no command line, so they may be printed. The interpreter's process name is observed, not assumed.
+    local gemini_session = find(sessions, "tmux:" .. os.getenv("SKU_GEMINI_PANE"))
+    local qwen_session = find(sessions, "tmux:" .. os.getenv("SKU_QWEN_PANE"))
+    check("discover finds the python script stub as gemini", gemini_session ~= nil and gemini_session.tool == "gemini", sessions)
+    check("discover finds the node script stub as qwen", qwen_session ~= nil and qwen_session.tool == "qwen", sessions)
+    if gemini_session and qwen_session then
+      observe("python script stub process name", gemini_session.proc_name)
+      observe("node script stub process name", qwen_session.proc_name)
+      check("the script stubs are running", registry.is_running(gemini_session) and registry.is_running(qwen_session), { gemini_session, qwen_session })
+    end
+    check("discover finds nothing else", #sessions == 4, sessions)
     if not (claude and codex) then
       return
     end
@@ -383,10 +447,13 @@ PANE_A=$(tm new-session -d -s main -x 200 -y 50 -c "$R/work" -P -F '#{pane_id}' 
 tm set-option -g default-command /bin/sh
 PANE_C=$(tm split-window -d -h -t "$PANE_A" -c "$R/work" -P -F '#{pane_id}')
 PANE_B=$(tm new-session -d -s other -x 200 -y 50 -c "$R/work" -P -F '#{pane_id}' "$R/bin/codex")
-for id in "$PANE_A" "$PANE_B" "$PANE_C"; do
+# The script stubs (D9) are the own process of one window each in session other.
+PANE_G=$(tm new-window -d -t other: -c "$R/work" -P -F '#{pane_id}' "$R/bin/gemini")
+PANE_Q=$(tm new-window -d -t other: -c "$R/work" -P -F '#{pane_id}' "$R/bin/qwen")
+for id in "$PANE_A" "$PANE_B" "$PANE_C" "$PANE_G" "$PANE_Q"; do
   case "$id" in %[0-9]*) ;; *) die "could not read a pane id from tmux: '$id'" ;; esac
 done
-echo "panes: claude=$PANE_A codex=$PANE_B shell=$PANE_C"
+echo "panes: claude=$PANE_A codex=$PANE_B shell=$PANE_C gemini=$PANE_G qwen=$PANE_Q"
 
 # Socket preflight against the live server: it is the private one, and it holds only what this script made.
 [ -S "$SOCK" ] || die "no socket at $SOCK"
@@ -406,6 +473,7 @@ nv() {
   tm_env \
     SKU_REPO="$REPO" SKU_OUT="$R/out/$phase.txt" SKU_PHASE="$phase" SKU_SOCK="$SOCK" SKU_CWD="$R/work" \
     SKU_CLAUDE_PANE="$PANE_A" SKU_CODEX_PANE="$PANE_B" SKU_SHELL_PANE="$PANE_C" \
+    SKU_GEMINI_PANE="$PANE_G" SKU_QWEN_PANE="$PANE_Q" \
     /usr/bin/perl -e 'alarm 90; exec @ARGV' -- "$NVIM" --headless -u NONE -i NONE -l "$R/drive.lua" || true
 }
 

@@ -1,10 +1,11 @@
 ---The zellij backend: sessions are terminal panes. zellij 0.45.1 gives no pid for a pane, only `pane_command` (the
----running command line), so a pane is matched to a tool by the basename of that command's first word (argv0), and
----liveness is a CLI call instead of the in-process pid check. The rest of `pane_command` is never kept, logged, or
+---running command line), so a pane is matched to a tool by the basename of that command's first word (argv0), or by
+---the script's name when that word is a node or python interpreter, and liveness is a CLI call instead of the in-process pid check. The rest of `pane_command` is never kept, logged, or
 ---put into an error or a notify. The shapes were probed in D8; what is still unverified is listed in
 ---tests/fixtures/zellij/UNVERIFIED.txt.
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
+local procname = require("sidekick-ultra.procname")
 local tools = require("sidekick-ultra.tools")
 
 ---@type sidekick_ultra.Backend
@@ -81,13 +82,13 @@ local function run(label, session, ...)
   return exec.check(argv, opts)
 end
 
----The first word of a `pane_command`, as a basename. Everything after it is dropped here and never seen again.
+---The program of a `pane_command`: the basename of its first word, or the script's name when that word is a node or
+---python interpreter (see procname). The rest of the line is dropped here and never seen again.
 ---@param pane table
----@return string? argv0
+---@return string? program
 local function argv0_of(pane)
   local line = pane.pane_command
-  local word = type(line) == "string" and line:match("^%s*(%S+)") or nil
-  return word and vim.fs.basename(word) or nil
+  return type(line) == "string" and procname.program(line) or nil
 end
 
 ---The terminal panes of a session that still run something: plugin panes (they share ids with terminal panes) and

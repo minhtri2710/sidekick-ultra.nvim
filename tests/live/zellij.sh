@@ -11,6 +11,7 @@
 #   tab "stubs": panes sku-claude and sku-codex side by side (stub agents)
 #   tab "gone":  pane sku-gone (a stub that ends on its first byte)
 #   tab "shell": pane sku-shell (/bin/sh, with the claude stub typed into it)
+#   tab "scripts": panes sku-gemini and sku-qwen (D9: a python and a node script stub, see below)
 # No tab-bar or status-bar plugin panes. The panes are found by their layout name (list-panes `title`), never by command.
 # Floating panes are not used: with one visible, zellij silently creates no tiled pane at all.
 #   outside the mux: discover, attach, send (no Enter), submit, cross-tab focus, the gone-pane guard, the not_in_mux
@@ -20,6 +21,11 @@
 #                    running at once (start waits up to 2 s for the pane's argv0 to be the tool, past the env
 #                    wrapper) and within 3 s, rediscovery, send, submit. The `new-pane` call is observed: exit code, stdout,
 #                    stderr first line, time and pane counts before and after (never a command line).
+# D9 adds two script stubs in the "scripts" tab: `gemini` (a python script, `#!/usr/bin/python3`) and `qwen` (a node
+# script, `#!/usr/bin/env node`, run by a symlink named node to the mise node binary). They run as their interpreter, so
+# discovery must read the script name out of pane_command. They read stdin and never print their own arguments. The run
+# prints only the basename of each pane's argv0 (the interpreter, or the script if zellij reports it so), never a command
+# line; the driver checks that discovery finds each stub as its tool, and that the inside phase can start gemini.
 # After the phases, one split-right in the "gone" tab is repeated (at most 6 times) until a split prints no id, to record
 # what a no-room `new-pane` does. It is an observation, never a gate.
 #
@@ -148,6 +154,27 @@ make_stub claude claude 'of="$base.bytes"'
 make_stub codex codex 'of="$base.bytes"'
 make_stub gone claude 'count=1 of=/dev/null'
 
+# Script stubs (D9). The python one runs under the system python3; the node one under the mise node binary, linked as
+# `node` into the root's bin. `#!/usr/bin/env node` rather than a literal `#!$R/bin/node`: it is the form npm gives a
+# global bin, so the process is `node <script>` with argv0 `node`, as in real use; the isolated PATH makes env find the
+# link, and the preflight below refuses to go on unless it does.
+NODE_BIN=/Users/beowulf/.local/share/mise/installs/node/lts/bin/node
+[ -x "$NODE_BIN" ] || die "preflight: $NODE_BIN is not executable"
+[ -x /usr/bin/python3 ] || die "preflight: /usr/bin/python3 is not executable"
+ln -s "$NODE_BIN" "$R/bin/node" || die "setup: link to node"
+cat >"$R/bin/gemini" <<'STUB_PY'
+#!/usr/bin/python3
+import sys
+
+while sys.stdin.readline():
+    pass
+STUB_PY
+cat >"$R/bin/qwen" <<'STUB_JS'
+#!/usr/bin/env node
+process.stdin.resume();
+STUB_JS
+chmod 755 "$R/bin/gemini" "$R/bin/qwen"
+
 # Stub preflight: under the exact isolated PATH, claude and codex must resolve to the files written above. Nothing is
 # executed. `registry.start` runs the bare name `claude`, so a missing stub would run a real CLI.
 for name in claude codex; do
@@ -159,6 +186,32 @@ for name in claude codex; do
     echo "refusing: $name resolves to '$found' under PATH=$ISO_PATH, not to the stub $R/bin/$name" >&2
     exit 2
   fi
+done
+
+# Script stub preflight: gemini, qwen and node must resolve to the files made above under the exact isolated PATH; node
+# must be exactly a symlink to the mise node binary; each script must start with the expected interpreter line, and run
+# and end at once on an empty stdin under the pane environment.
+for name in gemini qwen node; do
+  found=$(
+    PATH=$ISO_PATH
+    command -v "$name"
+  ) || found=
+  if [ "$found" != "$R/bin/$name" ] || [ ! -x "$R/bin/$name" ]; then
+    echo "refusing: $name resolves to '$found' under PATH=$ISO_PATH, not to $R/bin/$name" >&2
+    exit 2
+  fi
+done
+if [ ! -L "$R/bin/node" ] || [ "$(readlink "$R/bin/node")" != "$NODE_BIN" ]; then
+  echo "refusing: $R/bin/node is not a symlink to $NODE_BIN" >&2
+  exit 2
+fi
+[ "$(head -n 1 "$R/bin/gemini")" = "#!/usr/bin/python3" ] || die "preflight: the gemini stub has an unexpected first line"
+[ "$(head -n 1 "$R/bin/qwen")" = "#!/usr/bin/env node" ] || die "preflight: the qwen stub has an unexpected first line"
+for name in gemini qwen; do
+  z_env "$R/bin/$name" </dev/null || {
+    echo "refusing: the stub $R/bin/$name does not run under the pane environment" >&2
+    exit 2
+  }
 done
 
 # The layout (KDL). Pane `name`s are what the script looks for; cwd is the work directory. `default_tab_template` with
@@ -180,6 +233,10 @@ layout {
     }
     tab name="shell" {
         pane name="sku-shell" command="/bin/sh" cwd="$R/work"
+    }
+    tab name="scripts" split_direction="vertical" {
+        pane name="sku-gemini" command="$R/bin/gemini" cwd="$R/work"
+        pane name="sku-qwen" command="$R/bin/qwen" cwd="$R/work"
     }
 }
 EOF
@@ -282,7 +339,8 @@ EOF
 
 cat >"$R/drive.lua" <<'EOF'
 -- Driver run by headless nvim. Environment: SKU_REPO, SKU_OUT, SKU_PHASE, SKU_CWD, SKU_OUTDIR, SKU_SESSION (outside
--- phase), SKU_CLAUDE_PANE, SKU_CODEX_PANE, SKU_GONE_PANE, SKU_SHELL_PANE, SKU_NVIM_PANE (pane numbers).
+-- phase), SKU_CLAUDE_PANE, SKU_CODEX_PANE, SKU_GONE_PANE, SKU_SHELL_PANE, SKU_NVIM_PANE, SKU_GEMINI_PANE,
+-- SKU_QWEN_PANE (pane numbers).
 local repo, out, phase = os.getenv("SKU_REPO"), os.getenv("SKU_OUT"), os.getenv("SKU_PHASE")
 local outdir = os.getenv("SKU_OUTDIR")
 vim.opt.rtp:prepend(repo)
@@ -374,6 +432,17 @@ local function run()
     local claude, codex = find(sessions, claude_id), find(sessions, codex_id)
     check("discover finds the claude pane", claude ~= nil and claude.tool == "claude", sessions)
     check("discover finds the codex pane", codex ~= nil and codex.tool == "codex", sessions)
+    -- D9: tools installed as scripts run as their interpreter; discovery reads the script name out of pane_command. The
+    -- sessions hold no command line, so they may be printed.
+    local gemini_session = find(sessions, ("zellij:%s:terminal_%s"):format(session_name, os.getenv("SKU_GEMINI_PANE")))
+    local qwen_session = find(sessions, ("zellij:%s:terminal_%s"):format(session_name, os.getenv("SKU_QWEN_PANE")))
+    check("discover finds the python script stub as gemini", gemini_session ~= nil and gemini_session.tool == "gemini", sessions)
+    check("discover finds the node script stub as qwen", qwen_session ~= nil and qwen_session.tool == "qwen", sessions)
+    if gemini_session and qwen_session then
+      observe("python script stub session", gemini_session)
+      observe("node script stub session", qwen_session)
+      check("the script stubs are running", registry.is_running(gemini_session) and registry.is_running(qwen_session), { gemini_session, qwen_session })
+    end
     if not (claude and codex) then
       return
     end
@@ -547,6 +616,19 @@ local function run()
       bytes = received("claude", n)
       check("started pane received Enter", bytes ~= nil and bytes:find("\r", 1, true) ~= nil, bytes)
     end
+
+    -- D9: start of the python script tool. The pane shows the interpreter's command line; start returns once its script
+    -- name is the tool. A "printed no id" error here would mean the tab had no room for a third split.
+    local before_gemini = #terminals(session_name)
+    local gemini_started, gemini_err = registry.start(tools.get("gemini"))
+    check("start of the python script tool returns a session", gemini_started ~= nil, gemini_err)
+    if gemini_started then
+      observe("started python script session", gemini_started)
+      check("start created exactly one more pane", #terminals(session_name) == before_gemini + 1)
+      check("the python script session is running at once", registry.is_running(gemini_started) == true, gemini_started)
+      local again = find(registry.discover(), gemini_started.id)
+      check("rediscovery lists the started pane as gemini", again ~= nil and again.tool == "gemini", again)
+    end
   end
 end
 
@@ -625,7 +707,7 @@ layout_ok() { # <form>
     return 1
   }
   ids=""
-  for name in sku-nvim sku-claude sku-codex sku-gone sku-shell; do
+  for name in sku-nvim sku-claude sku-codex sku-gone sku-shell sku-gemini sku-qwen; do
     id=$(jf "layout check ($form_)" byname "$name") || return 1
     if [ -z "$id" ]; then
       echo "layout form $form_: no pane titled $name; panes seen (id tab columns title):" >&2
@@ -647,11 +729,17 @@ layout_ok() { # <form>
   t_codex=$(jf "layout check ($form_)" tabof "$3") || return 1
   t_gone=$(jf "layout check ($form_)" tabof "$4") || return 1
   t_shell=$(jf "layout check ($form_)" tabof "$5") || return 1
+  t_gemini=$(jf "layout check ($form_)" tabof "$6") || return 1
+  t_qwen=$(jf "layout check ($form_)" tabof "$7") || return 1
+  if [ "$t_gemini" != "$t_qwen" ] || [ "$t_gemini" = "$t_claude" ] || [ "$t_gemini" = "$t_nvim" ] || [ "$t_gemini" = "$t_gone" ] || [ "$t_gemini" = "$t_shell" ]; then
+    echo "layout form $form_: the script stubs are not alone in their tab: gemini=$t_gemini qwen=$t_qwen" >&2
+    return 1
+  fi
   if [ "$t_claude" != "$t_codex" ] || [ "$t_nvim" = "$t_claude" ] || [ "$t_gone" = "$t_claude" ] || [ "$t_shell" = "$t_claude" ] || [ "$t_gone" = "$t_shell" ] || [ "$t_nvim" = "$t_gone" ] || [ "$t_nvim" = "$t_shell" ]; then
     echo "layout form $form_: the tabs are not as in the layout: nvim=$t_nvim claude=$t_claude codex=$t_codex gone=$t_gone shell=$t_shell" >&2
     return 1
   fi
-  PANE_C=$1 PANE_A=$2 PANE_B=$3 PANE_G=$4 PANE_H=$5
+  PANE_C=$1 PANE_A=$2 PANE_B=$3 PANE_G=$4 PANE_H=$5 PANE_P=$6 PANE_N=$7
   return 0
 }
 
@@ -705,7 +793,7 @@ set -e
 [ "$rc" = 0 ] || die "preflight: list-sessions exit=$rc: $(head -n 1 "$R/out/sessions.err")"
 [ "$(cat "$R/out/sessions.txt")" = "$S" ] || die "preflight: the private socket dir does not list exactly the session $S"
 
-echo "panes: nvim=$PANE_C claude=$PANE_A codex=$PANE_B gone=$PANE_G typed=$PANE_H"
+echo "panes: nvim=$PANE_C claude=$PANE_A codex=$PANE_B gone=$PANE_G typed=$PANE_H gemini=$PANE_P qwen=$PANE_N"
 
 n=0
 until [ -f "$R/out/claude-$PANE_A.bytes" ] && [ -f "$R/out/codex-$PANE_B.bytes" ] && [ -f "$R/out/claude-$PANE_G.env" ]; do
@@ -723,6 +811,12 @@ if [ "$ARGV0_A" != claude ] || [ "$ARGV0_B" != codex ]; then
   echo "UNVERIFIABLE: a stub's pane_command does not start with its name; discovery cannot be tested with this stub" >&2
   exit 3
 fi
+
+# The script stubs (D9): what their pane_command starts with. Only the basename of argv0 is printed: the interpreter
+# (python3, Python or node) if zellij reports the command line of the process, or the stub's own name if it does not.
+ARGV0_P=$(jf "argv0 preflight (gemini)" argv0 "$PANE_P") || die "argv0 preflight: could not read the gemini pane"
+ARGV0_N=$(jf "argv0 preflight (qwen)" argv0 "$PANE_N") || die "argv0 preflight: could not read the qwen pane"
+echo "observed argv0: python script stub pane=[$ARGV0_P] node script stub pane=[$ARGV0_N]"
 
 # Type the stub into the shell pane and observe, as argv0 only, what its pane_command starts with. This is an
 # observation, not a gate: the driver reports whether discovery found the pane.
@@ -747,6 +841,7 @@ nv() {
   z_env \
     SKU_REPO="$REPO" SKU_OUT="$R/out/$phase.txt" SKU_PHASE="$phase" SKU_CWD="$R/work" SKU_OUTDIR="$R/out" \
     SKU_SESSION="$S" SKU_CLAUDE_PANE="$PANE_A" SKU_CODEX_PANE="$PANE_B" SKU_GONE_PANE="$PANE_G" SKU_SHELL_PANE="$PANE_H" SKU_NVIM_PANE="$PANE_C" \
+    SKU_GEMINI_PANE="$PANE_P" SKU_QWEN_PANE="$PANE_N" \
     /usr/bin/perl -e 'alarm 90; exec @ARGV' -- "$NVIM" --headless -u NONE -i NONE -l "$R/drive.lua" || true
 }
 
