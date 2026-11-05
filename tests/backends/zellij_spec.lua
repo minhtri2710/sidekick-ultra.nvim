@@ -1106,6 +1106,295 @@ describe("zellij backend", function()
     end)
   end)
 
+  -- A tool installed as a node or python script runs as its interpreter, so the program of a pane is the script's name
+  -- (see procname). Everything else about `pane_command` stays as before: only argv0 or the script word is read.
+  describe("script names", function()
+    local cap
+    local NEW_PANE_G =
+      "--session skuA action new-pane --direction right --no-focus --cwd /tmp/sku-proj-a --name sku-gemini -- /bin/sh"
+
+    before_each(function()
+      cap = notify.capture()
+      fake.reset(
+        { claude = { cmd = fake.INSTALLED }, gemini = { cmd = fake.INSTALLED }, aider = { cmd = fake.INSTALLED } },
+        { zellij = { enabled = false } }
+      )
+    end)
+
+    after_each(function()
+      cap.restore()
+    end)
+
+    ---The pane list of session skuA with terminal pane 1 running `command`.
+    ---@param command? string
+    ---@return string
+    local function pane_1(command)
+      return patched("list_panes_a.json", function(panes)
+        terminal(panes, 1).pane_command = command
+      end)
+    end
+
+    ---The tool found in pane terminal_1 of skuA for `command`, and the program recorded for it.
+    ---@param command string
+    ---@return string? tool
+    ---@return string? proc_name
+    local function discovered(command)
+      rec = record({ [LIST_SESSIONS] = "skuA\n", [PANES_A] = pane_1(command) })
+      local list, err = zellij.list(tools.all())
+      expect.equality(err, nil)
+      rec.restore()
+      rec = nil
+      local found = vim.tbl_filter(function(s)
+        return s.pane == "terminal_1"
+      end, list)
+      return found[1] and found[1].tool, found[1] and found[1].proc_name
+    end
+
+    ---@param tool string
+    ---@param proc_name string
+    local function session_of(tool, proc_name)
+      return claude(function(s)
+        s.tool, s.proc_name = tool, proc_name
+      end)
+    end
+
+    it("finds a node tool by its script name and records that name as the program", function()
+      expect.equality({ discovered("/opt/homebrew/bin/node /x/bin/gemini --flag value") }, { "gemini", "gemini" })
+    end)
+
+    it("takes every interpreter name and the script word after its flags", function()
+      for _, case in ipairs({
+        { "node /x/bin/gemini", "gemini" },
+        { "nodejs /x/bin/gemini", "gemini" },
+        { "/usr/bin/bun /x/bin/gemini", "gemini" },
+        { "node -- /x/bin/gemini", "gemini" },
+        { "node --require ./hook.js --inspect=9229 /x/bin/gemini", "gemini" },
+        { "python /x/bin/aider", "aider" },
+        { "python3 -m aider --model x", "aider" },
+        { "python3.12 -u /x/bin/aider.py", "aider" },
+        { "/usr/bin/Python -W ignore -m aider", "aider" },
+      }) do
+        expect.equality({ case[1], (discovered(case[1])) }, { case[1], case[2] })
+      end
+    end)
+
+    it("finds no tool for an interpreter that runs no script, or a script that is not a tool", function()
+      for _, command in ipairs({
+        "node -e gemini",
+        "node --eval gemini",
+        "node -p gemini",
+        "node --print gemini",
+        "node",
+        "python3 -c aider",
+        "python3",
+        "node /x/dist/index.js",
+        "python3 -m pip install gemini",
+        "node /x/bin/other gemini",
+        "node /x/bin/other --name=gemini",
+        "nodemon /x/bin/gemini",
+        "Python3 /x/bin/aider",
+      }) do
+        expect.equality({ command, (discovered(command)) }, { command, nil })
+      end
+    end)
+
+    it("leaves a program that is not an interpreter as the basename of its first word", function()
+      expect.equality({ discovered("/usr/local/bin/claude --resume x") }, { "claude", "claude" })
+    end)
+
+    it("is_running follows the script: true while it is the tool, false when it changes or runs code", function()
+      for _, case in ipairs({
+        { "node /x/bin/gemini --api-key x", true },
+        { "bun -r ./hook.js /x/bin/gemini", true },
+        { "node /x/bin/other", false },
+        { "node -e gemini", false },
+        { "node", false },
+      }) do
+        rec = record({ [PANES_A] = pane_1(case[1]) })
+        expect.equality({ case[1], zellij.is_running(session_of("gemini", "gemini")) }, { case[1], case[2] })
+        rec.restore()
+        rec = nil
+      end
+      rec = record({ [PANES_A] = pane_1("python3 -m aider") })
+      expect.equality(zellij.is_running(session_of("aider", "aider")), true)
+    end)
+
+    it("send writes to a pane running the script, and refuses one that runs other code", function()
+      local WRITE = write_chars("skuA", "terminal_1", "hello")
+      rec = record({ [PANES_A] = pane_1("node /x/bin/gemini --x"), [WRITE] = "" })
+      expect.equality({ zellij.send(session_of("gemini", "gemini"), "hello") }, { true })
+      expect.equality(rec.keys(), { PANES_A, WRITE })
+      rec.restore()
+      rec = record({ [PANES_A] = pane_1("node -e hello"), [WRITE] = "" })
+      local ok_, err = zellij.send(session_of("gemini", "gemini"), "hello")
+      expect.equality({ ok_, err.id, err.cmd }, { nil, "backend_error", "write-chars" })
+      expect.equality(rec.keys(), { PANES_A })
+    end)
+
+    describe("start", function()
+      before_each(function()
+        vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
+      end)
+
+      ---@param command string
+      ---@return string
+      local function pane_6(command)
+        return patched("list_panes_a_started.json", function(panes)
+          terminal(panes, 6).pane_command = command
+        end)
+      end
+
+      local function start()
+        return zellij.start(tools.get("gemini"), { cwd = "/tmp/sku-proj-a", env = {} })
+      end
+
+      it("returns once the pane's interpreter runs the tool's script, recording the script's name", function()
+        local wrapper, running = pane_6("/bin/bash"), pane_6("node /x/bin/gemini --flag")
+        rec = record({
+          [NEW_PANE_G] = fixture("new_pane.txt"),
+          [PANES_A] = function(n)
+            return n <= 1 and wrapper or running
+          end,
+        })
+        local session, err = start()
+        expect.equality(err, nil)
+        expect.equality(session.proc_name, "gemini")
+        expect.equality(waits, { 50 })
+        rec.restore()
+        rec = record({ [PANES_A] = running })
+        expect.equality(zellij.is_running(session), true)
+      end)
+
+      it("keeps waiting while the interpreter runs another script, and ends at the bound without naming it", function()
+        rec = record({ [NEW_PANE_G] = fixture("new_pane.txt"), [PANES_A] = pane_6("node /x/bin/other") })
+        local session, err = start()
+        expect.equality(session, nil)
+        expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+        expect.equality(err.msg:find("never showed as gemini", 1, true) ~= nil, true)
+        expect.equality(err.msg:find("node", 1, true), nil)
+        expect.equality(err.msg:find("other", 1, true), nil)
+        expect.equality(#waits > 0, true)
+      end)
+
+      it("keeps waiting while the pane's interpreter runs code and no script, then returns at the script", function()
+        local answers = { pane_6("node -e setup()"), pane_6("python3 -c x"), pane_6("node /x/bin/gemini") }
+        rec = record({
+          [NEW_PANE_G] = fixture("new_pane.txt"),
+          [PANES_A] = function(n)
+            return answers[math.min(n, #answers)]
+          end,
+        })
+        local session, err = start()
+        expect.equality(err, nil)
+        expect.equality({ session.proc_name, waits }, { "gemini", { 50, 50 } })
+      end)
+
+      it("fails at once when the pane's command is gone", function()
+        rec = record({ [NEW_PANE_G] = fixture("new_pane.txt"), [PANES_A] = pane_6(nil) })
+        local session, err = start()
+        expect.equality({ session, err.id }, { nil, "backend_error" })
+        expect.equality(waits, {})
+      end)
+    end)
+
+    -- Supervisor condition: the command line beyond the script word may carry a secret. Every command line below
+    -- holds SECRET; nothing the backend returns, raises or notifies may hold it.
+    describe("command line arguments", function()
+      local LINES = {
+        { "node /x/bin/gemini --api-key " .. SECRET, "gemini" },
+        { "node --require " .. SECRET .. " /x/bin/gemini", "gemini" },
+        { 'node -e "' .. SECRET .. '"', nil },
+        { "python3 -m aider --token " .. SECRET, "aider" },
+        { 'python3 -c "' .. SECRET .. '"', nil },
+      }
+
+      ---@param value any
+      local function expect_clean(value)
+        expect.equality(vim.inspect(value):find(SECRET, 1, true), nil)
+      end
+
+      it("reach no session or recorded call of list or registry.discover", function()
+        registry.register(zellij)
+        for _, case in ipairs(LINES) do
+          rec = record({ [LIST_SESSIONS] = "skuA\n", [PANES_A] = pane_1(case[1]) })
+          local list = zellij.list(tools.all())
+          local found = vim.tbl_filter(function(session)
+            return session.pane == "terminal_1"
+          end, list)
+          expect.equality(found[1] and found[1].tool, case[2])
+          expect_clean({ list, rec.subs })
+          local discovered_list = registry.discover()
+          expect_clean(discovered_list)
+          rec.restore()
+          rec = nil
+        end
+        expect.equality(cap.calls, {})
+      end)
+
+      it("reach no result of is_running", function()
+        for _, case in ipairs(LINES) do
+          for _, tool in ipairs({ { "gemini", "gemini" }, { "aider", "aider" } }) do
+            rec = record({ [PANES_A] = pane_1(case[1]) })
+            local running = zellij.is_running(session_of(tool[1], tool[2]))
+            expect.equality(running, case[2] == tool[1])
+            expect_clean({ running, rec.subs })
+            rec.restore()
+            rec = nil
+          end
+        end
+        expect.equality(cap.calls, {})
+      end)
+
+      it("reach no refusal of send, and no write for a pane that runs code", function()
+        for _, case in ipairs(LINES) do
+          local tool = case[2] or "gemini"
+          local write = write_chars("skuA", "terminal_1", "text")
+          rec = record({ [PANES_A] = pane_1(case[1]), [write] = "" })
+          local ok_, err = zellij.send(session_of(tool, tool), "text")
+          expect.equality(ok_ == true, case[2] ~= nil)
+          if err then
+            local before = #cap.calls
+            errors.notify(err)
+            expect.equality(#cap.calls, before + 1)
+          end
+          expect_clean({ ok_, err, rec.subs, cap.calls })
+          expect.equality(vim.tbl_contains(rec.keys(), write), case[2] ~= nil)
+          rec.restore()
+          rec = nil
+        end
+      end)
+
+      it("reach no session or error of start, in the wait or at its bound", function()
+        vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
+        local function pane_6(command)
+          return patched("list_panes_a_started.json", function(panes)
+            terminal(panes, 6).pane_command = command
+          end)
+        end
+        for _, case in ipairs(LINES) do
+          local tool = case[2] or "gemini"
+          local wrapper, running = pane_6("/bin/bash"), pane_6(case[1])
+          rec = record({
+            [NEW_PANE_G:gsub("sku%-gemini", "sku-" .. tool)] = fixture("new_pane.txt"),
+            [PANES_A] = function(n)
+              return n <= 1 and wrapper or running
+            end,
+          })
+          local session, err = zellij.start(tools.get(tool), { cwd = "/tmp/sku-proj-a", env = {} })
+          rec.restore()
+          rec = nil
+          waits = {}
+          expect.equality(session ~= nil, case[2] ~= nil)
+          if err then
+            expect.equality(err.msg:find("never showed", 1, true) ~= nil, true)
+            errors.notify(err)
+          end
+          expect_clean({ session, err, cap.calls })
+        end
+      end)
+    end)
+  end)
+
   -- Supervisor condition: pane_command beyond argv0 may carry secrets. Every input below has SECRET in the
   -- pane_command of every terminal pane (an exited pane included), so a leak from any path can show. Nothing the
   -- backend returns, raises or notifies may contain it.

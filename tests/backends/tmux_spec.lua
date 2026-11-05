@@ -7,7 +7,11 @@ local registry = require("sidekick-ultra.registry")
 local tmux = require("sidekick-ultra.backends.tmux")
 local tools = require("sidekick-ultra.tools")
 
+local errors = require("sidekick-ultra.errors")
+local notify = require("tests.helpers.notify")
+
 local expect = MiniTest.expect
+local SECRET = "SECRET-TOKEN-xyz"
 
 local FIXTURES = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/fixtures/tmux/"
 -- The working directory is the last field, and falls back to the start path when tmux has no current path.
@@ -34,16 +38,16 @@ local function bad(stderr)
   return { code = 1, stdout = "", stderr = stderr }
 end
 
----Replace `exec.run`. `routes` maps the subcommand (the first argument after an optional `-S <socket>`) to a result
----table, a fixture-text string, or a function(call number) returning either. A subcommand without a route is recorded
----in `unexpected` and fails with exit 97. `calls[i]` is `{ argv, opts }`.
+---Replace `exec.run`. `routes` maps the subcommand (the first argument after an optional `-S <socket>`, or `ps` for a
+---`ps` call) to a result table, a fixture-text string, or a function(call number) returning either. A subcommand
+---without a route is recorded in `unexpected` and fails with exit 97. `calls[i]` is `{ argv, opts }`.
 ---@param routes table<string, table|string|fun(n: integer): table|string>
 local function record(routes)
   local rec = { calls = {}, unexpected = {}, orig = exec.run }
   local counts = {}
   exec.run = function(argv, opts)
     table.insert(rec.calls, { argv = argv, opts = opts })
-    local sub = argv[2] == "-S" and argv[4] or argv[2]
+    local sub = argv[1] == "ps" and "ps" or argv[2] == "-S" and argv[4] or argv[2]
     counts[sub] = (counts[sub] or 0) + 1
     local route = routes[sub]
     if type(route) == "function" then
@@ -331,12 +335,12 @@ describe("tmux backend", function()
       use_procs({
         [58100] = { name = "zsh", kids = { 1, 2, 3 } },
         [1] = { name = "bash", kids = { 11 } },
-        [11] = { name = "node", kids = { 111 } },
+        [11] = { name = "sh", kids = { 111 } },
         [111] = { name = "claude" },
-        [2] = { name = "node", kids = { 22 } },
+        [2] = { name = "sh", kids = { 22 } },
         [22] = { name = "codex" },
         [3] = { name = "bash", kids = { 33 } },
-        [33] = { name = "node", kids = { 333 } },
+        [33] = { name = "sh", kids = { 333 } },
         [333] = { name = "claude" },
       })
       local list = tmux.list(tools.all())
@@ -429,6 +433,399 @@ describe("tmux backend", function()
       local list, err = tmux.list(tools.all())
       expect.equality({ list, err.id }, { nil, "backend_error" })
       expect.equality(err.msg:find("%1", 1, true) ~= nil, true)
+    end)
+  end)
+
+  -- A tool installed as a node or python script runs as its interpreter: for those processes, and only those, one
+  -- `ps -ww -o args= -p <pid>` call reads the command line, and the script's name is what a tool is matched against.
+  describe("interpreters", function()
+    local PANES = "list_panes"
+    local PS = { "ps", "-ww", "-o", "args=", "-p", "58100" }
+
+    before_each(function()
+      fake.reset(
+        { claude = { cmd = fake.INSTALLED }, gemini = { cmd = fake.INSTALLED }, aider = { cmd = fake.INSTALLED } },
+        { tmux = { enabled = false } }
+      )
+    end)
+
+    ---ps answers per pid, from the pid in the call (`-p <pid>`); a pid without an answer fails like a missing process.
+    ---@param lines table<integer, string|table>
+    ---@return fun(n: integer): table|string
+    local function ps_route(lines)
+      return function()
+        local pid = tonumber(rec.calls[#rec.calls].argv[6])
+        return lines[pid] or { code = 1, stdout = "", stderr = "" }
+      end
+    end
+
+    ---The pane %1 (pid 58100) runs `proc`, whose command line is `line`. Returns the tool found, if any.
+    ---@param proc string
+    ---@param line string
+    ---@return table[] sessions
+    local function discover(proc, line)
+      rec = record({ ["list-panes"] = fixture(PANES), ps = ps_route({ [58100] = line .. "\n" }) })
+      use_procs({ [58100] = { name = proc } })
+      local list, err = tmux.list(tools.all())
+      expect.equality(err, nil)
+      rec.restore()
+      local ps_calls = vim.tbl_filter(function(argv)
+        return argv[1] == "ps"
+      end, rec.argvs())
+      expect.equality(ps_calls, { PS })
+      rec = nil
+      return list
+    end
+
+    it("finds a node tool by its script name, with one ps call, and records the interpreter's process", function()
+      local list = discover("node", "/opt/homebrew/bin/node /x/bin/gemini --flag value")
+      expect.equality(list, {
+        {
+          id = "tmux:%1",
+          backend = "tmux",
+          tool = "gemini",
+          cwd = WORK,
+          pid = 58100,
+          proc_name = "node",
+          pane = "%1",
+          tmux_session = "main",
+          window_id = "@0",
+        },
+      })
+    end)
+
+    it("runs ps through the exec seam with the pid and no tmux socket flag, even when tmux.socket is set", function()
+      fake.reset({ gemini = { cmd = fake.INSTALLED } }, { tmux = { enabled = false, socket = "/tmp/sku.sock" } })
+      rec = record({ ["list-panes"] = fixture(PANES), ps = "node /x/bin/gemini\n" })
+      use_procs({ [58100] = { name = "node" } })
+      tmux.list(tools.all())
+      expect.equality(rec.argvs()[2], PS)
+      expect.equality({ rec.calls[2].opts.backend, rec.calls[2].opts.cmd }, { "tmux", "ps" })
+    end)
+
+    it("keeps a session whose liveness is the interpreter's process name, as registry.is_running reads it", function()
+      local list = discover("node", "node /x/bin/gemini")
+      expect.equality(registry.is_running(list[1]), true)
+      use_procs({ [58100] = { name = "zsh" } })
+      expect.equality(registry.is_running(list[1]), false)
+    end)
+
+    it("takes every interpreter name and the script word after its flags", function()
+      local cases = {
+        { "node", "node /x/bin/gemini", "gemini" },
+        { "nodejs", "nodejs /x/bin/gemini", "gemini" },
+        { "bun", "bun /x/bin/gemini", "gemini" },
+        { "node", "node -- /x/bin/gemini", "gemini" },
+        { "node", "node --require ./hook.js --inspect=9229 /x/bin/gemini", "gemini" },
+        { "python", "python /x/bin/aider", "aider" },
+        { "python3", "python3 -m aider --model x", "aider" },
+        { "python3.12", "python3.12 -u /x/bin/aider.py", "aider" },
+        { "Python", "/usr/bin/Python -W ignore -m aider", "aider" },
+      }
+      for _, case in ipairs(cases) do
+        local list = discover(case[1], case[2])
+        expect.equality({ case[2], #list, list[1] and list[1].tool }, { case[2], 1, case[3] })
+        expect.equality(list[1].proc_name, case[1])
+      end
+    end)
+
+    it("finds no tool for an interpreter that runs no script, or a script that is not a tool", function()
+      for _, case in ipairs({
+        { "node", "node -e gemini" },
+        { "node", "node --eval gemini" },
+        { "node", "node -p gemini" },
+        { "node", "node --print gemini" },
+        { "node", "node" },
+        { "python3", "python3 -c aider" },
+        { "python3", "python3" },
+        { "node", "node /x/dist/index.js" },
+        { "python3", "python3 -m pip install gemini" },
+        -- the tool's name only after the script
+        { "node", "node /x/bin/other gemini" },
+        { "node", "node /x/bin/other --name=gemini" },
+      }) do
+        expect.equality({ case[2], discover(case[1], case[2]) }, { case[2], {} })
+      end
+    end)
+
+    it("does not match the interpreter's own name, so a tool needs its script name", function()
+      fake.reset({ nodetool = { cmd = fake.INSTALLED, is_proc = "^node$" } }, { tmux = { enabled = false } })
+      rec = record({ ["list-panes"] = fixture(PANES), ps = "node /x/bin/other\n" })
+      use_procs({ [58100] = { name = "node" } })
+      expect.equality({ tmux.list(tools.all()) }, { {} })
+    end)
+
+    it("reads no command line for a process that is not an interpreter", function()
+      rec = record({ ["list-panes"] = fixture(PANES) })
+      use_procs({
+        [58100] = { name = "zsh", kids = { 1, 2, 3 } },
+        [1] = { name = "nodemon" },
+        [2] = { name = "Python3" },
+        [3] = { name = "claude" },
+      })
+      local list = tmux.list(tools.all())
+      expect.equality({ #list, list[1].tool, list[1].pid }, { 1, "claude", 3 })
+      expect.equality(#rec.calls, 1)
+    end)
+
+    it(
+      "keeps walking below an interpreter that is not a tool, one ps call per interpreter, none after a match",
+      function()
+        rec = record({
+          ["list-panes"] = fixture(PANES),
+          ps = ps_route({
+            [58100] = "node /x/bin/other\n",
+            [1] = "python3 -m other\n",
+            [2] = "node /x/bin/gemini\n",
+            [3] = "node /x/bin/aider\n",
+          }),
+        })
+        use_procs({
+          [58100] = { name = "node", kids = { 1, 2 } },
+          [1] = { name = "python3", kids = { 11 } },
+          [11] = { name = "claude" },
+          [2] = { name = "node", kids = { 3 } },
+          [3] = { name = "node" },
+        })
+        local list = tmux.list(tools.all())
+        -- 2 is the shallowest match (gemini); the claude below 1 and the aider below 2 are deeper.
+        expect.equality({ #list, list[1].tool, list[1].pid, list[1].proc_name }, { 1, "gemini", 2, "node" })
+        local pids = {}
+        for _, argv in ipairs(rec.argvs()) do
+          if argv[1] == "ps" then
+            table.insert(pids, argv[6])
+          end
+        end
+        expect.equality(pids, { "58100", "1", "2" })
+      end
+    )
+
+    it("keeps walking below an interpreter that runs code and no script", function()
+      rec = record({ ["list-panes"] = fixture(PANES), ps = ps_route({ [58100] = "node -e " .. SECRET .. "\n" }) })
+      use_procs({ [58100] = { name = "node", kids = { 1 } }, [1] = { name = "claude" } })
+      local list = tmux.list(tools.all())
+      expect.equality({ #list, list[1].tool, list[1].pid }, { 1, "claude", 1 })
+    end)
+
+    describe("a process that ended before ps ran", function()
+      -- ps -p for a pid that is gone: exit 1 and nothing on either stream. The process is skipped, not an error.
+      local GONE = { code = 1, stdout = "", stderr = "" }
+
+      it("is skipped, and a tool later in the tree is still found", function()
+        rec = record({
+          ["list-panes"] = fixture(PANES),
+          ps = ps_route({
+            [1] = GONE,
+            [2] = "node /x/bin/other --token " .. SECRET .. "\n",
+            [3] = "node /x/bin/gemini --api-key " .. SECRET .. "\n",
+          }),
+        })
+        use_procs({
+          [58100] = { name = "zsh", kids = { 1, 2, 3 } },
+          [1] = { name = "node", kids = { 11 } },
+          [11] = { name = "claude" },
+          [2] = { name = "node" },
+          [3] = { name = "node" },
+        })
+        local list, err = tmux.list(tools.all())
+        expect.equality(err, nil)
+        -- 3 is the shallowest tool: 1 is gone (its child, read from nvim, is deeper), 2 runs another script.
+        expect.equality({ #list, list[1].tool, list[1].pid, list[1].proc_name }, { 1, "gemini", 3, "node" })
+        expect.equality(vim.inspect({ list, rec.calls }):find(SECRET, 1, true), nil)
+      end)
+
+      it("keeps walking below the gone process when nvim can still read its children", function()
+        rec = record({ ["list-panes"] = fixture(PANES), ps = ps_route({ [58100] = GONE }) })
+        use_procs({ [58100] = { name = "node", kids = { 1 } }, [1] = { name = "claude" } })
+        local list, err = tmux.list(tools.all())
+        expect.equality(err, nil)
+        expect.equality({ #list, list[1].tool, list[1].pid }, { 1, "claude", 1 })
+      end)
+
+      it("gives no session when nothing else in the pane is a tool", function()
+        rec = record({ ["list-panes"] = fixture(PANES), ps = ps_route({ [58100] = GONE }) })
+        use_procs({ [58100] = { name = "node" } })
+        expect.equality({ tmux.list(tools.all()) }, { {} })
+      end)
+
+      it("does not stop start, which records the pane's root process", function()
+        vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
+        rec = record({ ["split-window"] = fixture("split_window"), ps = ps_route({ [58500] = GONE }) })
+        use_procs({ [58500] = { name = "node" } })
+        local session, err = tmux.start(tools.get("gemini"), { cwd = "/w", env = {} })
+        expect.equality(err, nil)
+        expect.equality({ session.pid, session.proc_name }, { 58500, "node" })
+      end)
+    end)
+
+    it("start records the tool's script process in the new pane when it is already up", function()
+      vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
+      rec = record({ ["split-window"] = fixture("split_window"), ps = ps_route({ [58500] = "node /x/bin/gemini\n" }) })
+      use_procs({ [58500] = { name = "node" } })
+      local session, err = tmux.start(tools.get("gemini"), { cwd = "/w", env = {} })
+      expect.equality(err, nil)
+      expect.equality(
+        { session.id, session.tool, session.pid, session.proc_name },
+        { "tmux:%5", "gemini", 58500, "node" }
+      )
+    end)
+
+    it("start falls back to the pane's root process when its script is not the tool", function()
+      vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
+      rec = record({ ["split-window"] = fixture("split_window"), ps = ps_route({ [58500] = "node /x/bin/other\n" }) })
+      use_procs({ [58500] = { name = "node" } })
+      local session = tmux.start(tools.get("gemini"), { cwd = "/w", env = {} })
+      expect.equality({ session.pid, session.proc_name }, { 58500, "node" })
+    end)
+
+    describe("a failing ps", function()
+      ---@param route table|string|fun(n: integer): table|string
+      ---@return sidekick_ultra.Error
+      local function failing(route)
+        rec = record({ ["list-panes"] = fixture(PANES), ps = route })
+        use_procs({ [58100] = { name = "node" } })
+        local list, err = tmux.list(tools.all())
+        rec.restore()
+        expect.equality(list, nil)
+        return err
+      end
+
+      it("is a backend_error naming the pid, the exit code and the first stderr line", function()
+        local err = failing({
+          code = 3,
+          stdout = "node /x/bin/gemini --api-key " .. SECRET .. "\n",
+          stderr = "ps: boom\nsecond\n",
+        })
+        expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "tmux", "ps", 3 })
+        expect.equality(err.msg, "ps exited with 3 for pid 58100: ps: boom")
+      end)
+
+      it("names no stderr when there is none", function()
+        local err = failing({ code = 2, stdout = "", stderr = "" })
+        expect.equality(err.msg, "ps exited with 2 for pid 58100")
+      end)
+
+      it("is an error for exit 1 unless both streams are empty: stderr text, or stdout, makes it a failure", function()
+        local err = failing({ code = 1, stdout = "", stderr = "ps: illegal option\n" })
+        expect.equality(
+          { err.id, err.code, err.msg },
+          { "backend_error", 1, "ps exited with 1 for pid 58100: ps: illegal option" }
+        )
+        err = failing({ code = 1, stdout = "node /x/bin/gemini " .. SECRET .. "\n", stderr = "" })
+        expect.equality({ err.id, err.code, err.msg }, { "backend_error", 1, "ps exited with 1 for pid 58100" })
+        expect.equality(vim.inspect(err):find(SECRET, 1, true), nil)
+      end)
+
+      it("is an error for exit 0 with nothing printed", function()
+        for _, stdout in ipairs({ "", "\n", "  \n" }) do
+          local err = failing({ code = 0, stdout = stdout, stderr = "" })
+          expect.equality(
+            { err.id, err.cmd, err.code, err.msg },
+            { "backend_error", "ps", 0, "ps printed nothing for pid 58100" }
+          )
+        end
+      end)
+
+      it("keeps stdout out of the error and out of its toast", function()
+        local cap = notify.capture()
+        local err = failing({ code = 1, stdout = "node /x/bin/gemini --api-key " .. SECRET .. "\n", stderr = "gone\n" })
+        errors.notify(err)
+        cap.restore()
+        expect.equality(#cap.calls, 1)
+        expect.equality(vim.inspect({ err, cap.calls }):find(SECRET, 1, true), nil)
+      end)
+
+      it("is the exec error itself when ps cannot be spawned", function()
+        local orig = exec.run
+        exec.run = function(argv, opts)
+          if argv[1] == "ps" then
+            return nil, errors.new("backend_error", "cannot run ps: boom", opts)
+          end
+          return ok(fixture(PANES))
+        end
+        use_procs({ [58100] = { name = "node" } })
+        local list, err = tmux.list(tools.all())
+        exec.run = orig
+        expect.equality({ list, err.id, err.cmd, err.msg }, { nil, "backend_error", "ps", "cannot run ps: boom" })
+      end)
+
+      it("stops start at once and names the pane left open", function()
+        vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
+        rec = record({
+          ["split-window"] = fixture("split_window"),
+          ps = { code = 2, stdout = "node " .. SECRET .. "\n", stderr = "boom\n" },
+        })
+        use_procs({ [58500] = { name = "node" } })
+        local session, err = tmux.start(tools.get("gemini"), { cwd = "/w", env = {} })
+        expect.equality(session, nil)
+        expect.equality({ err.id, err.cmd }, { "backend_error", "split-window" })
+        expect.equality(err.msg, "ps exited with 2 for pid 58500: boom; pane %5 was left open")
+        expect.equality(vim.inspect(err):find(SECRET, 1, true), nil)
+      end)
+    end)
+
+    -- Supervisor condition: the command line beyond the script word may carry a secret. Every command line below
+    -- holds SECRET; nothing the backend returns, raises or notifies may hold it.
+    describe("command line arguments", function()
+      local LINES = {
+        { "node", "node /x/bin/gemini --api-key " .. SECRET, "gemini" },
+        { "node", "node --require " .. SECRET .. " /x/bin/gemini", "gemini" },
+        { "node", 'node -e "' .. SECRET .. '"', nil },
+        { "python3", "python3 -m aider --token " .. SECRET, "aider" },
+        { "python3", 'python3 -c "' .. SECRET .. '"', nil },
+      }
+
+      it("reach no session and no recorded call of list", function()
+        for _, case in ipairs(LINES) do
+          rec = record({ ["list-panes"] = fixture(PANES), ps = case[2] .. "\n" })
+          use_procs({ [58100] = { name = case[1] } })
+          local list, err = tmux.list(tools.all())
+          expect.equality(err, nil)
+          expect.equality(list[1] and list[1].tool, case[3])
+          expect.equality(vim.inspect({ list, rec.calls }):find(SECRET, 1, true), nil)
+          rec.restore()
+          rec = nil
+        end
+      end)
+
+      it("reach no session of start", function()
+        vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
+        for _, case in ipairs(LINES) do
+          rec = record({ ["split-window"] = fixture("split_window"), ps = case[2] .. "\n" })
+          use_procs({ [58500] = { name = case[1] } })
+          local session, err = tmux.start(tools.get("gemini"), { cwd = "/w", env = {} })
+          expect.equality(err, nil)
+          expect.equality(vim.inspect({ session, rec.calls }):find(SECRET, 1, true), nil)
+          rec.restore()
+          rec = nil
+        end
+      end)
+
+      it("reach no session of registry.discover, and no notify", function()
+        local cap = notify.capture()
+        registry.register(tmux)
+        for _, case in ipairs(LINES) do
+          rec = record({ ["list-panes"] = fixture(PANES), ps = case[2] .. "\n" })
+          use_procs({ [58100] = { name = case[1] } })
+          local list = registry.discover()
+          expect.equality(vim.inspect({ list, cap.calls }):find(SECRET, 1, true), nil)
+          rec.restore()
+          rec = nil
+        end
+        cap.restore()
+        expect.equality(cap.calls, {})
+      end)
+
+      it("are not kept by the exec seam, which holds no state", function()
+        local res = exec.run({ "/bin/sh", "-c", "echo " .. SECRET })
+        expect.equality(res.stdout, SECRET .. "\n")
+        for name, mod in pairs(package.loaded) do
+          if type(name) == "string" and name:find("^sidekick%-ultra") then
+            expect.equality({ name, vim.inspect(mod):find(SECRET, 1, true) }, { name, nil })
+          end
+        end
+        expect.equality(vim.fn.execute("messages"):find(SECRET, 1, true), nil)
+      end)
     end)
   end)
 

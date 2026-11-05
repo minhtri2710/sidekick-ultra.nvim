@@ -3,11 +3,13 @@
 ---listed in tests/fixtures/tmux/UNVERIFIED.txt.
 ---
 ---tmux reports a pane's root process (`pane_pid`), not an agent, so a tool is found by walking that process's tree in
----nvim (`nvim_get_proc_children`, `nvim_get_proc`). No `ps`, and no argv or environment is read. tmux has no agent
+---nvim (`nvim_get_proc_children`, `nvim_get_proc`). Only a process whose name is a node or python interpreter costs a
+---`ps` call, to read the script it runs (see procname); no other argv and no environment is read. tmux has no agent
 ---status, so `send` has no blocked guard.
 local config = require("sidekick-ultra.config")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
+local procname = require("sidekick-ultra.procname")
 local tools = require("sidekick-ultra.tools")
 
 ---@type sidekick_ultra.Backend
@@ -98,12 +100,50 @@ local function run(label, args, opts)
   return exec.check(argv_of(args), vim.tbl_extend("force", opts or {}, { backend = M.name, cmd = label }))
 end
 
----Breadth-first over the process tree under `root` (root first): the first process whose name satisfies a tool.
+---What a process is tested as: its name, or for an interpreter the name of the script it runs, read from one `ps` call.
+---The command line is a local value here: it is parsed and dropped, and a failing ps reports the pid, the exit code
+---and the first stderr line, never stdout.
+---`ps -p <pid>` for a pid that no longer exists exits 1 and prints nothing on either stream (seen on macOS; the macOS
+---man page states no exit status for it). That is a process that ended after nvim read its name, which is ordinary for
+---short-lived helpers: it is skipped. Any other failure, and exit 0 with nothing printed, is an error.
+---@param pid integer
+---@param name string the process name nvim reads
+---@return string? program the script's name ("" when the interpreter runs none); nil when the process is gone
+---@return sidekick_ultra.Error? err
+local function program_of(pid, name)
+  if not procname.is_interpreter(name) then
+    return name
+  end
+  local res, err = exec.run({ "ps", "-ww", "-o", "args=", "-p", tostring(pid) }, { backend = M.name, cmd = "ps" })
+  if not res then
+    return nil, err
+  end
+  if res.code == 1 and res.stdout == "" and res.stderr == "" then
+    return nil
+  end
+  local program = res.code == 0 and procname.program(res.stdout) or nil
+  if program then
+    return program
+  end
+  local first = vim.split(res.stderr, "\n", { plain = true })[1]
+  local msg = res.code == 0 and ("ps printed nothing for pid %d"):format(pid)
+    or ("ps exited with %d for pid %d"):format(res.code, pid)
+  return nil,
+    errors.new("backend_error", first ~= "" and (msg .. ": " .. first) or msg, {
+      backend = M.name,
+      cmd = "ps",
+      code = res.code,
+    })
+end
+
+---Breadth-first over the process tree under `root` (root first): the first process whose name, or script name for an
+---interpreter, satisfies a tool.
 ---@param root integer
 ---@param configured table<string, sidekick_ultra.Tool>
 ---@return string? tool_name
 ---@return integer? pid
----@return string? proc_name
+---@return string? proc_name the process name nvim reads (the interpreter's, for a script)
+---@return sidekick_ultra.Error? err a failing ps
 local function find_tool(root, configured)
   local names = vim.tbl_keys(configured)
   table.sort(names)
@@ -113,8 +153,12 @@ local function find_tool(root, configured)
     i = i + 1
     local ok, info = pcall(vim.api.nvim_get_proc, pid)
     if ok and type(info) == "table" and type(info.name) == "string" then
-      for _, name in ipairs(names) do
-        if tools.matches(configured[name], { pid = pid, cmd = info.name }) then
+      local program, err = program_of(pid, info.name)
+      if err then
+        return nil, nil, nil, err
+      end
+      for _, name in ipairs(program and names or {}) do
+        if tools.matches(configured[name], { pid = pid, cmd = program }) then
           return name, pid, info.name
         end
       end
@@ -156,7 +200,10 @@ function M.list(configured)
     end
     local cwd = table.concat(f, "\t", 6)
     if f[5] ~= "1" then
-      local name, pid, proc_name = find_tool(root, configured)
+      local name, pid, proc_name, find_err = find_tool(root, configured)
+      if find_err then
+        return nil, find_err
+      end
       if name then
         if cwd == "" then
           return nil, failure("list-panes", "tmux printed no working directory for pane " .. f[1])
@@ -215,7 +262,10 @@ function M.start(tool, opts)
 
   -- The pane is "running" at once: record the tool's process if it is already up, else the pane's root process (the
   -- shell or the command). The next discovery replaces this record with the tool's own pid, matched by id.
-  local _, pid, proc_name = find_tool(root, { [tool.name] = tool })
+  local _, pid, proc_name, find_err = find_tool(root, { [tool.name] = tool })
+  if find_err then
+    return nil, failure("split-window", ("%s; pane %s was left open"):format(find_err.msg, pane))
+  end
   if not pid then
     local ok, info = pcall(vim.api.nvim_get_proc, root)
     if not ok or type(info) ~= "table" or type(info.name) ~= "string" then

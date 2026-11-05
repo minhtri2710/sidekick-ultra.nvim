@@ -77,7 +77,7 @@ Still unverified (the live run, tests/live/zellij.sh, must settle each):
                            or the exec'd tool, and for how long, is unknown. start polls list-panes (50 ms apart, no new
                            poll after a 2 s deadline taken when new-pane returns) until the new pane's argv0 satisfies the tool's is_proc, and
                            only then returns, so the session is running at once. If the program never shows as the
-                           tool (env that stays, a shell, `node` for a script-installed tool), start fails and says
+                           tool (env that stays, a shell, a script's interpreter with another script), start fails and says
                            the pane was left open. The live script records how long registry.start took and checks
                            "running at once" and the N2 attach/refresh path.
   pane_command of a tool typed into a shell pane
@@ -97,5 +97,7 @@ Still unverified (the live run, tests/live/zellij.sh, must settle each):
                            and is_focused moved between the two panes of that tab. No tab was flagged active, so that the
                            visible tab switched is not shown (design 11 left "go-to-tab-by-id first" open).
   tools installed as scripts
-                           a tool installed as `#!/usr/bin/env node` may show argv0 "node" and go undiscovered. Not
-                           tested; the same family as the rex argv0 match.
+                           D9: a pane whose argv0 is node, nodejs, bun, python, python3, python3.N or Python is matched
+                           by its script's name (lua/sidekick-ultra/procname.lua). Unit specs only. What pane_command
+                           starts with for a python or node script stub (the interpreter, as assumed, or the script)
+                           is first seen in the next live run: the "scripts" tab prints the argv0 basenames.

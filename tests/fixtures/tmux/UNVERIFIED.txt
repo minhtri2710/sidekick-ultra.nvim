@@ -20,7 +20,14 @@ stubs named claude and codex):
                             discovery found the stub claude typed into a shell (depth 1) and the stub codex as the
                             pane's own process in a second session (depth 0); nvim_get_proc reported "claude" and
                             "codex" for the symlinks. A real AI CLI was not run, so what nvim reads as the name of
-                            Claude Code, or of a tool installed as a node script, is still not confirmed.
+                            Claude Code is still not confirmed.
+  tools installed as scripts
+                            D9: for a process nvim names node, nodejs, bun, python, python3, python3.N or Python, one
+                            `ps -ww -o args= -p <pid>` call reads the command line and the script's name is matched
+                            (lua/sidekick-ultra/procname.lua). "Python" was seen as nvim's name for /usr/bin/python3 on
+                            this Mac, and as the basename of its ps argv0. Unit specs only for the rest: the next live
+                            run starts a python and a node script stub and checks discovery, and prints their process
+                            names.
   stderr_missing_pane.txt   `tmux exited with 1: can't find pane: %999` for a paste-buffer to a missing pane (24c6bd1, as
                             the probe saw). `send` no longer gets there: see display_pane_gone.txt.
   no server                 `list-panes -a` against a socket path with no server returned an empty list and notified
