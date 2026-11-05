@@ -39,7 +39,7 @@ function M.prompt(opts)
   require("sidekick-ultra.actions").prompt(opts)
 end
 
----Pick a session or tool, attach it, optionally focus it.
+---Pick a session or tool and attach it. A tool that is started is focused unless `focus = false`.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.select(opts)
   require("sidekick-ultra.actions").select(opts)

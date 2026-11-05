@@ -26,9 +26,9 @@ end
 
 ---@return table map the global (not buffer-local) map for lhs in mode, with <leader> expanded now, or {}
 local function global(mode, lhs)
-  local want = vim.fn.keytrans(vim.api.nvim_replace_termcodes(lhs, true, true, true))
+  local want = vim.api.nvim_replace_termcodes(lhs, true, true, true)
   for _, m in ipairs(vim.api.nvim_get_keymap(mode)) do
-    if m.lhs == want then
+    if m.lhsraw == want then
       return m
     end
   end
@@ -149,6 +149,23 @@ describe("keys", function()
       expect.equality(global("n", "<leader>as"), {})
       expect.equality(map("n", "<leader>as").callback == mine, true)
       vim.keymap.del("n", "<leader>as", { buffer = 0 })
+    end)
+
+    it("never deletes a user's map that carries a copy of the plugin's callback", function()
+      vim.g.mapleader = " "
+      sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+      local copy = map("n", "<leader>as").callback
+      -- <Tab> (0x09) sorts before the plugin's " as" in nvim_get_keymap, so a lookup by callback alone finds it first.
+      vim.keymap.set("n", "<Tab>", copy, { desc = "mine" })
+      for _ = 1, 2 do
+        sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+        expect.equality(#ours(), 11)
+        expect.equality(global("n", "<leader>as").callback == copy, true)
+      end
+      sidekick.setup({ keys = false, herdr = { enabled = false }, rex = { enabled = false } })
+      expect.equality(#ours(), 0)
+      expect.equality(map("n", "<Tab>").callback == copy, true)
+      vim.keymap.del("n", "<Tab>")
     end)
 
     it("removes the previous set after mapleader changed, at the lhs it was defined at", function()
