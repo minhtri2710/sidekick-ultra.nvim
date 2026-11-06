@@ -77,24 +77,27 @@ end
 ---@param session sidekick_ultra.Session
 ---@param text string
 ---@param opts sidekick_ultra.ActionOpts
+---@return boolean reached_focus true when it got to its own focus step, whether or not that focus succeeded
 local function deliver(session, text, opts)
   local tool = tools.get(session.tool)
   if tool and tool.mux_focus then
     if not call(session, "send", FOCUS_IN) then
-      return
+      return false
     end
     M.sleep(FOCUS_WAIT_MS)
   end
   -- A render that is a single newline is delivered as that newline alone.
   if not call(session, "send", text == "\n" and text or text .. "\n") then
-    return
+    return false
   end
   if opts.submit and not call(session, "submit") then
-    return
+    return false
   end
-  if opts.focus then
-    call(session, "focus")
+  if not opts.focus then
+    return false
   end
+  call(session, "focus")
+  return true
 end
 
 ---Warn and return false when the render has no text to send.
@@ -112,14 +115,17 @@ end
 ---@param sessions sidekick_ultra.Session[]
 ---@param segments (string|sidekick_ultra.Location)[]
 ---@param opts sidekick_ultra.ActionOpts
+---@return boolean reached_focus whether the last delivery reached its own focus
 local function write(sessions, segments, opts)
   if in_visual() then
     vim.cmd("normal! \27")
   end
+  local reached_focus = false
   for _, session in ipairs(sessions) do
     local tool = tools.get(session.tool)
-    deliver(session, tools.format(segments, tool and tool.location), opts)
+    reached_focus = deliver(session, tools.format(segments, tool and tool.location), opts)
   end
+  return reached_focus
 end
 
 ---Render a message or prompt against the current context and send it to the target session(s).
@@ -188,12 +194,9 @@ function M.prompt(opts)
       return { name = name, preview = { text = tools.format(renders[name], tool and tool.location) } }
     end, listed)
     select_prompt(items, function(item)
-      local delivered = item ~= nil and has_text(renders[item.name])
-      if delivered then
-        write({ session }, renders[item.name], opts)
-      end
-      -- `deliver` focuses after the text when `focus = true`.
-      if started and opts.focus ~= false and not (delivered and opts.focus) then
+      local focused = item ~= nil and has_text(renders[item.name]) and write({ session }, renders[item.name], opts)
+      -- A delivery that reached its own focus (`focus = true`) has focused the session already.
+      if started and opts.focus ~= false and not focused then
         call(session, "focus")
       end
     end)
