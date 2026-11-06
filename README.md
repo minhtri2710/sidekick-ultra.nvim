@@ -88,7 +88,7 @@ What they do not have is an agent status. herdr and rex tell the plugin when an 
 - Neovim counts as inside zellij when `ZELLIJ` and `ZELLIJ_PANE_ID` are set. Calls inside zellij go to the current session (`ZELLIJ_SESSION_NAME`). Outside zellij, discovery asks every session in turn. There is no zellij option besides `enabled`.
 - zellij gives the plugin no process id. Discovery therefore goes by program name: a terminal pane counts when the first word of its running command (`pane_command`) is a configured tool, or, when that word is a node or python interpreter, when the script's name is (see below). Plugin panes and exited panes are skipped. The rest of the command line is never kept.
 - A session id is `zellij:<session>:terminal_<N>`.
-- With no process id there is no in-process liveness check. Whether an attached zellij session still runs takes one `list-panes` call, made when the statusline refreshes (at most every 5 s) and when attached sessions are listed. The other backends make no call for this.
+- With no process id there is no in-process liveness check. Whether an attached zellij session still runs takes one `list-panes` call, made when the statusline refreshes (at most every 5 s) and when attached sessions are listed. herdr, rex and tmux check the process in-process and make no call, unless a check fails: then one discovery refreshes the attached sessions first (a pane that just started may hold a launcher that has become the tool), and only sessions that still fail the check are detached.
 - zellij exits 0 when `write-chars` is sent to a pane that does not exist, and drops the text. So `send` first checks the pane, and a pane that is gone or has exited is refused before anything is written.
 - Start opens a pane to the right of Neovim's pane in Neovim's own session, without focus. zellij has no environment flag for it, so a tool `env` is passed as `/usr/bin/env K=V command`. `focus` focuses the pane by id.
 - Start returns once the new pane's program name is the tool, waiting up to 2 s while Neovim keeps running. If the name never shows, start fails and the new pane is left open.
@@ -167,7 +167,7 @@ require("sidekick-ultra.status").cli()
 -- { { id = "herdr:w1-1", tool = "claude", cwd = "...", backend = "herdr", state = "idle" }, ... }
 ```
 
-One entry per attached session, with `state` set when the backend reports one. The list is cached for 5 s. Refreshing it checks that each attached session still runs: an in-process pid check for herdr, rex and tmux, and one `zellij` call per attached zellij session. Events `User SidekickUltraAttach` and `User SidekickUltraDetach` carry `data = { id = ... }`.
+One entry per attached session, with `state` set when the backend reports one. The list is cached for 5 s. Refreshing it checks that each attached session still runs: an in-process pid check for herdr, rex and tmux (no call), and one `zellij` call per attached zellij session. When a check fails, one discovery refreshes the attached sessions before the failing ones are detached. Events `User SidekickUltraAttach` and `User SidekickUltraDetach` carry `data = { id = ... }`.
 
 ## Safety
 

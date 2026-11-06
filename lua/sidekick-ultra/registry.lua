@@ -112,15 +112,24 @@ function M.detach_all()
   end
 end
 
----The attached sessions sorted by id. Sessions that stopped running are detached first.
+---The attached sessions sorted by id. A session that fails the running check may only be a record taken at start
+---(a launcher or shell that became the tool), so one `discover()` first replaces the records by id; sessions that
+---still fail the check are then detached. With every check passing there is no discovery.
 ---@return sidekick_ultra.Session[]
 function M.attached()
   local ids = vim.tbl_keys(attached)
   table.sort(ids)
+  local failing = vim.tbl_filter(function(id)
+    return not M.is_running(attached[id])
+  end, ids)
+  if #failing > 0 then
+    M.discover()
+  end
   local ret = {}
   for _, id in ipairs(ids) do
-    if M.is_running(attached[id]) then
-      table.insert(ret, attached[id])
+    local session = attached[id]
+    if session and (not vim.tbl_contains(failing, id) or M.is_running(session)) then
+      table.insert(ret, session)
     else
       M.detach(id)
     end

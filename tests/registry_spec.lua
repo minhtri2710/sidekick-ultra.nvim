@@ -188,13 +188,94 @@ describe("registry", function()
       expect.equality(#events, 1)
     end)
 
-    it("drops attached sessions that stopped running", function()
+    it("detaches a session that fails the check and that its backend no longer lists, with the event", function()
+      local b = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
+      registry.register(b)
+      local s = fake.session("herdr", "claude")
+      registry.attach(s)
+      s.proc_name = "someone-else"
+      b.sessions = {}
+      expect.equality(registry.attached(), {})
+      expect.equality(#b.of("list"), 1)
+      settle()
+      expect.equality(events[#events], { registry.DETACH, "herdr:claude1" })
+    end)
+
+    it("detaches a session that fails the check when no backend lists it", function()
       local s = fake.session("herdr", "claude")
       registry.attach(s)
       s.proc_name = "someone-else"
       expect.equality(registry.attached(), {})
       settle()
       expect.equality(events[#events], { registry.DETACH, "herdr:claude1" })
+    end)
+
+    it("detaches a session that fails the check when its backend fails to list", function()
+      local b = fake.backend("herdr", { list_err = require("sidekick-ultra.errors").new("backend_error", "x") })
+      registry.register(b)
+      local s = fake.session("herdr", "claude")
+      registry.attach(s)
+      s.proc_name = "someone-else"
+      expect.equality(registry.attached(), {})
+      expect.equality(cap.ids(), { "backend_error" })
+      settle()
+      expect.equality(events[#events], { registry.DETACH, "herdr:claude1" })
+    end)
+
+    it("makes no list call while every attached session passes the check", function()
+      local b = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
+      registry.register(b)
+      registry.attach(fake.session("herdr", "claude"))
+      expect.equality(#registry.attached(), 1)
+      expect.equality(#registry.attached(), 1)
+      expect.equality(b.of("list"), {})
+    end)
+
+    it("discovers once for several failing sessions, keeping the ones the listing refreshes", function()
+      local b = fake.backend("herdr", {
+        sessions = { fake.session("herdr", "claude", 1, { state = "working" }) },
+      })
+      registry.register(b)
+      local one, two = fake.session("herdr", "claude", 1), fake.session("herdr", "claude", 2)
+      registry.attach(one)
+      registry.attach(two)
+      one.proc_name, two.proc_name = "exec-ed", "exec-ed"
+      local attached = registry.attached()
+      expect.equality(#b.of("list"), 1)
+      expect.equality(
+        vim.tbl_map(function(s)
+          return { s.id, s.state }
+        end, attached),
+        { { "herdr:claude1", "working" } }
+      )
+      settle()
+      expect.equality(events[#events], { registry.DETACH, "herdr:claude2" })
+    end)
+
+    it("keeps a started tool attached after its pane execs into the tool", function()
+      local b = fake.backend("herdr", { is_inside = true })
+      -- The backend records the new pane's launcher; by the time anything checks it, the pane runs the tool.
+      local start = b.start
+      function b.start(tool, o)
+        local session = start(tool, o)
+        session.proc_name = "launcher"
+        b.sessions = { fake.session("herdr", tool.name, "new1") }
+        return session
+      end
+      registry.register(b)
+      local pick = require("tests.helpers.ui").capture()
+      local target = require("sidekick-ultra.target")
+      local started = target.attach_state(target.states({ name = "codex" })[1])
+      local count = #pick.selects
+      local found
+      target.with_target({ attach = true }, function(sessions)
+        found = sessions[1].id
+      end)
+      pick.restore()
+      expect.equality({ found, #pick.selects - count }, { started.id, 0 })
+      expect.equality(#registry.attached(), 1)
+      local _, name = fake.self_proc()
+      expect.equality(registry.attached()[1].proc_name, name)
     end)
 
     it("returns the attached sessions sorted by id", function()
@@ -248,14 +329,14 @@ describe("registry", function()
     end)
 
     it("detaches an attached session its backend says stopped, and keeps one it says runs", function()
-      local b = fake.backend("zellij")
+      local one = fake.session("zellij", "claude", 1)
+      one.pid = nil
+      local b = fake.backend("zellij", { sessions = { one } })
       local alive = { ["zellij:claude1"] = true, ["zellij:claude2"] = false }
       b.is_running = function(session)
         return alive[session.id]
       end
       registry.register(b)
-      local one = fake.session("zellij", "claude", 1)
-      one.pid = nil
       registry.attach(one)
       registry.attach(fake.session("zellij", "claude", 2))
       expect.equality(
