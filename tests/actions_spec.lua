@@ -475,6 +475,51 @@ describe("actions", function()
         actions.prompt({ name = "codex", focus = true })
         expect.equality(methods(), { "list", "start", "focus" })
       end)
+
+      for _, case in ipairs({
+        {
+          "the text",
+          "codex",
+          { send = errors.new("session_blocked", "x") },
+          { submit = true },
+          { "list", "start", "picker", "send", "focus" },
+        },
+        {
+          "the focus-in",
+          "qwen",
+          { send = errors.new("status_unreadable", "x") },
+          {},
+          { "list", "start", "picker", "send", "focus" },
+        },
+        {
+          "the submit",
+          "codex",
+          { submit = errors.new("backend_error", "x") },
+          { submit = true },
+          { "list", "start", "picker", "send", "submit", "focus" },
+        },
+      }) do
+        local step, name, fail, extra, order = unpack(case)
+        for _, focus in ipairs({ true, "unset" }) do
+          it(
+            ("is focused exactly once when the backend refuses %s, focus = %s"):format(step, tostring(focus)),
+            function()
+              backend = fake.backend("herdr", { is_inside = true, fail = fail })
+              registry.register(backend)
+              pick.choose = function(items)
+                table.insert(backend.calls, { "picker" })
+                return choose("changes")(items)
+              end
+              actions.sleep = function() end
+              local opts = vim.tbl_extend("force", { name = name }, extra)
+              opts.focus = focus ~= "unset" or nil
+              actions.prompt(opts)
+              expect.equality(methods(), order)
+              expect.equality(#backend.of("focus"), 1)
+            end
+          )
+        end
+      end
     end)
 
     it("does not focus an attached session unless focus = true", function()
