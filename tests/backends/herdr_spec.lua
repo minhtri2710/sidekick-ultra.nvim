@@ -2,6 +2,8 @@ local backend_contract = require("sidekick-ultra.backend")
 local exec = require("sidekick-ultra.exec")
 local fake = require("tests.helpers.fake")
 local herdr = require("sidekick-ultra.backends.herdr")
+local notify = require("tests.helpers.notify")
+local registry = require("sidekick-ultra.registry")
 
 local expect = MiniTest.expect
 
@@ -284,6 +286,35 @@ describe("herdr backend", function()
       local sessions, err = herdr.list(tools())
       expect.equality(sessions, nil)
       expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "herdr", "pane list", 1 })
+    end)
+
+    it("lists no panes and reports nothing when no herdr server is running", function()
+      install(routes({ ["pane list"] = failing("server_not_running") }))
+      expect.equality({ herdr.list(tools()) }, { {} })
+      expect.equality(argvs(), { { "herdr", "pane", "list" } })
+      local cap = notify.capture()
+      registry.register(herdr)
+      expect.equality(registry.discover(), {})
+      cap.restore()
+      registry.reset()
+      expect.equality(cap.calls, {})
+    end)
+
+    it("still reports every other pane list failure with its text", function()
+      for stderr, text in pairs({
+        [failing("server_unavailable").stderr] = "herdr exited with 1: "
+          .. fixture("server_unavailable"):gsub("\n", ""),
+        ["not json\n"] = "herdr exited with 1: not json",
+        ["\n"] = "herdr exited with 1",
+      }) do
+        install(routes({ ["pane list"] = { code = 1, stdout = "", stderr = stderr } }))
+        local sessions, err = herdr.list(tools())
+        expect.equality(sessions, nil)
+        expect.equality(
+          { err.id, err.backend, err.cmd, err.code, err.msg },
+          { "backend_error", "herdr", "pane list", 1, text }
+        )
+      end
     end)
 
     it("reports a failing process-info as backend_error", function()
