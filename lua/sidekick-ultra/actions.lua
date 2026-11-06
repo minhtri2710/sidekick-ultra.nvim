@@ -152,7 +152,6 @@ local function label(item)
 end
 
 local PICKER_MIN_WIDTH = 40
-local PICKER_MAX_WIDTH = 100 -- the `select` preset's `max_width` (`snacks/picker/config/layouts.lua`, `M.select`)
 local PICKER_MARGIN = 8 -- columns left free beside the box (its own border adds 2 more)
 local LIST_MIN, LIST_MAX = 2, 10
 -- Rows in the box besides the list and the preview text: the input and its bottom border, and the preview's top border.
@@ -165,7 +164,9 @@ local NUMBER_MIN = 4 -- the preview's number column, which snacks leaves on (`nu
 ---list `height` and the preview `height`, all absolute (>= 1: `snacks/win.lua`, `M:dim`), so the box shrinks to fit
 ---the children (`snacks/layout.lua`, `M:update_box`). `select_prompt` turns the preview's `wrap` off whatever the
 ---user's `wrap` is, so a line takes one row and one longer than the width is cut at the edge. The width stops at the
----`select` preset's `PICKER_MAX_WIDTH`. The box stays `BOX_FREE_ROWS` short of the screen while the chrome, one list
+---inner width snacks gives its own `select` picker: the preset (`layouts.lua`, `M.select`) is `width = 0.5` (less the
+---border's 2 columns), `min_width = 80`, `max_width = 100`, applied in `snacks/win.lua`, `M:dim` (`size`, then the
+---`ret.width` clamps). The box stays `BOX_FREE_ROWS` short of the screen while the chrome, one list
 ---row and one preview row fit in it (`lines >= 9`). Below that the box is its floor of 5 rows (7 with its border): a
 ---list row and a preview row are the least snacks can draw, and the box would clip or cover the command line.
 ---@param items table[]
@@ -183,7 +184,8 @@ local function fit_layout(items)
       need = math.max(need, vim.fn.strdisplaywidth(line) + number)
     end
   end
-  local width = math.min(math.max(need, PICKER_MIN_WIDTH), PICKER_MAX_WIDTH, columns - PICKER_MARGIN)
+  local normal = math.min(math.max(math.floor(columns * 0.5) - 2, 80), 100)
+  local width = math.min(math.max(need, PICKER_MIN_WIDTH), normal, columns - PICKER_MARGIN)
 
   -- Rows for the list and the preview together, keeping the box `BOX_FREE_ROWS` short of the screen. The list gives way
   -- first, down to one row, so the preview keeps a row; the preview takes what is left, up to half the screen.

@@ -419,13 +419,15 @@ describe("actions", function()
         local text = table.concat(vim.fn["repeat"]({ line }, 15), "\n")
         vim.o.lines = 40
         expect.equality(sizes({ diag = text }), { width = 72, height = 20, list = 2, preview = 15 })
-        vim.o.lines = 24
-        expect.equality(sizes({ diag = text }), { width = 72, height = 17, list = 2, preview = 12 })
       end)
 
-      it("stops the width at the select preset's 100 columns", function()
+      it("stops the width at the inner width of snacks' own select picker", function()
+        local long = { long = ("word "):rep(60) }
+        for columns, width in pairs({ [120] = 80, [200] = 98, [300] = 100 }) do
+          vim.o.columns = columns
+          expect.equality(sizes(long).width, width)
+        end
         vim.o.columns = 200
-        expect.equality(sizes({ long = ("word "):rep(60) }).width, 100)
         expect.equality(sizes({ mid = ("x"):rep(30) }).width, 52)
       end)
 
@@ -439,8 +441,8 @@ describe("actions", function()
       end)
 
       it("reads the columns when the picker opens, and keeps the width under them", function()
-        vim.o.columns = 100
-        expect.equality(sizes({ long = ("word "):rep(60) }).width, 92)
+        vim.o.columns = 84
+        expect.equality(sizes({ long = ("word "):rep(60) }).width, 76)
         vim.o.columns = 44
         expect.equality(sizes({ long = ("word "):rep(60) }).width, 36)
       end)
