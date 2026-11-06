@@ -58,7 +58,8 @@
 ---@field focus fun(session: sidekick_ultra.Session): true?, sidekick_ultra.Error?
 ---Optional. Whether the session still runs; when defined, `registry.is_running` returns its result and never does the
 ---pid and name check. It may call the mux through `sidekick-ultra.exec`. It runs on every status refresh (at most every
----5 s) and when attached sessions are listed, so keep it to a single cheap call. Backends without it need `pid`.
+---5 s) and when attached sessions are listed, so keep it to a single cheap call. A failed check also triggers one
+---discovery (every registered backend's `list`) before the session is detached. Backends without it need `pid`.
 ---@field is_running? fun(session: sidekick_ultra.Session): boolean
 
 local M = {}
