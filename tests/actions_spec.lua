@@ -212,16 +212,6 @@ describe("actions", function()
         expect.equality(registry.attached()[1].id, "herdr:codexnew1")
         expect.equality(backend.delivered, { "hi\n" })
       end)
-
-      it("gives prompt the same start focus", function()
-        started_backend()
-        pick.choose = function(items)
-          return items[1]
-        end
-        actions.prompt({ name = "codex", focus = false })
-        expect.equality(backend.of("focus"), {})
-        expect.equality(#backend.of("start"), 1)
-      end)
     end)
 
     it("picks among several attached sessions", function()
@@ -365,12 +355,11 @@ describe("actions", function()
       expect.equality(cap.calls, {})
     end)
 
-    it("passes the snacks preview option and an exact preview text per item", function()
+    it("passes the snacks preview option with the preview pane shown, and an exact preview text", function()
       attached({ "codex" })
       pick.choose = function() end
       actions.prompt({})
-      expect.equality(pick.selects[1].opts.snacks, { preview = "preview" })
-      expect.equality(pick.selects[1].items[1].preview, { text = preview(pick.selects[1].items[1].name) })
+      expect.equality(pick.selects[1].opts.snacks, { preview = "preview", layout = { hidden = {} } })
       expect.equality(preview("changes"), "Can you review my changes?")
     end)
 
@@ -431,19 +420,91 @@ describe("actions", function()
       expect.equality(backend.of("send"), { { "send", "herdr:codex1", "Can you review my changes?\n" } })
     end)
 
-    it("starts the only matching tool before the prompt picker, then sends to it", function()
+    describe("a tool it starts", function()
+      local function started_backend()
+        backend = fake.backend("herdr", { is_inside = true })
+        registry.register(backend)
+        pick.choose = function(items)
+          table.insert(backend.calls, { "picker" })
+          return choose("changes")(items)
+        end
+      end
+
+      it("is started before the prompt picker, focused only after the delivery", function()
+        started_backend()
+        actions.prompt({ name = "codex" })
+        expect.equality(methods(), { "list", "start", "picker", "send", "focus" })
+        expect.equality(
+          vim.tbl_map(function(select)
+            return select.opts.prompt
+          end, pick.selects),
+          { "sidekick-ultra prompt" }
+        )
+        expect.equality(backend.of("send"), { { "send", "herdr:codexnew1", "Can you review my changes?\n" } })
+        expect.equality(backend.of("focus"), { { "focus", "herdr:codexnew1" } })
+      end)
+
+      it("is focused after a cancel, nothing is sent, and it stays attached", function()
+        started_backend()
+        pick.choose = function()
+          table.insert(backend.calls, { "picker" })
+        end
+        actions.prompt({ name = "codex" })
+        expect.equality(methods(), { "list", "start", "picker", "focus" })
+        expect.equality(registry.attached()[1].id, "herdr:codexnew1")
+      end)
+
+      it("is never focused with focus = false, by a choice or a cancel", function()
+        started_backend()
+        actions.prompt({ name = "codex", focus = false })
+        expect.equality(methods(), { "list", "start", "picker", "send" })
+        registry.detach("herdr:codexnew1")
+        backend.calls = {}
+        pick.choose = function() end
+        actions.prompt({ name = "codex", focus = false })
+        expect.equality(methods(), { "list", "start" })
+      end)
+
+      it("is focused exactly once with focus = true, by a choice or a cancel", function()
+        started_backend()
+        actions.prompt({ name = "codex", focus = true })
+        expect.equality(methods(), { "list", "start", "picker", "send", "focus" })
+        registry.detach("herdr:codexnew1")
+        backend.calls = {}
+        pick.choose = function() end
+        actions.prompt({ name = "codex", focus = true })
+        expect.equality(methods(), { "list", "start", "focus" })
+      end)
+    end)
+
+    it("does not focus an attached session unless focus = true", function()
+      attached({ "claude" })
+      pick.choose = choose("changes")
+      actions.prompt({})
+      expect.equality(methods(), { "send" })
+    end)
+
+    it("notifies a msg that does not render and opens no picker, starts nothing", function()
       backend = fake.backend("herdr", { is_inside = true })
       registry.register(backend)
-      pick.choose = choose("changes")
-      actions.prompt({ name = "codex" })
-      expect.equality(methods(), { "list", "start", "focus", "send" })
-      expect.equality(
-        vim.tbl_map(function(select)
-          return select.opts.prompt
-        end, pick.selects),
-        { "sidekick-ultra prompt" }
-      )
-      expect.equality(backend.calls[4], { "send", "herdr:codexnew1", "Can you review my changes?\n" })
+      actions.prompt({ name = "codex", msg = "see {function}" })
+      expect.equality(cap.ids(), { "render_failed" })
+      expect.equality(#pick.selects, 0)
+      expect.equality(backend.calls, {})
+    end)
+
+    it("opens an empty picker without resolving a target when no prompt renders", function()
+      local none = {}
+      for name in pairs(require("sidekick-ultra.context.render").default_prompts) do
+        none[name] = false
+      end
+      fake.reset({ claude = { cmd = fake.INSTALLED } }, { prompts = none })
+      backend = fake.backend("herdr", { is_inside = true })
+      registry.register(backend)
+      actions.prompt({ name = "claude" })
+      expect.equality(#pick.selects, 1)
+      expect.equality(pick.selects[1].items, {})
+      expect.equality(backend.calls, {})
     end)
 
     it("opens no target picker when one session is attached", function()
@@ -466,16 +527,6 @@ describe("actions", function()
       actions.prompt({})
       expect.equality(#pick.selects, 2)
       expect.equality(backend.calls, { { "send", "herdr:gemini1", "@my\\ file.lua\n" } })
-    end)
-
-    it("sends nothing when the prompt picker is cancelled, and keeps a started tool attached", function()
-      backend = fake.backend("herdr", { is_inside = true })
-      registry.register(backend)
-      pick.choose = function() end
-      actions.prompt({ name = "codex" })
-      expect.equality(backend.of("send"), {})
-      expect.equality(#backend.of("start"), 1)
-      expect.equality(registry.attached()[1].id, "herdr:codexnew1")
     end)
 
     it("applies submit and focus to the delivery", function()

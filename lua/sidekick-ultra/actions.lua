@@ -139,34 +139,62 @@ function M.send(opts)
   end)
 end
 
+---Open the prompt picker. snacks hides the preview of `vim.ui.select` unless the layout's `hidden` list is emptied
+---(`snacks/picker/config/layouts.lua`, `M.select`); other pickers ignore `snacks`.
+---@param items table[]
+---@param on_choice fun(item?: table)
+local function select_prompt(items, on_choice)
+  vim.ui.select(items, {
+    prompt = "sidekick-ultra prompt",
+    format_item = function(item)
+      return ("%-18s %s"):format(item.name, (render.display(item.name):gsub("\n", "\\n")))
+    end,
+    snacks = { preview = "preview", layout = { hidden = {} } },
+  }, on_choice)
+end
+
 ---Pick the target session first, then a prompt from the library, and send it to that session. The picker previews
----the exact text for that session's tool. Prompts that cannot render in this context are not listed.
+---the exact text for that session's tool. Prompts that cannot render in this context are not listed. A tool this
+---starts is focused once the picker closes (not before, which would take the keys from it) unless `focus = false`.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.prompt(opts)
   opts = opts or {}
   local snap = snapshot.capture()
-  target.with_target({ filter = filter_of(opts), attach = true, focus = opts.focus }, function(sessions)
+  if opts.msg then
+    local _, err = compose({ msg = opts.msg }, snap)
+    if err then
+      errors.notify(err)
+      return
+    end
+  end
+  local names = vim.tbl_keys(render.prompts())
+  table.sort(names)
+  local renders, listed = {}, {}
+  for _, name in ipairs(names) do
+    local segments = compose(vim.tbl_extend("force", opts, { prompt = name }), snap)
+    if segments then
+      renders[name] = segments
+      table.insert(listed, name)
+    end
+  end
+  if #listed == 0 then
+    select_prompt({}, function() end)
+    return
+  end
+  target.with_target({ filter = filter_of(opts), attach = true, focus = false }, function(sessions, started)
     local session = sessions[1]
     local tool = tools.get(session.tool)
-    local names = vim.tbl_keys(render.prompts())
-    table.sort(names)
-    local items, renders = {}, {}
-    for _, name in ipairs(names) do
-      local segments = compose(vim.tbl_extend("force", opts, { prompt = name }), snap)
-      if segments then
-        renders[name] = segments
-        table.insert(items, { name = name, preview = { text = tools.format(segments, tool and tool.location) } })
+    local items = vim.tbl_map(function(name)
+      return { name = name, preview = { text = tools.format(renders[name], tool and tool.location) } }
+    end, listed)
+    select_prompt(items, function(item)
+      local delivered = item ~= nil and has_text(renders[item.name])
+      if delivered then
+        write({ session }, renders[item.name], opts)
       end
-    end
-    vim.ui.select(items, {
-      prompt = "sidekick-ultra prompt",
-      format_item = function(item)
-        return ("%-18s %s"):format(item.name, (render.display(item.name):gsub("\n", "\\n")))
-      end,
-      snacks = { preview = "preview" },
-    }, function(item)
-      if item and has_text(renders[item.name]) then
-        write({ session }, renders[item.name], vim.tbl_extend("force", opts, { prompt = item.name }))
+      -- `deliver` focuses after the text when `focus = true`.
+      if started and opts.focus ~= false and not (delivered and opts.focus) then
+        call(session, "focus")
       end
     end)
   end)
