@@ -97,51 +97,106 @@ local function deliver(session, text, opts)
   end
 end
 
+---Warn and return false when the render has no text to send.
+---@param segments (string|sidekick_ultra.Location)[]
+---@return boolean
+local function has_text(segments)
+  if tools.format(segments) == "" then
+    errors.notify(errors.new("nothing_to_send", "nothing to send"))
+    return false
+  end
+  return true
+end
+
+---Leave visual mode, then write the render to each session in its tool's location style.
+---@param sessions sidekick_ultra.Session[]
+---@param segments (string|sidekick_ultra.Location)[]
+---@param opts sidekick_ultra.ActionOpts
+local function write(sessions, segments, opts)
+  if in_visual() then
+    vim.cmd("normal! \27")
+  end
+  for _, session in ipairs(sessions) do
+    local tool = tools.get(session.tool)
+    deliver(session, tools.format(segments, tool and tool.location), opts)
+  end
+end
+
 ---Render a message or prompt against the current context and send it to the target session(s).
 ---@param opts? sidekick_ultra.ActionOpts
----@param snap? sidekick_ultra.Snapshot taken now when omitted
-function M.send(opts, snap)
+function M.send(opts)
   opts = opts or {}
-  snap = snap or snapshot.capture()
-  local segments, err = compose(opts, snap)
+  local segments, err = compose(opts, snapshot.capture())
   if not segments then
     errors.notify(err)
     return
   end
-  if tools.format(segments) == "" then
-    errors.notify(errors.new("nothing_to_send", "nothing to send"))
+  if not has_text(segments) then
     return
   end
   target.with_target({ filter = filter_of(opts), attach = true, focus = opts.focus }, function(sessions)
-    if in_visual() then
-      vim.cmd("normal! \27")
-    end
-    for _, session in ipairs(sessions) do
-      local tool = tools.get(session.tool)
-      deliver(session, tools.format(segments, tool and tool.location), opts)
-    end
+    write(sessions, segments, opts)
   end)
 end
 
----Pick a prompt from the library and send it. Prompts that cannot render in this context are not listed.
+---Open the prompt picker. snacks hides the preview of `vim.ui.select` unless the layout's `hidden` list is emptied
+---(`snacks/picker/config/layouts.lua`, `M.select`); other pickers ignore `snacks`.
+---@param items table[]
+---@param on_choice fun(item?: table)
+local function select_prompt(items, on_choice)
+  vim.ui.select(items, {
+    prompt = "sidekick-ultra prompt",
+    format_item = function(item)
+      return ("%-18s %s"):format(item.name, (render.display(item.name):gsub("\n", "\\n")))
+    end,
+    snacks = { preview = "preview", layout = { hidden = {} } },
+  }, on_choice)
+end
+
+---Pick the target session first, then a prompt from the library, and send it to that session. The picker previews
+---the exact text for that session's tool. Prompts that cannot render in this context are not listed. A tool this
+---starts is focused once the picker closes (not before, which would take the keys from it) unless `focus = false`.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.prompt(opts)
   opts = opts or {}
   local snap = snapshot.capture()
+  if opts.msg then
+    local _, err = compose({ msg = opts.msg }, snap)
+    if err then
+      errors.notify(err)
+      return
+    end
+  end
   local names = vim.tbl_keys(render.prompts())
   table.sort(names)
-  local items = vim.tbl_filter(function(name)
-    return render.build({ prompt = name }, snap) ~= nil
-  end, names)
-  vim.ui.select(items, {
-    prompt = "sidekick-ultra prompt",
-    format_item = function(name)
-      return ("%-18s %s"):format(name, (render.display(name):gsub("\n", "\\n")))
-    end,
-  }, function(name)
-    if name then
-      M.send(vim.tbl_extend("force", opts, { prompt = name }), snap)
+  local renders, listed = {}, {}
+  for _, name in ipairs(names) do
+    local segments = compose(vim.tbl_extend("force", opts, { prompt = name }), snap)
+    if segments then
+      renders[name] = segments
+      table.insert(listed, name)
     end
+  end
+  if #listed == 0 then
+    select_prompt({}, function() end)
+    return
+  end
+  target.with_target({ filter = filter_of(opts), attach = true, focus = false }, function(sessions, started)
+    local session = sessions[1]
+    local tool = tools.get(session.tool)
+    local items = vim.tbl_map(function(name)
+      return { name = name, preview = { text = tools.format(renders[name], tool and tool.location) } }
+    end, listed)
+    select_prompt(items, function(item)
+      local delivered = item ~= nil and has_text(renders[item.name])
+      if delivered then
+        write({ session }, renders[item.name], opts)
+      end
+      -- `deliver` focuses after the text when `focus = true`.
+      if started and opts.focus ~= false and not (delivered and opts.focus) then
+        call(session, "focus")
+      end
+    end)
   end)
 end
 

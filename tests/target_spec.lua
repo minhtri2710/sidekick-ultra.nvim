@@ -271,6 +271,25 @@ describe("target", function()
       expect.equality({ #b.of("start"), #b.of("focus") }, { 1, 0 })
     end)
 
+    it("tells the callback whether this call started the tool", function()
+      local b = fake.backend("herdr", {
+        is_inside = true,
+        sessions = { fake.session("herdr", "claude") },
+      })
+      registry.register(b)
+      pick.choose = function(items)
+        return items[1]
+      end
+      local flags = {}
+      local function record(_, started)
+        table.insert(flags, started or false)
+      end
+      target.with_target({ attach = true, filter = { name = "codex" } }, record)
+      target.with_target({ attach = true, filter = { name = "claude" } }, record)
+      target.with_target({ filter = { name = "claude" } }, record)
+      expect.equality(flags, { true, false, false })
+    end)
+
     it("reports no_match when nothing is attached and the action may not attach", function()
       expect.equality(run({}), nil)
       expect.equality(cap.ids(), { "no_match" })

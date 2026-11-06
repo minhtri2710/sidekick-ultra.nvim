@@ -224,7 +224,8 @@ end
 ---no attached match and the action may attach: pick over every matching state and attach it;
 ---several attached matches and not `all`: pick one of them; otherwise every attached match.
 ---@param opts sidekick_ultra.TargetOpts
----@param cb fun(sessions: sidekick_ultra.Session[])
+---`cb` also gets `started`: true when this call started the tool of the one session it passes.
+---@param cb fun(sessions: sidekick_ultra.Session[], started?: boolean)
 function M.with_target(opts, cb)
   local matching = M.attached_states(opts.filter)
   if #matching == 0 then
@@ -233,9 +234,9 @@ function M.with_target(opts, cb)
       return
     end
     M.pick(M.states(opts.filter), { auto = true }, function(state)
-      local session = M.attach_state(state, { focus = opts.focus })
+      local session, started = M.attach_state(state, { focus = opts.focus })
       if session then
-        cb({ session })
+        cb({ session }, started)
       end
     end)
   elseif #matching > 1 and not opts.all then

@@ -212,16 +212,6 @@ describe("actions", function()
         expect.equality(registry.attached()[1].id, "herdr:codexnew1")
         expect.equality(backend.delivered, { "hi\n" })
       end)
-
-      it("gives prompt the same start focus", function()
-        started_backend()
-        pick.choose = function(items)
-          return items[1]
-        end
-        actions.prompt({ name = "codex", focus = false })
-        expect.equality(backend.of("focus"), {})
-        expect.equality(#backend.of("start"), 1)
-      end)
     end)
 
     it("picks among several attached sessions", function()
@@ -288,19 +278,47 @@ describe("actions", function()
   end)
 
   describe("prompt", function()
+    local function names(items)
+      return vim.tbl_map(function(item)
+        return item.name
+      end, items)
+    end
+
+    ---Choose the item called `name` in a prompt picker.
+    local function choose(name)
+      return function(items)
+        return vim.tbl_filter(function(item)
+          return item.name == name
+        end, items)[1]
+      end
+    end
+
+    ---The preview text of the item called `name` in the last picker.
+    local function preview(name)
+      local items = pick.selects[#pick.selects].items
+      return vim.tbl_filter(function(item)
+        return item.name == name
+      end, items)[1].preview.text
+    end
+
+    local function file_buffer()
+      local file = tmp .. "/my file.lua"
+      vim.fn.writefile({ "x" }, file)
+      vim.cmd("cd " .. vim.fn.fnameescape(tmp))
+      vim.cmd("edit " .. vim.fn.fnameescape(file))
+    end
+
     it("lists the renderable prompts sorted, shows name and raw template, and sends the choice", function()
       attached({ "codex" })
-      pick.choose = function()
-        return "changes"
-      end
+      pick.choose = choose("changes")
       actions.prompt({})
-      local items = pick.selects[1].items
-      expect.equality(items, vim.fn.sort(vim.deepcopy(items)))
-      expect.equality(vim.tbl_contains(items, "changes"), true)
+      local listed = names(pick.selects[1].items)
+      expect.equality(listed, vim.fn.sort(vim.deepcopy(listed)))
+      expect.equality(vim.tbl_contains(listed, "changes"), true)
       -- A scratch buffer has no file, so every prompt that needs {function}, {this}-selection, ... is left out.
-      expect.equality(vim.tbl_contains(items, "explain"), false)
-      expect.equality(vim.tbl_contains(items, "diagnostics"), false)
-      local shown = pick.selects[1].opts.format_item("diagnostics_all")
+      expect.equality(vim.tbl_contains(listed, "explain"), false)
+      expect.equality(vim.tbl_contains(listed, "diagnostics"), false)
+      local shown = pick.selects[1].opts.format_item({ name = "diagnostics_all", preview = { text = "x" } })
       expect.equality(
         shown,
         ("%-18s %s"):format("diagnostics_all", "Can you help me fix these diagnostics?\\n{diagnostics_all}")
@@ -317,7 +335,7 @@ describe("actions", function()
         return nil
       end
       actions.prompt({})
-      local items = pick.selects[1].items
+      local listed = names(pick.selects[1].items)
       for _, name in ipairs({
         "changes",
         "explain",
@@ -330,11 +348,218 @@ describe("actions", function()
         "position",
         "buffers",
       }) do
-        expect.equality(vim.tbl_contains(items, name), true)
+        expect.equality(vim.tbl_contains(listed, name), true)
       end
-      expect.equality(vim.tbl_contains(items, "function"), false)
+      expect.equality(vim.tbl_contains(listed, "function"), false)
       expect.equality(backend.calls, {})
       expect.equality(cap.calls, {})
+    end)
+
+    it("passes the snacks preview option with the preview pane shown, and an exact preview text", function()
+      attached({ "codex" })
+      pick.choose = function() end
+      actions.prompt({})
+      expect.equality(pick.selects[1].opts.snacks, { preview = "preview", layout = { hidden = {} } })
+      expect.equality(preview("changes"), "Can you review my changes?")
+    end)
+
+    for _, case in ipairs({
+      { tool = "codex", text = "@my file.lua" },
+      { tool = "claude", text = '@"my file.lua"' },
+      { tool = "gemini", text = "@my\\ file.lua" },
+    }) do
+      it("previews exactly the text sent to " .. case.tool .. " (its location style)", function()
+        file_buffer()
+        attached({ case.tool })
+        pick.choose = choose("file")
+        actions.prompt({})
+        expect.equality(preview("file"), case.text)
+        expect.equality(backend.delivered, { case.text .. "\n" })
+      end)
+    end
+
+    it("previews the style of the tool picked first, not of another attachable tool", function()
+      file_buffer()
+      backend = fake.backend("herdr", {
+        sessions = { fake.session("herdr", "claude"), fake.session("herdr", "gemini") },
+      })
+      registry.register(backend)
+      pick.choose = function(items)
+        if items[1].preview == nil then
+          return vim.tbl_filter(function(state)
+            return state.name == "gemini"
+          end, items)[1]
+        end
+        return choose("file")(items)
+      end
+      actions.prompt({})
+      expect.equality(preview("file"), "@my\\ file.lua")
+      expect.equality(backend.delivered, { "@my\\ file.lua\n" })
+    end)
+
+    it("picks the target before the prompt picker when nothing is attached", function()
+      backend = fake.backend("herdr", {
+        sessions = { fake.session("herdr", "claude"), fake.session("herdr", "codex") },
+      })
+      registry.register(backend)
+      pick.choose = function(items)
+        if items[1].preview then
+          return choose("changes")(items)
+        end
+        return vim.tbl_filter(function(state)
+          return state.name == "codex" and state.started
+        end, items)[1]
+      end
+      actions.prompt({})
+      expect.equality(
+        vim.tbl_map(function(select)
+          return select.opts.prompt
+        end, pick.selects),
+        { "sidekick-ultra", "sidekick-ultra prompt" }
+      )
+      expect.equality(backend.of("send"), { { "send", "herdr:codex1", "Can you review my changes?\n" } })
+    end)
+
+    describe("a tool it starts", function()
+      local function started_backend()
+        backend = fake.backend("herdr", { is_inside = true })
+        registry.register(backend)
+        pick.choose = function(items)
+          table.insert(backend.calls, { "picker" })
+          return choose("changes")(items)
+        end
+      end
+
+      it("is started before the prompt picker, focused only after the delivery", function()
+        started_backend()
+        actions.prompt({ name = "codex" })
+        expect.equality(methods(), { "list", "start", "picker", "send", "focus" })
+        expect.equality(
+          vim.tbl_map(function(select)
+            return select.opts.prompt
+          end, pick.selects),
+          { "sidekick-ultra prompt" }
+        )
+        expect.equality(backend.of("send"), { { "send", "herdr:codexnew1", "Can you review my changes?\n" } })
+        expect.equality(backend.of("focus"), { { "focus", "herdr:codexnew1" } })
+      end)
+
+      it("is focused after a cancel, nothing is sent, and it stays attached", function()
+        started_backend()
+        pick.choose = function()
+          table.insert(backend.calls, { "picker" })
+        end
+        actions.prompt({ name = "codex" })
+        expect.equality(methods(), { "list", "start", "picker", "focus" })
+        expect.equality(registry.attached()[1].id, "herdr:codexnew1")
+      end)
+
+      it("is never focused with focus = false, by a choice or a cancel", function()
+        started_backend()
+        actions.prompt({ name = "codex", focus = false })
+        expect.equality(methods(), { "list", "start", "picker", "send" })
+        registry.detach("herdr:codexnew1")
+        backend.calls = {}
+        pick.choose = function() end
+        actions.prompt({ name = "codex", focus = false })
+        expect.equality(methods(), { "list", "start" })
+      end)
+
+      it("is focused exactly once with focus = true, by a choice or a cancel", function()
+        started_backend()
+        actions.prompt({ name = "codex", focus = true })
+        expect.equality(methods(), { "list", "start", "picker", "send", "focus" })
+        registry.detach("herdr:codexnew1")
+        backend.calls = {}
+        pick.choose = function() end
+        actions.prompt({ name = "codex", focus = true })
+        expect.equality(methods(), { "list", "start", "focus" })
+      end)
+    end)
+
+    it("does not focus an attached session unless focus = true", function()
+      attached({ "claude" })
+      pick.choose = choose("changes")
+      actions.prompt({})
+      expect.equality(methods(), { "send" })
+    end)
+
+    it("notifies a msg that does not render and opens no picker, starts nothing", function()
+      backend = fake.backend("herdr", { is_inside = true })
+      registry.register(backend)
+      actions.prompt({ name = "codex", msg = "see {function}" })
+      expect.equality(cap.ids(), { "render_failed" })
+      expect.equality(#pick.selects, 0)
+      expect.equality(backend.calls, {})
+    end)
+
+    it("opens an empty picker without resolving a target when no prompt renders", function()
+      local none = {}
+      for name in pairs(require("sidekick-ultra.context.render").default_prompts) do
+        none[name] = false
+      end
+      fake.reset({ claude = { cmd = fake.INSTALLED } }, { prompts = none })
+      backend = fake.backend("herdr", { is_inside = true })
+      registry.register(backend)
+      actions.prompt({ name = "claude" })
+      expect.equality(#pick.selects, 1)
+      expect.equality(pick.selects[1].items, {})
+      expect.equality(backend.calls, {})
+    end)
+
+    it("opens no target picker when one session is attached", function()
+      attached({ "claude" })
+      pick.choose = choose("changes")
+      actions.prompt({})
+      expect.equality(#pick.selects, 1)
+      expect.equality(pick.selects[1].opts.prompt, "sidekick-ultra prompt")
+    end)
+
+    it("delivers to the session picked first when several are attached, with no second pick", function()
+      file_buffer()
+      attached({ "claude", "gemini" })
+      pick.choose = function(items)
+        if items[1].preview == nil then
+          return items[2]
+        end
+        return choose("file")(items)
+      end
+      actions.prompt({})
+      expect.equality(#pick.selects, 2)
+      expect.equality(backend.calls, { { "send", "herdr:gemini1", "@my\\ file.lua\n" } })
+    end)
+
+    it("applies submit and focus to the delivery", function()
+      attached({ "claude" })
+      pick.choose = choose("changes")
+      actions.prompt({ submit = true, focus = true })
+      expect.equality(methods(), { "send", "submit", "focus" })
+    end)
+
+    it("warns nothing_to_send for a prompt that renders empty, and sends nothing", function()
+      fake.reset({ claude = { cmd = fake.INSTALLED } }, {
+        prompts = {
+          blank = function()
+            return ""
+          end,
+        },
+      })
+      attached({ "claude" })
+      pick.choose = choose("blank")
+      actions.prompt({})
+      expect.equality(cap.ids(), { "nothing_to_send" })
+      expect.equality(backend.calls, {})
+    end)
+
+    it("leaves visual mode before it writes", function()
+      attached({ "claude" })
+      scratch({ "alpha", "beta", "gamma" })
+      vim.cmd("normal! ggVj")
+      expect.equality(vim.fn.mode(), "V")
+      pick.choose = choose("selection")
+      actions.prompt({})
+      expect.equality(backend.delivered, { "alpha\nbeta\n" })
+      expect.equality(vim.fn.mode(), "n")
     end)
   end)
 
