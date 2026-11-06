@@ -1,6 +1,9 @@
----The program a command line runs, for the multiplexer backends that only see a command line: a tool installed as a
+---The program a command line runs, for the backends that only see a command line or a process name: a tool installed as a
 ---node or python script runs as its interpreter (`node /opt/bin/gemini ...`), so the script's name stands for it. Only
 ---the script word is read. The command line is a local value here and is never returned, stored or logged.
+local errors = require("sidekick-ultra.errors")
+local exec = require("sidekick-ultra.exec")
+
 local M = {}
 
 ---@param list string[]
@@ -249,6 +252,43 @@ function M.program(line)
     name = python_script(rest)
   end
   return name or ""
+end
+
+---What a process is tested as: its name, or for an interpreter the name of the script it runs, read from one `ps` call.
+---The command line is a local value here: it is parsed and dropped, and a failing ps reports the pid, the exit code
+---and the first stderr line, never stdout.
+---`ps -p <pid>` for a pid that no longer exists exits 1 and prints nothing on either stream (seen on macOS; the macOS
+---man page states no exit status for it). That is a process that ended after nvim read its name, which is ordinary for
+---short-lived helpers: it is skipped. Any other failure, and exit 0 with nothing printed, is an error.
+---@param pid integer
+---@param name string the process name nvim or the multiplexer reads
+---@param backend string the backend named in an error
+---@return string? program the script's name ("" when the interpreter runs none); nil when the process is gone
+---@return sidekick_ultra.Error? err
+function M.of(pid, name, backend)
+  if not M.is_interpreter(name) then
+    return name
+  end
+  local res, err = exec.run({ "ps", "-ww", "-o", "args=", "-p", tostring(pid) }, { backend = backend, cmd = "ps" })
+  if not res then
+    return nil, err
+  end
+  if res.code == 1 and res.stdout == "" and res.stderr == "" then
+    return nil
+  end
+  local program = res.code == 0 and M.program(res.stdout) or nil
+  if program then
+    return program
+  end
+  local first = vim.split(res.stderr, "\n", { plain = true })[1]
+  local msg = res.code == 0 and ("ps printed nothing for pid %d"):format(pid)
+    or ("ps exited with %d for pid %d"):format(res.code, pid)
+  return nil,
+    errors.new("backend_error", first ~= "" and (msg .. ": " .. first) or msg, {
+      backend = backend,
+      cmd = "ps",
+      code = res.code,
+    })
 end
 
 return M

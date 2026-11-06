@@ -331,7 +331,8 @@ describe("registry", function()
     it("detaches an attached session its backend says stopped, and keeps one it says runs", function()
       local one = fake.session("zellij", "claude", 1)
       one.pid = nil
-      local b = fake.backend("zellij", { sessions = { one } })
+      -- The listing holds both, so claude2 is detached by its failing check and not by being unlisted.
+      local b = fake.backend("zellij", { sessions = { one, fake.session("zellij", "claude", 2) } })
       local alive = { ["zellij:claude1"] = true, ["zellij:claude2"] = false }
       b.is_running = function(session)
         return alive[session.id]

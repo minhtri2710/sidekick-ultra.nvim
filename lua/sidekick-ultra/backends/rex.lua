@@ -4,6 +4,7 @@
 local config = require("sidekick-ultra.config")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
+local procname = require("sidekick-ultra.procname")
 local tools = require("sidekick-ultra.tools")
 
 ---@type sidekick_ultra.Backend
@@ -176,17 +177,40 @@ local function foreground(sid, bid)
   return { pid = fg.pid, name = fg.name, argv0 = fg.argv0, cwd = fg.cwd }
 end
 
----argv0 first, then name: Claude Code's `name` is its version while its `argv0` is "claude".
----@param tool sidekick_ultra.Tool
+---The configured tool a foreground process runs. argv0 first, then name: Claude Code's `name` is its version while its
+---`argv0` is "claude". A node or python script tool runs as its interpreter until it sets its own title, so when
+---neither word matches and one is an interpreter, the script it runs is tested instead (one `ps` call, see procname).
+---@param configured table<string, sidekick_ultra.Tool>
+---@param names string[] sorted tool names
 ---@param proc table
----@return boolean
-local function matches(tool, proc)
+---@return string? tool_name
+---@return sidekick_ultra.Error? err a failing ps
+local function tool_of(configured, names, proc)
+  local words = {}
   for _, cmd in ipairs({ proc.argv0, proc.name }) do
-    if type(cmd) == "string" and cmd ~= "" and tools.matches(tool, { pid = proc.pid, cmd = cmd }) then
-      return true
+    if type(cmd) == "string" and cmd ~= "" then
+      table.insert(words, cmd)
     end
   end
-  return false
+  for _, name in ipairs(names) do
+    for _, cmd in ipairs(words) do
+      if tools.matches(configured[name], { pid = proc.pid, cmd = cmd }) then
+        return name
+      end
+    end
+  end
+  for _, cmd in ipairs(#names > 0 and words or {}) do
+    local interpreter = vim.fs.basename(cmd)
+    if procname.is_interpreter(interpreter) then
+      local program, err = procname.of(proc.pid, interpreter, M.name)
+      for _, name in ipairs(program and program ~= "" and names or {}) do
+        if tools.matches(configured[name], { pid = proc.pid, cmd = program }) then
+          return name
+        end
+      end
+      return nil, err
+    end
+  end
 end
 
 ---Session record for a block whose foreground process runs `tool_name`. Nil (not running here) when the pid is not
@@ -249,15 +273,19 @@ function M.list(configured)
       if proc_err then
         return nil, proc_err
       end
-      for _, name in ipairs(proc and names or {}) do
-        if matches(configured[name], proc) then
-          local session, session_err = session_of(name, entry.session_id, bid, proc)
-          if session_err then
-            return nil, session_err
-          end
-          table.insert(ret, session)
-          break
+      local name, match_err
+      if proc then
+        name, match_err = tool_of(configured, names, proc)
+      end
+      if match_err then
+        return nil, match_err
+      end
+      if name then
+        local session, session_err = session_of(name, entry.session_id, bid, proc)
+        if session_err then
+          return nil, session_err
         end
+        table.insert(ret, session)
       end
     end
   end
