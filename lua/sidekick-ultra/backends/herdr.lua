@@ -51,18 +51,59 @@ local function failure(cmd, msg)
   return errors.new("backend_error", msg, { backend = M.name, cmd = cmd })
 end
 
----Run `argv`, decode herdr's `{id, result = {type, ...}}` envelope and return `result[field]`, a table.
+---The first stderr line of a failed herdr command and the error code in it. herdr prints an error envelope
+---`{id, error = {code, message}}` there and exits 1 (`print_response`, src/cli.rs:745-749). The code is nil when the
+---line is not such an envelope.
+---@param stderr string
+---@return string first
+---@return string? code
+local function stderr_error(stderr)
+  local first = vim.split(stderr, "\n", { plain = true })[1]
+  local ok, decoded = pcall(vim.json.decode, first, { luanil = { object = true, array = true } })
+  local code = ok and type(decoded) == "table" and type(decoded.error) == "table" and decoded.error.code
+  return first, type(code) == "string" and code or nil
+end
+
+---The `backend_error` for a herdr command that exited non-zero, as `exec.check` words it.
+---@param cmd string
+---@param code integer exit code
+---@param first string first stderr line
+---@return sidekick_ultra.Error
+local function exit_failure(cmd, code, first)
+  local msg = ("herdr exited with %d"):format(code)
+  return errors.new("backend_error", first ~= "" and (msg .. ": " .. first) or msg, {
+    backend = M.name,
+    cmd = cmd,
+    code = code,
+  })
+end
+
+---Run `argv`, decode herdr's `{id, result = {type, ...}}` envelope and return `result[field]`, a table. A failure
+---whose error code is `empty_code` returns `{}` and no error.
 ---@param argv string[]
 ---@param cmd string
 ---@param field string
+---@param empty_code? string
 ---@return table? payload
 ---@return sidekick_ultra.Error? err
-local function query(argv, cmd, field)
-  local res, err = exec.json(argv, { backend = M.name, cmd = cmd })
-  if res == nil then
+local function query(argv, cmd, field, empty_code)
+  local res, err = exec.run(argv, { backend = M.name, cmd = cmd })
+  if not res then
     return nil, err
   end
-  local payload = type(res) == "table" and type(res.result) == "table" and res.result[field]
+  if res.code ~= 0 then
+    local first, code = stderr_error(res.stderr)
+    if empty_code and code == empty_code then
+      return {}
+    end
+    return nil, exit_failure(cmd, res.code, first)
+  end
+  local ok, decoded = pcall(vim.json.decode, res.stdout, { luanil = { object = true, array = true } })
+  if not ok then
+    return nil,
+      errors.new("backend_error", "herdr printed invalid JSON", { backend = M.name, cmd = cmd, code = res.code })
+  end
+  local payload = type(decoded) == "table" and type(decoded.result) == "table" and decoded.result[field]
   if type(payload) ~= "table" then
     return nil, failure(cmd, ("herdr %s: response has no result.%s"):format(cmd, field))
   end
@@ -179,8 +220,9 @@ end
 ---@return sidekick_ultra.Session[]? sessions
 ---@return sidekick_ultra.Error? err
 function M.list(tools)
-  -- Without --workspace herdr lists the panes of every workspace.
-  local panes, err = query({ "herdr", "pane", "list" }, "pane list", "panes")
+  -- Without --workspace herdr lists the panes of every workspace. With no herdr server running (`server_not_running`,
+  -- src/cli/server_not_running.rs) there are no panes, so that is an empty list, not an error.
+  local panes, err = query({ "herdr", "pane", "list" }, "pane list", "panes", "server_not_running")
   if not panes then
     return nil, err
   end
@@ -246,19 +288,11 @@ local function start_agent(argv)
     end
     return agent
   end
-  local first = vim.split(res.stderr, "\n", { plain = true })[1]
-  local ok, decoded = pcall(vim.json.decode, first, { luanil = { object = true, array = true } })
-  local code = ok and type(decoded) == "table" and type(decoded.error) == "table" and decoded.error.code
+  local first, code = stderr_error(res.stderr)
   if code == "agent_not_ready" then
     return { agent_status = "blocked" }
   end
-  local msg = ("herdr exited with %d"):format(res.code)
-  return nil,
-    errors.new("backend_error", first ~= "" and (msg .. ": " .. first) or msg, {
-      backend = M.name,
-      cmd = cmd,
-      code = res.code,
-    })
+  return nil, exit_failure(cmd, res.code, first)
 end
 
 ---@param tool sidekick_ultra.Tool
