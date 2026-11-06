@@ -364,6 +364,7 @@ describe("actions", function()
       local box = snacks.layout.layout
       expect.equality({ box[1].win, box[2].win, box[3].win }, { "input", "list", "preview" })
       expect.equality(#box, 3)
+      expect.equality(snacks.layout.hidden, nil)
       expect.equality(preview("changes"), "Can you review my changes?")
     end)
 
@@ -442,9 +443,44 @@ describe("actions", function()
         expect.equality(sizes(many(12, { tall = lines_of(40) })), { width = 72, height = 20, list = 10, preview = 7 })
       end)
 
-      it("keeps one preview row on a screen too short for the rest", function()
+      it("keeps the list at 2 rows, and the box 4 rows short, on the smallest screen that holds them", function()
         vim.o.lines = 10
-        expect.equality(sizes(many(12)), { width = 40, height = 14, list = 10, preview = 1 })
+        expect.equality(sizes(many(12, { tall = lines_of(40) })), { width = 72, height = 6, list = 2, preview = 1 })
+      end)
+
+      it("shrinks the list to 1 row, rather than pass 4 rows short, on a screen one row smaller", function()
+        vim.o.lines = 9
+        expect.equality(sizes(many(12, { tall = lines_of(40) })), { width = 72, height = 5, list = 1, preview = 1 })
+      end)
+
+      it("keeps the 5-row floor (list 1, preview 1) on a screen too short for it", function()
+        vim.o.lines = 8
+        expect.equality(sizes(many(12)), { width = 40, height = 5, list = 1, preview = 1 })
+      end)
+
+      it("counts the number column in the width and in the wrapped rows", function()
+        -- The label of a function prompt is "<function>", so the preview line is the widest text.
+        local function line_of(n)
+          return {
+            f = function()
+              return ("x"):rep(n)
+            end,
+          }
+        end
+        expect.equality(sizes(line_of(60)).width, 64)
+        expect.equality(sizes(line_of(140)), { width = 72, height = 8, list = 2, preview = 3 })
+      end)
+
+      it("measures the width in display cells, not bytes", function()
+        local wide = vim.fn.nr2char(0x3042):rep(30)
+        expect.equality(
+          sizes({
+            f = function()
+              return wide
+            end,
+          }).width,
+          64
+        )
       end)
     end)
 

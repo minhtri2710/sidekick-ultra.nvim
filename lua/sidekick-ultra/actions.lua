@@ -163,7 +163,9 @@ local NUMBER_MIN = 4 -- the preview's number column, which snacks leaves on (`nu
 ---the largest item, not the highlighted one. The sizes are the box `width` and `height` (inside the border), the
 ---list `height` and the preview `height`, all absolute (>= 1: `snacks/win.lua`, `M:dim`), so the box shrinks to fit
 ---the children (`snacks/layout.lua`, `M:update_box`). The preview wraps (snacks sets no `wrap` there), so a line takes
----`ceil(width / text width)` rows.
+---`ceil(width / text width)` rows. The box stays `BOX_FREE_ROWS` short of the screen while the chrome, one list row
+---and one preview row fit in it (`lines >= 9`). Below that the box is its floor of 5 rows (7 with its border): a list
+---row and a preview row are the least snacks can draw, and the box would clip or cover the command line.
 ---@param items table[]
 ---@return table layout a snacks layout; its children keep the structure of the `select` preset (`layouts.lua`)
 local function fit_layout(items)
@@ -189,9 +191,11 @@ local function fit_layout(items)
     end
     rows = math.max(rows, count)
   end
-  local list = math.min(math.max(#items, LIST_MIN), LIST_MAX)
-  local height = math.min(BOX_CHROME + list + math.min(rows, math.floor(lines * 0.5)), lines - BOX_FREE_ROWS)
-  local preview = math.max(height - BOX_CHROME - list, 1)
+  -- Rows for the list and the preview together, keeping the box `BOX_FREE_ROWS` short of the screen. The list gives way
+  -- first, down to one row, so the preview keeps a row; the preview takes what is left, up to half the screen.
+  local room = lines - BOX_FREE_ROWS - BOX_CHROME
+  local list = math.max(math.min(math.max(#items, LIST_MIN), LIST_MAX, room - 1), 1)
+  local preview = math.max(math.min(rows, math.floor(lines * 0.5), room - list), 1)
 
   -- selene's mixed_table rule rejects the preset's dict-plus-children literal, so the children are added after.
   local box = {
