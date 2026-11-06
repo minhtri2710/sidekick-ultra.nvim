@@ -58,6 +58,15 @@ describe("target", function()
       expect.equality(#target.states({ attached = true }), 1)
     end)
 
+    it("discovers once, and reports a failing backend once, when an attached session fails its check", function()
+      local b = fake.backend("herdr", { list_err = errors.new("backend_error", "x") })
+      registry.register(b)
+      local s = fake.session("herdr", "claude")
+      registry.attach(s)
+      s.proc_name = "someone-else"
+      expect.equality({ #target.states(), #b.of("list"), cap.ids() }, { 3, 1, { "backend_error" } })
+    end)
+
     it("sorts installed first, then no-session or same-cwd, then started, then name, then id", function()
       registry.register(fake.backend("herdr", {
         sessions = {

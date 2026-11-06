@@ -100,42 +100,6 @@ local function run(label, args, opts)
   return exec.check(argv_of(args), vim.tbl_extend("force", opts or {}, { backend = M.name, cmd = label }))
 end
 
----What a process is tested as: its name, or for an interpreter the name of the script it runs, read from one `ps` call.
----The command line is a local value here: it is parsed and dropped, and a failing ps reports the pid, the exit code
----and the first stderr line, never stdout.
----`ps -p <pid>` for a pid that no longer exists exits 1 and prints nothing on either stream (seen on macOS; the macOS
----man page states no exit status for it). That is a process that ended after nvim read its name, which is ordinary for
----short-lived helpers: it is skipped. Any other failure, and exit 0 with nothing printed, is an error.
----@param pid integer
----@param name string the process name nvim reads
----@return string? program the script's name ("" when the interpreter runs none); nil when the process is gone
----@return sidekick_ultra.Error? err
-local function program_of(pid, name)
-  if not procname.is_interpreter(name) then
-    return name
-  end
-  local res, err = exec.run({ "ps", "-ww", "-o", "args=", "-p", tostring(pid) }, { backend = M.name, cmd = "ps" })
-  if not res then
-    return nil, err
-  end
-  if res.code == 1 and res.stdout == "" and res.stderr == "" then
-    return nil
-  end
-  local program = res.code == 0 and procname.program(res.stdout) or nil
-  if program then
-    return program
-  end
-  local first = vim.split(res.stderr, "\n", { plain = true })[1]
-  local msg = res.code == 0 and ("ps printed nothing for pid %d"):format(pid)
-    or ("ps exited with %d for pid %d"):format(res.code, pid)
-  return nil,
-    errors.new("backend_error", first ~= "" and (msg .. ": " .. first) or msg, {
-      backend = M.name,
-      cmd = "ps",
-      code = res.code,
-    })
-end
-
 ---Breadth-first over the process tree under `root` (root first): the first process whose name, or script name for an
 ---interpreter, satisfies a tool.
 ---@param root integer
@@ -153,7 +117,7 @@ local function find_tool(root, configured)
     i = i + 1
     local ok, info = pcall(vim.api.nvim_get_proc, pid)
     if ok and type(info) == "table" and type(info.name) == "string" then
-      local program, err = program_of(pid, info.name)
+      local program, err = procname.of(pid, info.name, M.name)
       if err then
         return nil, nil, nil, err
       end

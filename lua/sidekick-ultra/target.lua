@@ -110,9 +110,10 @@ end
 ---@param filter? sidekick_ultra.Filter
 ---@return sidekick_ultra.State[]
 function M.states(filter)
-  local sessions = registry.discover()
+  local running, discovered = registry.attached()
+  local sessions = discovered or registry.discover()
   local attached = {}
-  for _, session in ipairs(registry.attached()) do
+  for _, session in ipairs(running) do
     attached[session.id] = true
   end
   local ret = {}

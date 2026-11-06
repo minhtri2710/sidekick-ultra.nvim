@@ -32,6 +32,10 @@ Still unverified:
                            {state,kind,app,msg,owner.pid} are firstmate's findings on rex API revision 5
                            (~/Work/firstmate/docs/verification/runtime-backends.md, section Rex). status_bad.json is
                            malformed on purpose.
+  a script tool before it sets its title
+                           backends/rex.lua tests a node or python foreground by the script `ps` shows for its pid.
+                           process_codex.json shows argv0 "node" with the title as name once set; the reading before
+                           the title is set (name "node") is not seen, and rex_spec pins it by the spec only.
   process_none.json        the process reply of a block with no foreground. The live run never saw one, so the
                            missing `foreground` key and the {"code":0} shape of last_exit are guesses.
   split.json               the raw `rex split --json` reply. The live run only parsed it (start succeeded and read

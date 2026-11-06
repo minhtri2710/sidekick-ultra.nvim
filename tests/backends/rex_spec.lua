@@ -10,6 +10,7 @@ local expect = MiniTest.expect
 
 local FIXTURES = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/fixtures/rex/"
 local SID = "session:aaaa"
+local SECRET = "SECRET-TOKEN-xyz"
 
 ---@param name string
 ---@return string
@@ -36,8 +37,8 @@ local function ok(stdout)
   return { code = 0, stdout = stdout, stderr = "" }
 end
 
----Replace `exec.run`. `routes` maps the arguments after the global flags (joined by spaces) to a result table, a
----fixture-text string, or a function(call number) returning either. A command without a route is recorded in
+---Replace `exec.run`. `routes` maps the arguments after the global flags (joined by spaces), or `ps` for a `ps` call,
+---to a result table, a fixture-text string, or a function(call number) returning either. A command without a route is recorded in
 ---`unexpected` and fails with exit 97.
 ---@param routes table<string, table|string|fun(n: integer): table|string>
 local function record(routes)
@@ -46,7 +47,7 @@ local function record(routes)
   exec.run = function(argv, opts)
     table.insert(rec.calls, { argv = argv, opts = opts })
     local first = argv[3] == "-S" and 5 or 3
-    local sub = vim.list_slice(argv, first)
+    local sub = argv[1] == "ps" and { "ps" } or vim.list_slice(argv, first)
     table.insert(rec.subs, sub)
     local key = table.concat(sub, " ")
     counts[key] = (counts[key] or 0) + 1
@@ -339,6 +340,157 @@ describe("rex backend", function()
         expect.equality(list, nil)
         expect.equality({ err.id, err.backend }, { "backend_error", "rex" })
       end
+    end)
+  end)
+
+  -- A tool installed as a node or python script runs as its interpreter until it sets its own title: `pi` is a sh
+  -- launcher that execs a `#!/usr/bin/env node` script, so for a while rex reports the foreground as node. The shape
+  -- follows process_codex.json, a live reading of a node script whose title was set: argv0 "node", name the title.
+  -- Before the title is set the name is a guess (name "node"), not a rex reading (UNVERIFIED.txt).
+  describe("list for a script tool", function()
+    local A2 = "block call -s session:aaaa -b block:a2 process"
+
+    before_each(function()
+      fake.reset(
+        { claude = { cmd = fake.INSTALLED }, pi = { cmd = fake.INSTALLED } },
+        { rex = { enabled = false, bin = bin } }
+      )
+    end)
+
+    ---Routes where block a2's foreground is `fg` (pid this nvim) and `ps` answers `ps_route`.
+    ---@param fg table
+    ---@param ps_route table|string|fun(n: integer): table|string
+    local function node_routes(fg, ps_route)
+      return {
+        ["ls --json"] = '{"sessions":[{"session_id":"session:aaaa","label":"work"}]}',
+        ["api call -s session:aaaa session.view"] = fixture("view_a"),
+        [A2] = live("process_claude", function(f)
+          f.name, f.argv0 = fg.name, fg.argv0
+        end),
+        ["block call -s session:aaaa -b block:a1 process"] = live("process_shell"),
+        ["block call -s session:aaaa -b block:a3 process"] = fixture("process_none"),
+        ps = ps_route,
+      }
+    end
+
+    ---@param line string a `ps` command line
+    ---@return string[] ids
+    local function listed(line)
+      if rec then
+        rec.restore()
+      end
+      rec = record(node_routes({ name = "node", argv0 = "node" }, line .. "\n"))
+      local list, err = rex.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(vim.inspect({ list, rec.calls }):find(SECRET, 1, true), nil)
+      return vim.tbl_map(function(s)
+        return s.tool
+      end, list)
+    end
+
+    it("finds a node tool by its script name, with one ps call, and records the interpreter's process", function()
+      rec = record(node_routes({ name = "node", argv0 = "node" }, "node /x/bin/pi\n"))
+      local pid, name = fake.self_proc()
+      local list, err = rex.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(list, {
+        {
+          id = "rex:block:a2",
+          backend = "rex",
+          tool = "pi",
+          cwd = "/tmp/sku-proj-a",
+          pid = pid,
+          proc_name = name,
+          session_id = SID,
+          block_id = "block:a2",
+        },
+      })
+      local ps = vim.tbl_filter(function(call)
+        return call.argv[1] == "ps"
+      end, rec.calls)
+      expect.equality(#ps, 1)
+      expect.equality(ps[1].argv, { "ps", "-ww", "-o", "args=", "-p", tostring(pid) })
+      expect.equality({ ps[1].opts.backend, ps[1].opts.cmd }, { "rex", "ps" })
+    end)
+
+    it("reads the interpreter from argv0 when the name is something else", function()
+      rec = record(node_routes({ name = "22.1.0", argv0 = "/usr/local/bin/node" }, "node /x/bin/pi\n"))
+      local list = rex.list(tools.all())
+      expect.equality(#list, 1)
+      expect.equality(list[1].tool, "pi")
+    end)
+
+    it("runs ps only for an interpreter", function()
+      rec = record(node_routes({ name = "2.1.308", argv0 = "claude" }, "unused"))
+      rex.list(tools.all())
+      for _, sub in ipairs(rec.subs) do
+        expect.equality(sub[1] == "ps", false)
+      end
+    end)
+
+    it("keeps a block whose script is no tool, or that runs code, out of the list", function()
+      expect.equality(listed("node /x/bin/other"), {})
+      expect.equality(listed("node -e " .. SECRET), {})
+      expect.equality(listed("python3 -c " .. SECRET), {})
+    end)
+
+    it("still matches a tool by its argv0 or name before any ps call", function()
+      rec = record(node_routes({ name = "node", argv0 = "pi" }, { code = 2, stdout = "", stderr = "must not run" }))
+      local list, err = rex.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(#list, 1)
+      expect.equality(list[1].tool, "pi")
+    end)
+
+    it("skips a process that ended before ps ran", function()
+      rec = record(node_routes({ name = "node", argv0 = "node" }, { code = 1, stdout = "", stderr = "" }))
+      expect.equality(rex.list(tools.all()), {})
+    end)
+
+    it("maps a failing ps to backend_error without its stdout", function()
+      local pid = fake.self_proc()
+      rec = record(node_routes({ name = "node", argv0 = "node" }, {
+        code = 3,
+        stdout = "node /x/bin/pi --api-key " .. SECRET .. "\n",
+        stderr = "ps: boom\nsecond\n",
+      }))
+      local list, err = rex.list(tools.all())
+      expect.equality(list, nil)
+      expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "rex", "ps", 3 })
+      expect.equality(err.msg, ("ps exited with 3 for pid %d: ps: boom"):format(pid))
+      expect.equality(vim.inspect({ err, rec.calls }):find(SECRET, 1, true), nil)
+    end)
+
+    it("is the exec error itself when ps cannot be spawned", function()
+      rec = record(node_routes({ name = "node", argv0 = "node" }, "unused"))
+      local routed = exec.run
+      exec.run = function(argv, opts)
+        if argv[1] == "ps" then
+          return nil, require("sidekick-ultra.errors").new("backend_error", "cannot run ps: boom", opts)
+        end
+        return routed(argv, opts)
+      end
+      local list, err = rex.list(tools.all())
+      expect.equality(
+        { list, err.id, err.backend, err.cmd, err.msg },
+        { nil, "backend_error", "rex", "ps", "cannot run ps: boom" }
+      )
+    end)
+
+    -- Every command line below holds SECRET; nothing the backend returns or records may hold it.
+    it("never lets a secret in the command line reach a session or a call", function()
+      local cases = {
+        { "node /x/bin/pi --api-key " .. SECRET, { "pi" } },
+        { "node --require " .. SECRET .. " /x/bin/pi", { "pi" } },
+        { 'node -e "' .. SECRET .. '"', {} },
+        { 'node -pe "/x/' .. SECRET .. '/pi"', {} },
+        { "node - /x/" .. SECRET .. "/pi", {} },
+        { "python3 -m aider --token " .. SECRET, {} },
+      }
+      for _, case in ipairs(cases) do
+        expect.equality({ case[1], listed(case[1]) }, { case[1], case[2] })
+      end
+      expect.equality(vim.fn.execute("messages"):find(SECRET, 1, true), nil)
     end)
   end)
 

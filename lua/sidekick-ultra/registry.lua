@@ -115,15 +115,17 @@ end
 ---The attached sessions sorted by id. A session that fails the running check may only be a record taken at start
 ---(a launcher or shell that became the tool), so one `discover()` first replaces the records by id; sessions that
 ---still fail the check are then detached. With every check passing there is no discovery.
----@return sidekick_ultra.Session[]
+---@return sidekick_ultra.Session[] attached
+---@return sidekick_ultra.Session[]? discovered what that discovery listed, nil when none ran
 function M.attached()
   local ids = vim.tbl_keys(attached)
   table.sort(ids)
   local failing = vim.tbl_filter(function(id)
     return not M.is_running(attached[id])
   end, ids)
+  local discovered
   if #failing > 0 then
-    M.discover()
+    discovered = M.discover()
   end
   local ret = {}
   for _, id in ipairs(ids) do
@@ -134,7 +136,7 @@ function M.attached()
       M.detach(id)
     end
   end
-  return ret
+  return ret, discovered
 end
 
 ---Ask every backend for its sessions. A backend that fails reports its error once and contributes nothing (its
