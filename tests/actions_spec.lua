@@ -411,11 +411,29 @@ describe("actions", function()
 
       it("grows with the list label and the preview text, up to the width cap", function()
         expect.equality(sizes({ mid = ("x"):rep(30) }), { width = 52, height = 6, list = 2, preview = 1 })
-        expect.equality(sizes({ long = ("word "):rep(60) }), { width = 72, height = 10, list = 2, preview = 5 })
+        expect.equality(sizes({ long = ("word "):rep(60) }), { width = 72, height = 6, list = 2, preview = 1 })
       end)
 
-      it("counts the rows a wrapped preview line takes", function()
-        expect.equality(sizes({ wide = ("x"):rep(100) }), { width = 72, height = 7, list = 2, preview = 2 })
+      it("gives a preview that does not wrap one row per line, however long the lines", function()
+        local line = ("word "):rep(60)
+        local text = table.concat(vim.fn["repeat"]({ line }, 15), "\n")
+        vim.o.lines = 40
+        expect.equality(sizes({ diag = text }), { width = 72, height = 20, list = 2, preview = 15 })
+      end)
+
+      it("stops the width at the inner width of snacks' own select picker", function()
+        local long = { long = ("word "):rep(60) }
+        for columns, width in pairs({ [120] = 80, [200] = 98, [300] = 100 }) do
+          vim.o.columns = columns
+          expect.equality(sizes(long).width, width)
+        end
+        vim.o.columns = 200
+        expect.equality(sizes({ mid = ("x"):rep(30) }).width, 52)
+      end)
+
+      it("turns the preview's wrap off, whatever the user's option", function()
+        sizes({ a = "Hi" })
+        expect.equality(pick.selects[#pick.selects].opts.snacks.win.preview.wo.wrap, false)
       end)
 
       it("sizes the preview for the item that needs the most rows", function()
@@ -423,8 +441,8 @@ describe("actions", function()
       end)
 
       it("reads the columns when the picker opens, and keeps the width under them", function()
-        vim.o.columns = 100
-        expect.equality(sizes({ long = ("word "):rep(60) }).width, 92)
+        vim.o.columns = 84
+        expect.equality(sizes({ long = ("word "):rep(60) }).width, 76)
         vim.o.columns = 44
         expect.equality(sizes({ long = ("word "):rep(60) }).width, 36)
       end)
@@ -458,7 +476,7 @@ describe("actions", function()
         expect.equality(sizes(many(12)), { width = 40, height = 5, list = 1, preview = 1 })
       end)
 
-      it("counts the number column in the width and in the wrapped rows", function()
+      it("counts the number column in the width", function()
         -- The label of a function prompt is "<function>", so the preview line is the widest text.
         local function line_of(n)
           return {
@@ -468,7 +486,6 @@ describe("actions", function()
           }
         end
         expect.equality(sizes(line_of(60)).width, 64)
-        expect.equality(sizes(line_of(140)), { width = 72, height = 8, list = 2, preview = 3 })
       end)
 
       it("measures the width in display cells, not bytes", function()
