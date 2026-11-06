@@ -33,7 +33,7 @@ function M.send(opts)
   require("sidekick-ultra.actions").send(opts)
 end
 
----Pick a prompt from the library and send it.
+---Pick the target session, then a prompt from the library, and send it to that session.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.prompt(opts)
   require("sidekick-ultra.actions").prompt(opts)

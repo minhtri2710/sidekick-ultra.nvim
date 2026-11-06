@@ -106,7 +106,7 @@ What they do not have is an agent status. herdr and rex tell the plugin when an 
 | `<leader>at` | n, x | `send({ msg = "{this}" })` |
 | `<leader>af` | n | `send({ msg = "{file}" })` |
 | `<leader>av` | x | `send({ msg = "{selection}" })` |
-| `<leader>ap` | n, x | `prompt()`: pick a prompt |
+| `<leader>ap` | n, x | `prompt()`: pick the target, then a prompt |
 | `<leader>ao` | n | `focus()` |
 | `<leader>ad` | n | `close()`: detach (the tool keeps running) |
 
@@ -134,13 +134,13 @@ Under lazy.nvim, set `keys` through `opts`. The triggers come from `opts.keys`, 
 |---|---|---|
 | `select` | `name`, `focus` | pick a session or tool, attach it; a tool without a session is started next to Neovim |
 | `send` | `msg`, `prompt`, `name`, `submit`, `focus` | render the message or prompt and send it to the target session |
-| `prompt` | `name`, `submit`, `focus` | pick a prompt and send it |
+| `prompt` | `name`, `submit`, `focus` | pick the target session first, then a prompt, and send it to that session |
 | `focus` | `name` | focus the target's pane or block |
 | `close` | `name`, `all` | detach (the tool keeps running) |
 
 A tool that `select`, `send`, `prompt` or `focus` starts is focused once it is up. The new pane or block is created unfocused and then focused through the multiplexer. Pass `focus=false` (Lua: `focus = false`) to `select`, `send` or `prompt` to keep your own focus. A failed focus is reported, and the session stays attached and still receives the text. `focus` takes no `focus` key: it always focuses. On `send`, `focus=true` also focuses the session after delivery, whether or not the tool was just started.
 
-The target is the attached session. With none attached, a picker opens over the matching sessions and tools. With several, you choose one (except `close all=true`).
+The target is the attached session. With none attached, a picker opens over the matching sessions and tools. With several, you choose one (except `close all=true`). `prompt` resolves the target before its prompt picker, so a cancelled prompt picker sends nothing and leaves a tool it started running. In a picker that supports a preview (snacks.nvim as `vim.ui.select`), each prompt previews the exact text that will be sent to that session, in its tool's file-reference style; other pickers show no preview.
 
 The same actions exist in Lua: `require("sidekick-ultra").send({ msg = "{file}", submit = true })`, `.prompt()`, `.select()`, `.focus()`, `.close()`, and `.render()` (returns the text without sending). They take `name`, `filter` (`name`, `session`, `attached`, `started`, `installed`, `cwd`, `backend`), `submit`, `focus`, `msg`, `prompt`, and `all` for `close`.
 

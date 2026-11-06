@@ -97,51 +97,78 @@ local function deliver(session, text, opts)
   end
 end
 
+---Warn and return false when the render has no text to send.
+---@param segments (string|sidekick_ultra.Location)[]
+---@return boolean
+local function has_text(segments)
+  if tools.format(segments) == "" then
+    errors.notify(errors.new("nothing_to_send", "nothing to send"))
+    return false
+  end
+  return true
+end
+
+---Leave visual mode, then write the render to each session in its tool's location style.
+---@param sessions sidekick_ultra.Session[]
+---@param segments (string|sidekick_ultra.Location)[]
+---@param opts sidekick_ultra.ActionOpts
+local function write(sessions, segments, opts)
+  if in_visual() then
+    vim.cmd("normal! \27")
+  end
+  for _, session in ipairs(sessions) do
+    local tool = tools.get(session.tool)
+    deliver(session, tools.format(segments, tool and tool.location), opts)
+  end
+end
+
 ---Render a message or prompt against the current context and send it to the target session(s).
 ---@param opts? sidekick_ultra.ActionOpts
----@param snap? sidekick_ultra.Snapshot taken now when omitted
-function M.send(opts, snap)
+function M.send(opts)
   opts = opts or {}
-  snap = snap or snapshot.capture()
-  local segments, err = compose(opts, snap)
+  local segments, err = compose(opts, snapshot.capture())
   if not segments then
     errors.notify(err)
     return
   end
-  if tools.format(segments) == "" then
-    errors.notify(errors.new("nothing_to_send", "nothing to send"))
+  if not has_text(segments) then
     return
   end
   target.with_target({ filter = filter_of(opts), attach = true, focus = opts.focus }, function(sessions)
-    if in_visual() then
-      vim.cmd("normal! \27")
-    end
-    for _, session in ipairs(sessions) do
-      local tool = tools.get(session.tool)
-      deliver(session, tools.format(segments, tool and tool.location), opts)
-    end
+    write(sessions, segments, opts)
   end)
 end
 
----Pick a prompt from the library and send it. Prompts that cannot render in this context are not listed.
+---Pick the target session first, then a prompt from the library, and send it to that session. The picker previews
+---the exact text for that session's tool. Prompts that cannot render in this context are not listed.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.prompt(opts)
   opts = opts or {}
   local snap = snapshot.capture()
-  local names = vim.tbl_keys(render.prompts())
-  table.sort(names)
-  local items = vim.tbl_filter(function(name)
-    return render.build({ prompt = name }, snap) ~= nil
-  end, names)
-  vim.ui.select(items, {
-    prompt = "sidekick-ultra prompt",
-    format_item = function(name)
-      return ("%-18s %s"):format(name, (render.display(name):gsub("\n", "\\n")))
-    end,
-  }, function(name)
-    if name then
-      M.send(vim.tbl_extend("force", opts, { prompt = name }), snap)
+  target.with_target({ filter = filter_of(opts), attach = true, focus = opts.focus }, function(sessions)
+    local session = sessions[1]
+    local tool = tools.get(session.tool)
+    local names = vim.tbl_keys(render.prompts())
+    table.sort(names)
+    local items, renders = {}, {}
+    for _, name in ipairs(names) do
+      local segments = compose(vim.tbl_extend("force", opts, { prompt = name }), snap)
+      if segments then
+        renders[name] = segments
+        table.insert(items, { name = name, preview = { text = tools.format(segments, tool and tool.location) } })
+      end
     end
+    vim.ui.select(items, {
+      prompt = "sidekick-ultra prompt",
+      format_item = function(item)
+        return ("%-18s %s"):format(item.name, (render.display(item.name):gsub("\n", "\\n")))
+      end,
+      snacks = { preview = "preview" },
+    }, function(item)
+      if item and has_text(renders[item.name]) then
+        write({ session }, renders[item.name], vim.tbl_extend("force", opts, { prompt = item.name }))
+      end
+    end)
   end)
 end
 
