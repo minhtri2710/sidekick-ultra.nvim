@@ -203,7 +203,7 @@ local function started_session(tool, opts, pane, root)
   if not pid then
     proc_name = proc.name(root)
     if not proc_name then
-      return nil, errors.new("backend_error", "the new pane is not visible to this nvim")
+      return nil, errors.new("backend_error", ("pane %s is not visible to this nvim"):format(pane))
     end
     pid = root
   end

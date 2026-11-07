@@ -52,8 +52,8 @@ local errors = require("sidekick-ultra.errors")
 ---the tool has started. A backend that defines `is_running` answers true for the new session, and its record may have
 ---no `pid` (zellij records the program it parsed as `proc_name`); otherwise the record's `pid` and `proc_name` are
 ---those of the new pane or block's current foreground (or shell) process, with the name read through
----`proc.name(pid)`. The next discovery replaces the record by id. A start that fails after the pane or block
----exists either closes it or says in its error that it was left open.
+---`proc.name(pid)`. The next discovery replaces the record by id. A start that fails once it has the id of
+---the new pane or block either closes it or says in its error that it was left open.
 ---@field start fun(tool: sidekick_ultra.Tool, opts: sidekick_ultra.StartOpts): sidekick_ultra.Session?, sidekick_ultra.Error?
 ---Deliver `text` as literal input, with no implicit Enter. `tool` is the session's tool. A backend that reads an agent
 ---state guards here with `guard_send`; a refusal sends nothing. Returns a truthy value, or nil and the error.

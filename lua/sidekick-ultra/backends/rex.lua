@@ -250,11 +250,11 @@ local function started_session(tool, sid, bid)
     return nil, fg_err
   end
   if not fg then
-    return nil, errors.new("backend_error", "the new block has no foreground process")
+    return nil, errors.new("backend_error", ("block %s has no foreground process"):format(bid))
   end
   local session, session_err = session_of(tool.name, sid, bid, fg)
   if not session and not session_err then
-    return nil, errors.new("backend_error", "the new block is not visible to this nvim")
+    return nil, errors.new("backend_error", ("block %s is not visible to this nvim"):format(bid))
   end
   return session, session_err
 end

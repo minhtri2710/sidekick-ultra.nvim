@@ -694,6 +694,11 @@ describe("zellij backend", function()
       for _, part in ipairs({ "claude", "terminal_6", "skuA", "left open", "never showed" }) do
         expect.equality({ part, err.msg:find(part, 1, true) ~= nil }, { part, true })
       end
+      expect.equality(
+        err.msg,
+        "pane terminal_6 of session skuA: its program never showed as claude; "
+          .. "pane terminal_6 of session skuA was left open"
+      )
       -- Not even the program's basename is echoed.
       expect.equality(err.msg:find("node", 1, true), nil)
     end
@@ -850,7 +855,10 @@ describe("zellij backend", function()
         rec = nil
         expect.equality(session, nil)
         expect.equality(err.id, "backend_error")
-        expect.equality(err.msg:find("terminal_6", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
+        expect.equality(
+          err.msg,
+          "pane terminal_6 of session skuA is not running; pane terminal_6 of session skuA was left open"
+        )
       end
     end)
 

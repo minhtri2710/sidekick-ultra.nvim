@@ -247,6 +247,16 @@ describe("target", function()
       expect.equality({ cap.ids(), registry.attached(), b.calls }, { { "no_match", "no_match" }, {}, {} })
     end)
 
+    it("attaches again a session listed as attached that a setup detached", function()
+      two_attached()
+      local state = target.states({ name = "claude", started = true })[1]
+      local b = registry.backend("herdr")
+      registry.reset()
+      registry.register(b)
+      expect.equality(target.attach_state(state).id, "herdr:claude1")
+      expect.equality({ cap.ids(), #registry.attached() }, { {}, 1 })
+    end)
+
     it("reports a failing start", function()
       registry.register(fake.backend("herdr", { is_inside = true, start_err = errors.new("backend_error", "x") }))
       expect.equality(target.attach_state(target.states({ name = "codex" })[1]), nil)
@@ -320,6 +330,18 @@ describe("target", function()
       two_attached()
       expect.equality(run({ name = "codex" }), { "herdr:codex1", "codex" })
       expect.equality(#pick.selects, 0)
+    end)
+
+    it("does not reach the callback with a session that a setup detached while the pick was open", function()
+      two_attached()
+      local b = registry.backend("herdr")
+      pick.choose = function(items)
+        fake.reset({ claude = { cmd = fake.INSTALLED }, codex = { cmd = fake.INSTALLED } })
+        registry.register(b)
+        return items[2]
+      end
+      expect.equality(run({}), nil)
+      expect.equality({ cap.ids(), registry.attached() }, { { "no_match" }, {} })
     end)
   end)
 

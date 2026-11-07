@@ -766,6 +766,20 @@ describe("actions", function()
       expect.no_error(require("sidekick-ultra.status").cli)
     end)
 
+    it("attaches, and focuses, a session listed as attached that a setup detached while its picker was open", function()
+      attached({ "claude" })
+      pick.choose = function(items)
+        registry.reset()
+        registry.register(backend)
+        return vim.tbl_filter(function(item)
+          return item.session ~= nil
+        end, items)[1]
+      end
+      actions.select({ focus = true })
+      expect.equality(cap.ids(), {})
+      expect.equality({ #registry.attached(), methods() }, { 1, { "focus" } })
+    end)
+
     it("applies the name filter to the picker", function()
       backend = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
       registry.register(backend)

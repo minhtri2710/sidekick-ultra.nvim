@@ -258,7 +258,7 @@ local function started_session(tool, session, id)
       end
       local program = seen and program_of(seen)
       if not program then
-        return nil, errors.new("backend_error", "the new pane is not running")
+        return nil, errors.new("backend_error", ("pane terminal_%d of session %s is not running"):format(id, session))
       end
       local matched, match_err = proc.matches(tool, nil, program)
       if match_err then
@@ -276,7 +276,11 @@ local function started_session(tool, session, id)
       break
     end
   end
-  return nil, last_err or errors.new("backend_error", ("the new pane's program never showed as %s"):format(tool.name))
+  return nil,
+    last_err or errors.new(
+      "backend_error",
+      ("pane terminal_%d of session %s: its program never showed as %s"):format(id, session, tool.name)
+    )
 end
 
 ---Split a new pane to the right of nvim's own, without focus, running the tool. `new-pane` is placed relative to the

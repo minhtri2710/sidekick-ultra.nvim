@@ -189,13 +189,12 @@ local function is_attached(id)
   return false
 end
 
----The one check every pick callback runs on a state a picker returned some time after it was listed. A `setup` that
----ran while the picker was open can have removed the session's backend or the tool, or detached the session. It
----needs the session's backend registered, the tool configured, and a session that was attached still attached. Reports
----the reason when it fails.
+---A state a picker returned some time after it was listed, as it is now: a `setup` that ran while the picker was open
+---can have removed the session's backend or the tool. Needs the session's backend registered and the tool configured.
+---Reports the reason when it fails.
 ---@param state sidekick_ultra.State
----@return sidekick_ultra.State? current `state` with the tool's current spec, nil when it is no longer current
-function M.current(state)
+---@return sidekick_ultra.State? fresh `state` with the tool's current spec
+local function refreshed(state)
   local session = state.session
   if session and not registry.backend(session.backend) then
     errors.notify(errors.new("backend_error", "backend not registered: " .. session.backend))
@@ -206,20 +205,31 @@ function M.current(state)
     errors.notify(errors.new("no_match", "tool no longer configured: " .. state.name))
     return nil
   end
-  if state.attached and not is_attached(session.id) then
-    no_match()
-    return nil
-  end
   return vim.tbl_extend("force", state, { tool = tool })
 end
 
----Attach the chosen state, starting its tool first when it has no session. A state that is no longer current (see
----`current`) is refused with a notification. A missing tool is `not_installed` (its url is opened when it has one).
+---The check every callback runs that acts on a picked attached session without attaching it: `refreshed`, and a
+---session that was attached must still be attached, as a `setup` that ran while the picker was open detaches them.
+---Reports the reason when it fails.
+---@param state sidekick_ultra.State
+---@return sidekick_ultra.State? current nil when `state` is no longer current
+function M.current(state)
+  local fresh = refreshed(state)
+  if fresh and state.attached and not is_attached(state.session.id) then
+    no_match()
+    return nil
+  end
+  return fresh
+end
+
+---Attach the chosen state, starting its tool first when it has no session. A state that is not `refreshed` is refused
+---with a notification; one that was attached and has been detached since is attached again. A missing tool is
+---`not_installed` (its url is opened when it has one).
 ---@param state sidekick_ultra.State
 ---@return sidekick_ultra.Session? session
 ---@return boolean? started the session was started by this call
 function M.attach_state(state)
-  local current = M.current(state)
+  local current = refreshed(state)
   if not current then
     return nil
   end

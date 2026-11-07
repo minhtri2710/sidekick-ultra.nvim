@@ -792,7 +792,7 @@ describe("tmux backend", function()
       use_procs({})
       local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = {} })
       expect.equality({ session, err.id }, { nil, "backend_error" })
-      expect.equality(err.msg:find("%5", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
+      expect.equality(err.msg, "pane %5 is not visible to this nvim; pane %5 was left open")
     end)
   end)
 
