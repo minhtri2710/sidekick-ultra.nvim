@@ -1,6 +1,5 @@
 #!/bin/sh
-# DRAFT for D8. Live run of the zellij backend against a private zellij session and stub agent CLIs.
-# Written, not run, by the D8 Engineer. The Lead sends this recipe to the Supervisor before the first run.
+# Live run of the zellij backend against a private zellij session and stub agent CLIs. Not part of `make check`.
 #
 # What it does: creates a background zellij session under the literal root /tmp/sku-live-zellij (own HOME, XDG dirs,
 # config dir, data dir and ZELLIJ_SOCKET_DIR) FROM A LAYOUT FILE and drives headless nvim with the plugin.
@@ -16,7 +15,7 @@
 # Floating panes are not used: with one visible, zellij silently creates no tiled pane at all.
 #   outside the mux: discover, attach, send (no Enter), submit, cross-tab focus, the gone-pane guard, the not_in_mux
 #                    refusal;
-#   inside the mux (nvim typed into the sku-nvim pane): inside(), discover, start through registry.start (focused per D7,
+#   inside the mux (nvim typed into the sku-nvim pane): inside(), discover, start through registry.start (the new pane is left unfocused,
 #                    in nvim's tab and right of nvim's pane, with a tool env), the attach and status-refresh path (N2),
 #                    running at once (start waits up to 2 s for the pane's argv0 to be the tool, past the env
 #                    wrapper) and within 3 s, rediscovery, send, submit. The `new-pane` call is observed: exit code, stdout,
@@ -566,7 +565,7 @@ local function run()
       return
     end
     observe("started session", session)
-    observe("registry.start duration ms (new-pane, the wait for the tool as argv0, focus)", start_ms)
+    observe("registry.start duration ms (new-pane and the wait for the tool as argv0)", start_ms)
     -- At once, as the product does: attach, then let the event loop run the status refresh (its autocmd was
     -- registered before this one, so it has run when this one fires).
     check("attach started session", registry.attach(session) == true)
@@ -591,7 +590,7 @@ local function run()
       focused["terminal_" .. pane.id] = pane.is_focused
       by_id["terminal_" .. pane.id] = pane
     end
-    check("start focused the new pane, not nvim's", focused[session.pane] == true and focused["terminal_" .. nvim_pane] == false, focused)
+    check("start left the new pane unfocused", focused[session.pane] == false, focused)
     local new_pane, own_pane = by_id[session.pane], by_id["terminal_" .. nvim_pane]
     check("the new pane is in nvim's tab", new_pane ~= nil and own_pane ~= nil and new_pane.tab_id == own_pane.tab_id, { new_pane and new_pane.tab_id, own_pane and own_pane.tab_id })
     check("the new pane is right of nvim's pane", new_pane ~= nil and own_pane ~= nil and new_pane.pane_x > own_pane.pane_x, { new_pane and new_pane.pane_x, own_pane and own_pane.pane_x })

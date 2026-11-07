@@ -1,6 +1,6 @@
 ---The tmux backend: sessions are tmux panes. Every command is `tmux [-S <socket>] <subcommand>`, run through the exec
----seam. The shapes were probed against tmux 3.8 in D8 (design.md section 11); what the live run must still settle is
----listed in tests/fixtures/tmux/UNVERIFIED.txt.
+---seam. The shapes were probed against tmux 3.8; what the live run must still settle is listed in
+---tests/fixtures/tmux/UNVERIFIED.txt.
 ---
 ---tmux reports a pane's root process (`pane_pid`), not an agent, so a tool is found by walking that process's tree in
 ---nvim (`nvim_get_proc_children`, `nvim_get_proc`). Only a process whose name is a node or python interpreter costs a
@@ -41,11 +41,9 @@ end
 
 local buffer_count = 0
 
----`tmux.socket` from the last `setup()`.
 ---@type string?
 local socket
 
----Replace the options.
 ---@param opts { socket?: string }
 function M.setup(opts)
   socket = opts.socket

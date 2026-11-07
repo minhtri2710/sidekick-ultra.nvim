@@ -24,7 +24,6 @@ local function refresh()
   refreshed_at = vim.uv.now()
 end
 
----One entry per attached session.
 ---@return sidekick_ultra.StatusItem[]
 function M.cli()
   if not refreshed_at or vim.uv.now() - refreshed_at > MAX_AGE_MS then

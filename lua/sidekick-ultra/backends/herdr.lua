@@ -181,7 +181,7 @@ end
 ---@return sidekick_ultra.Error? err
 function M.list(tools)
   -- Without --workspace herdr lists the panes of every workspace. With no herdr server running (`server_not_running`,
-  -- src/cli/server_not_running.rs) there are no panes, so that is an empty list, not an error.
+  -- src/cli/server_not_running.rs) there are no panes.
   local panes, err = query({ "herdr", "pane", "list" }, "pane list", "panes")
   if not panes then
     if envelope_code(err) == "server_not_running" then

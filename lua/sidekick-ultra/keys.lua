@@ -5,20 +5,12 @@ local M = {}
 
 M.DEFAULT_PREFIX = "<leader>a"
 
----The first problem in a `keys` option. `path` is the full key path. A key that is not allowed has `allowed` (the
----allowed keys); any other problem has `expected` and the offending `got`.
----@class sidekick_ultra.KeysProblem
----@field path string
----@field expected? string
----@field got? any
----@field allowed? string[]
-
 ---Check a `keys` option and resolve it: nil is the default prefix, false is no keymaps, `{ prefix? = string }` is a
 ---prefix. A key besides `prefix` is the first problem found, in key order, then a `prefix` that is not a non-empty
 ---string.
 ---@param value any the user's `keys` option
 ---@return ({ prefix: string }|false)? resolved
----@return sidekick_ultra.KeysProblem? problem
+---@return sidekick_ultra.Problem? problem
 function M.resolve(value)
   if value == nil then
     return { prefix = M.DEFAULT_PREFIX }
@@ -27,6 +19,7 @@ function M.resolve(value)
   elseif type(value) ~= "table" then
     return nil, { path = "keys", expected = "table or false", got = value }
   end
+  -- The key check is written out here: lazy.lua loads this file by path, so it cannot `require` check.lua.
   local names = vim.tbl_keys(value)
   table.sort(names, function(a, b)
     return tostring(a) < tostring(b)

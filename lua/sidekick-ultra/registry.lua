@@ -1,5 +1,5 @@
 ---The registered backends, the attached sessions, discovery of sessions through the backends, and the attach and
----detach events. It calls no other core module: status and watch subscribe to the events.
+---detach events. It knows nothing of `target` or `actions` above it; `status` and `watch` subscribe to the events.
 local backend_contract = require("sidekick-ultra.backend")
 local errors = require("sidekick-ultra.errors")
 local proc = require("sidekick-ultra.proc")

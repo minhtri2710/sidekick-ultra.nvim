@@ -1,5 +1,6 @@
 ---Decides what is sent: renders messages and prompts with `{name}` / `{a|b|c}` placeholders against a snapshot,
 ---using the sources in `context/sources.lua`. The prompts are checked, stored and shown here too.
+local check = require("sidekick-ultra.check")
 local errors = require("sidekick-ultra.errors")
 local location = require("sidekick-ultra.location")
 local sources = require("sidekick-ultra.context.sources")
@@ -38,10 +39,8 @@ function M.check(name, prompt)
   if type(prompt) ~= "table" then
     return { path = path, expected = expected, got = prompt }
   end
-  for key in pairs(prompt) do
-    if key ~= "msg" then
-      return { path = path, expected = expected, got = prompt }
-    end
+  if check.table(path, prompt, { msg = true }) then
+    return { path = path, expected = expected, got = prompt }
   end
   if type(prompt.msg) ~= "string" then
     return { path = path .. ".msg", expected = "string", got = prompt.msg }

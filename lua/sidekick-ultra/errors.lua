@@ -26,7 +26,6 @@ local M = {}
 
 local TITLE = "sidekick-ultra"
 
----Ids reported as warnings; every other id is an error.
 local WARN = { no_match = true, nothing_to_send = true }
 
 local ids = {

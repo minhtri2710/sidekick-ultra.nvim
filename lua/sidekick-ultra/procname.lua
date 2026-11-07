@@ -16,7 +16,7 @@ end
 
 ---Flags of node that take a value as the next word: the options `node --help` (v26.13.0) lists with a `=...` or
 ---`=[host:]port` value (`--title=...`, `-r, --require=...`), each probed on node v26.13.0 itself: `node <flag>
----zz-none-probe.js` consumed the word (per-flag table: reviews/d10-help/node-probe.txt). The help line
+---zz-none-probe.js` consumed the word. The help line
 ---`--experimental-config-file, --experimental-default-config-file, --config-file=...` is wrong: those three take no
 ---separate value (the next word is the script), so they are not here. bun shares the table (unverified). `--run` is not
 ---here: it runs a package.json task and takes no script (NODE_EVAL_FLAGS).

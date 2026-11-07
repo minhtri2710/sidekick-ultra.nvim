@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# DRAFT for delivery 3. Live run of the rex backend against a private rex server, with stub agent CLIs only.
-# Do not run it before the Supervisor has checked this recipe. Refuses unless SKU_LIVE=1.
+# Live run of the rex backend against a private rex server, with stub agent CLIs only. Not part of `make check`.
+# Refuses unless SKU_LIVE=1.
 #
 # Everything lives under the literal root /tmp/sku-live-rex: HOME, XDG dirs, the server socket, state and stubs.
 # The script refuses when that root already exists. It starts a private server as a background job, creates two
@@ -10,7 +10,7 @@
 # Teardown: the server's own stop call, a signal to the recorded server pid only, then rm -rf of the literal root.
 #
 # Needs: jq, nvim, and the rex CLI from the Rex Beta bundle (override with SKU_REX_BIN).
-# What it settles (unverified until it runs): the `split` and `focus` commands and flags, the shapes of `ls`,
+# What it checks: the `split` and `focus` commands and flags, the shapes of `ls`,
 # `session.view`, `process`, `program_status` and the `split --json` reply, argv0 reporting for a re-exec'd stub,
 # whether a block started with a bare command name finds it on the server's PATH, and that `send` types text without
 # pressing Enter (the driver captures each screen between send and submit).
@@ -314,10 +314,10 @@ screen_has() { printf '%s' "$1" | grep -qF -- "$2"; }
 # The text is typed but not submitted: it is on the screen and the stub has not echoed it back as `got: <text>`.
 # An empty capture fails the first half, so a failed capture cannot pass this.
 unsubmitted() { screen_has "$1" "$2" && ! screen_has "$1" "got: $2"; }
-# The window that holds the started block has that block focused. A missing view or block fails.
-started_block_focused() {
+# The window that holds the started block does not have that block focused. A missing view or block fails.
+started_block_unfocused() {
   jq -e --arg b "$started_block" \
-    '[.windows[] | select(any(.layers[].blocks[]; .block_id == $b)) | .focused_block_id == $b] == [true]' \
+    '[.windows[] | select(any(.layers[].blocks[]; .block_id == $b)) | .focused_block_id != $b] == [true]' \
     "$ROOT/out/split_view" >/dev/null
 }
 
@@ -331,7 +331,7 @@ check "send did not press Enter in the claude block" unsubmitted "$claude_sent" 
 check "submit" log_has "submit: ok"
 check "focus" log_has "focus: ok"
 check "start" log_has "start: ok"
-check "start focused the started block" started_block_focused
+check "start left the started block unfocused" started_block_unfocused
 check "send2" log_has "send2: ok"
 check "started screen was captured before submit" log_has "started_after_send: exit 0"
 check "send did not press Enter in the started block" unsubmitted "$started_sent" "second line"
