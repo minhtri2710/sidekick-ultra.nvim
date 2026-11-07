@@ -172,9 +172,10 @@ describe("watch", function()
     expect.equality(fs_event_handles(), base + 1)
     vim.api.nvim_del_augroup_by_name("sidekick-ultra-watch")
     registry.detach("herdr:claude1")
-    -- The detach event is delivered by the flush. If it raises on the deleted group, `silent!` keeps that error out of
-    -- the log; what is checked is what stop() left behind.
-    vim.cmd("silent! lua require('tests.helpers.fake').flush()")
+    -- The flush delivers the detach event. Deleting the group a second time raises out of the detach autocommand; run
+    -- through `:lua`, that is an exception for pcall to take, so the error does not reach the log. The test does not
+    -- ask whether it raised, only what stop() left behind.
+    pcall(vim.fn.execute, "lua require('tests.helpers.fake').flush()")
     expect.equality(fs_event_handles(), base)
     registry.attach(fake.session("herdr", "claude", 2))
     flush()

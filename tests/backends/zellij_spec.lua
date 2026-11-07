@@ -675,6 +675,20 @@ describe("zellij backend", function()
       end
     end
 
+    ---`start` blocks the editor, so it ends as soon as the deadline is reached, whatever the step: every wait is as long
+    ---as the first, the run ends right after the last answer (`cost` ms after the last poll began) or after one wait
+    ---that began before the deadline, and it lasted until the deadline.
+    ---@param cost integer how long each answer took
+    local function ends_at_deadline(cost)
+      for _, ms in ipairs(waits) do
+        expect.equality(ms, waits[1])
+      end
+      local after = clock - (polls[#polls] + cost)
+      expect.equality(after == 0 or after == waits[#waits], true)
+      expect.equality(clock >= WAIT_MS, true)
+      expect.equality(after == 0 or clock - after < WAIT_MS, true)
+    end
+
     local function bound_error_names_everything(err)
       expect.equality(err.id, "backend_error")
       for _, part in ipairs({ "claude", "terminal_6", "skuA", "left open", "never showed" }) do
@@ -722,7 +736,8 @@ describe("zellij backend", function()
         expect.equality(polls[1], 0)
         expect.equality(#polls > 1, true)
         polled_in_order()
-        expect.equality(clock >= WAIT_MS, true)
+        expect.equality(#waits, #polls)
+        ends_at_deadline(0)
       end
     )
 
@@ -735,7 +750,7 @@ describe("zellij backend", function()
       bound_error_names_everything(err)
       expect.equality(#polls > 1, true)
       polled_in_order()
-      expect.equality(clock >= WAIT_MS, true)
+      ends_at_deadline(900)
     end)
 
     it("fails at once, naming the pane, when the pane exits or vanishes during the wait", function()
@@ -781,7 +796,7 @@ describe("zellij backend", function()
       -- Each answer takes 1000 ms: the second poll starts before the deadline; a third would start after it.
       expect.equality(#polls, 2)
       polled_in_order()
-      expect.equality(clock >= WAIT_MS, true)
+      ends_at_deadline(1000)
     end)
 
     it("stops at once when list-panes fails in the wait", function()
