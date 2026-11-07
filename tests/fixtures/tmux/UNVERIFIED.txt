@@ -36,8 +36,8 @@ stubs named claude and codex):
                             stderr_no_socket.txt (`error connecting to ... (No such file or directory)`) are both
                             hand-written; the first has not been seen from a real tmux.
   paste buffers             none were left in the server after a send (24c6bd1).
-  start                     split-window printed the id and pid; the new pane sat in nvim's window and was focused
-                            afterwards (D7); the one-element command ran through the shell as a quoted word.
+  start                     split-window printed the id and pid; the new pane sat in nvim's window (the then-registry
+                            focused it afterwards; `actions` focuses now); the one-element command ran through the shell as a quoted word.
 
 Settled by the live run at 58637a7 (reviews/d8-tmux-58637a7.log, 56 checks passed):
   display_pane_gone.txt     `display-message -p -t %999 '#{pane_in_mode}'` for a pane that does not exist: stdout was
@@ -55,7 +55,7 @@ Settled by the live run at 58637a7 (reviews/d8-tmux-58637a7.log, 56 checks passe
                             is always left first).
   raw paste (-S)            a text holding an ESC byte reached the program as the byte: the pane's tty echoed `^[`, no
                             backslash form appeared, and cat's output had the SGR sequence consumed by the terminal.
-                            tmux 3.7 is the floor (README, `MIN_VERSION`, health warning).
+                            tmux 3.7 is the floor (README, `lua/sidekick-ultra/backends/init.lua`, health warning).
 
 Not settled; a live run must still show:
   display_session.txt       `display-message -p -t $TMUX_PANE '#{session_name}'` output, and `switch-client -t %N`

@@ -15,16 +15,8 @@
 ---@field expected string
 ---@field msg string
 
----A problem found by a module that owns part of the schema (`keys`, `tools`, `render`): `path` is the full key
----path. A key that is not allowed has `allowed` (the allowed keys); any other problem has `expected` and the
----offending `got`.
----@class sidekick_ultra.Problem
----@field path string
----@field expected? string
----@field got? any
----@field allowed? string[]
-
 local backends = require("sidekick-ultra.backends")
+local check = require("sidekick-ultra.check")
 local keys = require("sidekick-ultra.keys")
 local render = require("sidekick-ultra.context.render")
 local tools = require("sidekick-ultra.tools")
@@ -55,40 +47,6 @@ local function fail(path, expected, value)
   return { path = path, expected = expected, msg = ("%s: expected %s, got %s"):format(path, expected, got) }
 end
 
----@param t table
----@return string[]
-local function sorted_keys(t)
-  local names = vim.tbl_keys(t)
-  table.sort(names, function(a, b)
-    return tostring(a) < tostring(b)
-  end)
-  return names
-end
-
----@param path string
----@param allowed string[] sorted
----@return sidekick_ultra.ConfigError
-local function unknown_key(path, allowed)
-  local names = table.concat(allowed, ", ")
-  return { path = path, expected = "one of: " .. names, msg = ("%s: unknown key (allowed: %s)"):format(path, names) }
-end
-
----Check that `value` is a table whose keys are all in `allowed` (a set); an `allowed` of nil allows any string key.
----@return sidekick_ultra.ConfigError?
-local function check_table(path, value, allowed)
-  if type(value) ~= "table" then
-    return fail(path == "" and "opts" or path, "table", value)
-  end
-  for _, key in ipairs(sorted_keys(value)) do
-    local full = path == "" and tostring(key) or (path .. "." .. tostring(key))
-    if type(key) ~= "string" then
-      return fail(full, "string key", key)
-    elseif allowed and not allowed[key] then
-      return unknown_key(full, sorted_keys(allowed))
-    end
-  end
-end
-
 local function set(...)
   local ret = {}
   for _, key in ipairs({ ... }) do
@@ -108,7 +66,12 @@ end
 ---@return sidekick_ultra.ConfigError
 local function from_problem(problem)
   if problem.allowed then
-    return unknown_key(problem.path, problem.allowed)
+    local names = table.concat(problem.allowed, ", ")
+    return {
+      path = problem.path,
+      expected = "one of: " .. names,
+      msg = ("%s: unknown key (allowed: %s)"):format(problem.path, names),
+    }
   end
   return fail(problem.path, problem.expected, problem.got)
 end
@@ -124,11 +87,12 @@ function M.validate(opts)
   for _, backend in ipairs(backends.all) do
     top[backend.name] = true
   end
-  local err = check_table("", opts, top)
-  if err then
-    return nil, err
+  local problem = check.table("", opts, top)
+  if problem then
+    return nil, from_problem(problem)
   end
 
+  local err
   if opts.watch ~= nil then
     err = check_type("watch", opts.watch, "boolean")
     if err then
@@ -137,35 +101,35 @@ function M.validate(opts)
     cfg.watch = opts.watch
   end
 
-  local resolved, problem = keys.resolve(opts.keys)
-  if not resolved and problem then
-    return nil, from_problem(problem)
+  local resolved, key_problem = keys.resolve(opts.keys)
+  if not resolved and key_problem then
+    return nil, from_problem(key_problem)
   end
   cfg.keys = resolved
 
   for _, section in ipairs({ "tools", "prompts", "context" }) do
     local value = opts[section]
     if value ~= nil then
-      err = check_table(section, value)
-      if err then
-        return nil, err
+      problem = check.table(section, value)
+      if problem then
+        return nil, from_problem(problem)
       end
       cfg[section] = vim.deepcopy(value)
     end
   end
-  for _, name in ipairs(sorted_keys(cfg.tools)) do
+  for _, name in ipairs(check.sorted_keys(cfg.tools)) do
     problem = tools.check(name, cfg.tools[name])
     if problem then
       return nil, from_problem(problem)
     end
   end
-  for _, name in ipairs(sorted_keys(cfg.prompts)) do
+  for _, name in ipairs(check.sorted_keys(cfg.prompts)) do
     problem = render.check(name, cfg.prompts[name])
     if problem then
       return nil, from_problem(problem)
     end
   end
-  for _, name in ipairs(sorted_keys(cfg.context)) do
+  for _, name in ipairs(check.sorted_keys(cfg.context)) do
     err = check_type("context." .. name, cfg.context[name], "function")
     if err then
       return nil, err
@@ -179,9 +143,9 @@ function M.validate(opts)
       for key in pairs(backend.options) do
         allowed[key] = true
       end
-      err = check_table(name, value, allowed)
-      if err then
-        return nil, err
+      problem = check.table(name, value, allowed)
+      if problem then
+        return nil, from_problem(problem)
       end
       for key, field in pairs(value) do
         local option = backend.options[key]

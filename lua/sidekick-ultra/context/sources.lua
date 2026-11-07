@@ -63,7 +63,7 @@ end
 ---@return string replacement
 ---@return string? tail appended to the message
 function M.this(snap)
-  if M.builtin.position(snap) then
+  if location.is_file(snap.buf) then
     return "{position}"
   end
   return "this", "\n\n{selection}"

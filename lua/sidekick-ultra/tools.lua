@@ -1,5 +1,6 @@
 ---The tools the plugin can drive: the built-in specs, the user's `tools` config merged over them, the validation of
 ---that config, and how a tool is recognised among running processes.
+local check = require("sidekick-ultra.check")
 local location = require("sidekick-ultra.location")
 
 ---What `is_proc` is asked about; proc.lua builds it and defines `cmd`.
@@ -67,35 +68,7 @@ local BUILTIN = {
   qwen = { cmd = { "qwen" }, url = "https://github.com/QwenLM/qwen-code", location = "escaped", mux_focus = true },
 }
 
----@type string[] sorted
-local FIELDS = { "cmd", "env", "is_proc", "location", "mux_focus", "url" }
-local ALLOWED = {}
-for _, field in ipairs(FIELDS) do
-  ALLOWED[field] = true
-end
-
----The first problem in a `tools` entry, or nil. `path` is the full key path. A key that is not allowed has `allowed`
----(the allowed keys); any other problem has `expected` and the offending `got`.
----@param path string
----@param value any
----@param allowed? table<string, true> nil allows any string key
----@return sidekick_ultra.Problem?
-local function check_map(path, value, allowed)
-  if type(value) ~= "table" then
-    return { path = path, expected = "table", got = value }
-  end
-  local names = vim.tbl_keys(value)
-  table.sort(names, function(a, b)
-    return tostring(a) < tostring(b)
-  end)
-  for _, key in ipairs(names) do
-    if type(key) ~= "string" then
-      return { path = path .. "." .. tostring(key), expected = "string key", got = key }
-    elseif allowed and not allowed[key] then
-      return { path = path .. "." .. key, allowed = FIELDS }
-    end
-  end
-end
+local ALLOWED = { cmd = true, env = true, is_proc = true, location = true, mux_focus = true, url = true }
 
 ---Check one entry of the user's `tools` option: `false` removes a tool, a table is merged over the built-in of that
 ---name or defines a new tool, which needs a `cmd`.
@@ -107,7 +80,7 @@ function M.check(name, spec)
     return
   end
   local path = "tools." .. name
-  local problem = check_map(path, spec, ALLOWED)
+  local problem = check.table(path, spec, ALLOWED)
   if problem then
     return problem
   end
@@ -125,7 +98,7 @@ function M.check(name, spec)
     end
   end
   if spec.env ~= nil then
-    problem = check_map(path .. ".env", spec.env)
+    problem = check.table(path .. ".env", spec.env)
     if problem then
       return problem
     end
@@ -158,9 +131,8 @@ function M.check(name, spec)
   end
 end
 
----Fill in a tool's defaults. A tool without `is_proc` matches the basename of its `cmd[1]` as a word. The default is
----fixed when the tool is first defined, so a user's `cmd` for a built-in changes how it starts, not what it is
----recognised by.
+---Fill in a tool's defaults. The `is_proc` default is fixed when the tool is first defined, so a user's `cmd` for a
+---built-in changes how it starts, not what it is recognised by.
 ---@param name string
 ---@param spec table fields of a `sidekick_ultra.ToolConfig`; `is_proc` may be a function already
 ---@return sidekick_ultra.Tool

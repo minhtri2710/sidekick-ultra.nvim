@@ -1,6 +1,5 @@
 #!/bin/sh
-# DRAFT for D3. Live run of the herdr backend against an isolated herdr server and stub agent CLIs.
-# Never run by the D2 Engineer. The Lead sends this recipe to the Supervisor before the first run.
+# Live run of the herdr backend against an isolated herdr server and stub agent CLIs. Not part of `make check`.
 #
 # What it does: starts `herdr server` under the literal root /tmp/sku-live-herdr (own HOME, XDG dirs, config and
 # socket), creates three panes (stub claude, stub codex, a plain shell), and drives headless nvim with the plugin:
@@ -279,8 +278,7 @@ local function run()
     for _, pane in ipairs(panes) do
       focused[pane.pane_id] = pane.focused
     end
-    local nvim_pane = os.getenv("HERDR_PANE_ID")
-    check("start focused the new pane, not nvim's", focused[session.pane_id] == true and focused[nvim_pane] == false, focused)
+    check("start left the new pane unfocused", focused[session.pane_id] == false, focused)
     if session.state == "blocked" then
       -- agent_not_ready: the agent is running but blocked during startup, so the guard rightly refuses to send.
       log("UNVERIFIABLE start: agent blocked at startup; rediscovery, send and submit not exercised")

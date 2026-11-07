@@ -1,6 +1,5 @@
 #!/bin/sh
-# DRAFT for D8. Live run of the tmux backend against a private tmux server and stub agent CLIs.
-# Never run by the engineer who wrote it. The Lead sends this recipe to the Supervisor before the first run.
+# Live run of the tmux backend against a private tmux server and stub agent CLIs. Not part of `make check`.
 #
 # What it does: starts a private tmux server on the socket /tmp/sku-live-tmux/tmux.sock (own HOME, TMPDIR and
 # TMUX_TMPDIR, `-f /dev/null`), creates three panes (a stub claude below a shell, a stub codex as the pane's own
@@ -8,7 +7,7 @@
 #   outside the mux (tmux.socket = the private socket): discover across sessions, attach, send (no Enter), submit, focus,
 #                    the not_in_mux start refusal, and "no server" meaning no sessions;
 #   inside the mux (nvim typed into the shell pane, no tmux.socket): inside(), start through registry.start (the new pane
-#                    is focused, D7), running at once, rediscovery, send and submit.
+#                    is left unfocused), running at once, rediscovery, send and submit.
 # Then it tears everything down: `kill-server` on the private socket, then `rm -rf` of the literal root.
 #
 # Every tmux call it makes (and the plugin makes, outside) names the private socket with -S. It never uses -L, the
@@ -405,8 +404,8 @@ local function run()
       { format(session.pane, "#{window_id}"), format(shell_pane, "#{window_id}") }
     )
     check(
-      "start focused the new pane, not nvim's (D7)",
-      format(session.pane, "#{pane_active}") == "1" and format(shell_pane, "#{pane_active}") == "0",
+      "start left focus on nvim's pane, not the new one",
+      format(session.pane, "#{pane_active}") == "0" and format(shell_pane, "#{pane_active}") == "1",
       { format(session.pane, "#{pane_active}"), format(shell_pane, "#{pane_active}") }
     )
     check("attach started session", registry.attach(session) == true)

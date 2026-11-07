@@ -2,7 +2,7 @@
 ---running command line), so a pane is matched to a tool by the basename of that command's first word (argv0), or by
 ---the script's name when that word is a node or python interpreter, and liveness is a CLI call instead of the
 ---in-process pid check. The rest of `pane_command` is never kept, logged, or put into an error or a notify. The shapes
----were probed in D8; what is still unverified is listed in tests/fixtures/zellij/UNVERIFIED.txt.
+---were probed against zellij 0.45.1; what is still unverified is listed in tests/fixtures/zellij/UNVERIFIED.txt.
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
 local proc = require("sidekick-ultra.proc")
@@ -39,7 +39,6 @@ function M.available()
   return exec.on_path("zellij")
 end
 
----Find the binary.
 function M.setup()
   bin_path = select(2, M.available())
 end
@@ -240,8 +239,8 @@ local function alive(session)
   return false
 end
 
----ponytail: one list-panes call per attached zellij session per refresh (status refresh and attach-time pruning);
----batch per zellij session if that ever matters.
+---ponytail: one list-panes call per attached zellij session per liveness check (`registry.check`, run by the statusline
+---refresh and before each action); batch per zellij session if that ever matters.
 ---A failing CLI call is not an answer: the session stays attached (a false here detaches it silently), as
 ---`registry.discover` keeps the attached sessions of a backend that fails. The send guard, which shares `alive`, still
 ---refuses on an error.
@@ -254,7 +253,7 @@ end
 ---Split a new pane to the right of nvim's own, without focus, running the tool. `new-pane` is placed relative to the
 ---pane that issued it (`ZELLIJ_PANE_ID`, nvim's). It has no env flag, so a non-empty `opts.env` goes in front of the
 ---command as `/usr/bin/env K=V`. It returns once the pane's program matches the tool (see the wait below), so the
----session is running at once. The registry focuses the new pane.
+---session is running at once. It does not focus the pane; `actions` does.
 ---@param tool sidekick_ultra.Tool
 ---@param opts sidekick_ultra.StartOpts
 function M.start(tool, opts)

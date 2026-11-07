@@ -1,5 +1,5 @@
 ---The rex backend: sessions are rex blocks. Every command is `<bin> --autostart=false [-S <server>] <subcommand>`.
----The shapes were checked against a live rex 0.0.1793377904-ge6592f (Rex Beta build 1696) in D3. What is still
+---The shapes were checked against a live rex 0.0.1793377904-ge6592f (Rex Beta build 1696). What is still
 ---unverified is listed in tests/fixtures/rex/UNVERIFIED.txt.
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
@@ -39,7 +39,6 @@ function M.available()
   return false
 end
 
----Replace the options and find the binary.
 ---@param opts { bin?: string, server?: string }
 function M.setup(opts)
   options = { bin = opts.bin, server = opts.server }
@@ -222,7 +221,7 @@ end
 function M.list(configured)
   local listing, err = json("ls", "ls", "--json")
   if not listing then
-    -- Exit 4 is "server unreachable": no server means no sessions, not a failure worth a toast on every discovery.
+    -- Exit 4 is "server unreachable": no server, no sessions.
     if err.code == 4 then
       return {}
     end
