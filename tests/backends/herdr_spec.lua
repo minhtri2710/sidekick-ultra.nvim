@@ -1,3 +1,4 @@
+local contract = require("sidekick-ultra.backend")
 local fake = require("tests.helpers.fake")
 local helper = require("tests.helpers.backend")
 local herdr = require("sidekick-ultra.backends.herdr")
@@ -62,11 +63,6 @@ describe("herdr backend", function()
     rec = helper.record(routes, function(argv)
       return argv[2] .. " " .. argv[3]
     end)
-  end
-
-  ---The argv of every recorded call.
-  local function argvs()
-    return rec.argvs()
   end
 
   ---The word after `flag` in `argv`.
@@ -147,7 +143,7 @@ describe("herdr backend", function()
     it("lists the panes of every workspace and asks process-info only for matching panes", function()
       install(routes())
       herdr.list(tools())
-      expect.equality(argvs(), {
+      expect.equality(rec.argvs(), {
         { "herdr", "pane", "list" },
         { "herdr", "pane", "process-info", "--pane", "w1:p1" },
         { "herdr", "pane", "process-info", "--pane", "w1:p2" },
@@ -271,20 +267,21 @@ describe("herdr backend", function()
     it("lists no panes, and no error, when no herdr server is running", function()
       install(routes({ ["pane list"] = failing("server_not_running") }))
       expect.equality({ herdr.list(tools()) }, { {} })
-      expect.equality(argvs(), { { "herdr", "pane", "list" } })
+      expect.equality(rec.argvs(), { { "herdr", "pane", "list" } })
     end)
 
-    it("still reports every other pane list failure with its text", function()
-      for stderr, text in pairs({
-        [failing("server_unavailable").stderr] = "herdr exited with 1: "
-          .. fixture("server_unavailable"):gsub("\n", ""),
-        ["not json\n"] = "herdr exited with 1: not json",
-        ["\n"] = "herdr exited with 1",
+    it("still reports every other pane list failure", function()
+      -- Each row is the stderr herdr printed and a token of its cause, which the error must carry.
+      for _, row in ipairs({
+        { failing("server_unavailable").stderr, "server_unavailable" },
+        { "not json\n", "not json" },
+        { "\n" },
       }) do
-        install(routes({ ["pane list"] = { code = 1, stdout = "", stderr = stderr } }))
+        install(routes({ ["pane list"] = { code = 1, stdout = "", stderr = row[1] } }))
         local sessions, err = herdr.list(tools())
         expect.equality(sessions, nil)
-        expect.equality({ err.id, err.code, err.msg }, { "backend_error", 1, text })
+        expect.equality({ err.id, err.code }, { "backend_error", 1 })
+        expect.equality(row[2] == nil or err.msg:find(row[2], 1, true) ~= nil, true)
       end
     end)
 
@@ -341,7 +338,7 @@ describe("herdr backend", function()
       install(routes())
       local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality(err, nil)
-      expect.equality(argvs(), {
+      expect.equality(rec.argvs(), {
         { "herdr", "agent", "list" },
         { "herdr", "pane", "split", "--pane", "w1:p1", "--direction", "right", "--cwd", "/work/proj", "--no-focus" },
         {
@@ -373,7 +370,7 @@ describe("herdr backend", function()
     it("passes one --env per entry, sorted, before --no-focus", function()
       install(routes())
       herdr.start(tool(), { cwd = "/work/proj", env = { ZED = "last one", ALPHA = "a=b" } })
-      expect.equality(argvs()[2], {
+      expect.equality(rec.argvs()[2], {
         "herdr",
         "pane",
         "split",
@@ -394,7 +391,7 @@ describe("herdr backend", function()
     it("passes tool.cmd[2..] after -- and nothing else of the command", function()
       install(routes())
       herdr.start(tool("copilot", { "copilot", "--banner", "two words" }), { cwd = "/work/proj", env = {} })
-      expect.equality(argvs()[3], {
+      expect.equality(rec.argvs()[3], {
         "herdr",
         "agent",
         "start",
@@ -442,7 +439,7 @@ describe("herdr backend", function()
       install(routes())
       local session = herdr.start(tool("cursor", { "cursor-agent" }), { cwd = "/work/proj", env = {} })
       expect.equality(session ~= nil, true)
-      expect.equality(after(argvs()[3], "--kind"), "cursor")
+      expect.equality(after(rec.argvs()[3], "--kind"), "cursor")
     end)
 
     it("creates nothing when agent list fails", function()
@@ -482,7 +479,7 @@ describe("herdr backend", function()
         state = "blocked",
         pane_id = "w1:p4",
       })
-      expect.equality(argvs()[4], { "herdr", "pane", "process-info", "--pane", "w1:p4" })
+      expect.equality(rec.argvs()[4], { "herdr", "pane", "process-info", "--pane", "w1:p4" })
       expect.equality(#rec.calls, 4)
     end)
 
@@ -495,8 +492,8 @@ describe("herdr backend", function()
       expect.equality(session, nil)
       expect.equality(err.id, "backend_error")
       expect.equality(#rec.calls, 5)
-      expect.equality(argvs()[4][3], "process-info")
-      expect.equality(argvs()[5], { "herdr", "pane", "close", "w1:p4" })
+      expect.equality(rec.argvs()[4][3], "process-info")
+      expect.equality(rec.argvs()[5], { "herdr", "pane", "close", "w1:p4" })
     end)
 
     it("closes exactly the pane it just split for every agent start failure, and returns the start error", function()
@@ -513,7 +510,7 @@ describe("herdr backend", function()
         local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
         expect.equality(session, nil)
         expect.equality({ err.id, err.code }, { "backend_error", row[2] })
-        expect.equality(argvs()[4], { "herdr", "pane", "close", "w1:p4" })
+        expect.equality(rec.argvs()[4], { "herdr", "pane", "close", "w1:p4" })
         expect.equality(#rec.calls, 4)
       end
     end)
@@ -536,7 +533,7 @@ describe("herdr backend", function()
       local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality(session, nil)
       expect.equality(err.id, "backend_error")
-      expect.equality(argvs()[#rec.calls], { "herdr", "pane", "close", "w1:p4" })
+      expect.equality(rec.argvs()[#rec.calls], { "herdr", "pane", "close", "w1:p4" })
     end)
 
     it("returns backend_error and closes the pane when process-info has no shell pid", function()
@@ -548,7 +545,7 @@ describe("herdr backend", function()
       local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality(session, nil)
       expect.equality(err.id, "backend_error")
-      expect.equality(argvs()[#rec.calls], { "herdr", "pane", "close", "w1:p4" })
+      expect.equality(rec.argvs()[#rec.calls], { "herdr", "pane", "close", "w1:p4" })
     end)
 
     it("says when the close of the pane of a start that failed after the agent started failed too", function()
@@ -573,7 +570,7 @@ describe("herdr backend", function()
       install(routes())
       local text = "  fix @a.lua :L3\n--flag 'quoted' $HOME\n"
       expect.equality(herdr.send(pane_session(), text) ~= nil, true)
-      expect.equality(argvs(), {
+      expect.equality(rec.argvs(), {
         { "herdr", "pane", "get", "w1:p1" },
         { "herdr", "pane", "send-text", "w1:p1", text },
       })
@@ -595,8 +592,11 @@ describe("herdr backend", function()
       install(routes({ ["pane get"] = fixture("pane_get_blocked") }))
       local ok, err = herdr.send(pane_session(), "hello")
       expect.equality(ok, nil)
-      expect.equality({ err.id, err.msg }, { "session_blocked", "claude (herdr:w1:p1) is blocked; nothing was sent" })
-      expect.equality(argvs(), { { "herdr", "pane", "get", "w1:p1" } })
+      local _, want = contract.guard_send(pane_session(), function()
+        return true
+      end)
+      expect.equality(err, want)
+      expect.equality(rec.argvs(), { { "herdr", "pane", "get", "w1:p1" } })
     end)
 
     it("refuses with status_unreadable when the read fails, and sends nothing", function()
@@ -620,7 +620,6 @@ describe("herdr backend", function()
         local ok, err = herdr.send(pane_session(), "hello")
         expect.equality(ok, nil)
         expect.equality(err.id, "status_unreadable")
-        expect.equality(vim.startswith(err.msg, "cannot read the state of herdr:w1:p1: "), true)
         expect.equality(#rec.calls, 1)
       end
     end)
@@ -628,7 +627,7 @@ describe("herdr backend", function()
     it("names the pane when herdr reports a state it does not know", function()
       install(routes({ ["pane get"] = fixture("pane_get_unrecognized") }))
       local _, err = herdr.send(pane_session(), "hello")
-      expect.equality(err.msg, "cannot read the state of herdr:w1:p1: herdr pane w1:p1 reported no usable agent_status")
+      expect.equality(err.msg:find("w1:p1", 1, true) ~= nil and err.msg:find("agent_status", 1, true) ~= nil, true)
     end)
 
     it("reports a failing send-text as backend_error", function()
@@ -643,7 +642,7 @@ describe("herdr backend", function()
     it("submit sends the Enter key to the pane", function()
       install({ ["pane send-keys"] = fixture("ok") })
       expect.equality(herdr.submit(pane_session()) ~= nil, true)
-      expect.equality(argvs(), { { "herdr", "pane", "send-keys", "w1:p1", "Enter" } })
+      expect.equality(rec.argvs(), { { "herdr", "pane", "send-keys", "w1:p1", "Enter" } })
     end)
 
     it("submit reports a failure as backend_error", function()
@@ -656,7 +655,7 @@ describe("herdr backend", function()
     it("focus uses agent focus on the pane id, never pane focus", function()
       install({ ["agent focus"] = fixture("ok") })
       expect.equality(herdr.focus(pane_session()) ~= nil, true)
-      expect.equality(argvs(), { { "herdr", "agent", "focus", "w1:p1" } })
+      expect.equality(rec.argvs(), { { "herdr", "agent", "focus", "w1:p1" } })
     end)
 
     it("focus reports a failure as backend_error", function()

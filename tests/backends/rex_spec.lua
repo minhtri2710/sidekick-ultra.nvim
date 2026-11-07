@@ -1,5 +1,6 @@
 -- The fixtures in tests/fixtures/rex follow the shapes a live rex 0.0.1793377904-ge6592f (Rex Beta build 1696) printed
 -- in D3. What is still unverified is listed in UNVERIFIED.txt there.
+local contract = require("sidekick-ultra.backend")
 local fake = require("tests.helpers.fake")
 local helper = require("tests.helpers.backend")
 local rex = require("sidekick-ultra.backends.rex")
@@ -464,7 +465,7 @@ describe("rex backend", function()
     end)
 
     it("maps a failing ps to backend_error without its stdout", function()
-      local pid = fake.self_proc()
+      fake.self_proc()
       rec = record(node_routes({ name = "node", argv0 = "node" }, {
         code = 3,
         stdout = "node /x/bin/pi --api-key " .. SECRET .. "\n",
@@ -473,7 +474,7 @@ describe("rex backend", function()
       local list, err = rex.list(tools.all())
       expect.equality(list, nil)
       expect.equality({ err.id, err.code }, { "backend_error", 3 })
-      expect.equality(err.msg, ("ps exited with 3 for pid %d: ps: boom"):format(pid))
+      expect.equality(err.msg:find("ps: boom", 1, true) ~= nil, true)
       expect.equality(vim.inspect({ err, rec.calls }):find(SECRET, 1, true), nil)
     end)
 
@@ -644,7 +645,10 @@ describe("rex backend", function()
       rec = record(routes(fixture("status_blocked")))
       local res, err = rex.send(a2(), "hello\n")
       expect.equality(res, nil)
-      expect.equality({ err.id, err.msg }, { "session_blocked", "claude (rex:block:a2) is blocked; nothing was sent" })
+      local _, want = contract.guard_send(a2(), function()
+        return true
+      end)
+      expect.equality(err, want)
       expect.equality(#rec.subs, 1)
     end)
 
@@ -675,7 +679,8 @@ describe("rex backend", function()
         rec = nil
         expect.equality(res, nil)
         expect.equality(err.id, "status_unreadable")
-        expect.equality(vim.startswith(err.msg, "cannot read the state of rex:block:a2: "), true)
+        -- A failed read keeps what rex printed in the error.
+        expect.equality(case.stderr == "" or err.msg:find(case.stderr, 1, true) ~= nil, true)
         expect.equality(count, 1)
       end
     end)

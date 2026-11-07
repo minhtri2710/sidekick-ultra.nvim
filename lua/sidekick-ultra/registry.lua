@@ -37,12 +37,6 @@ function M.backend(name)
   end
 end
 
----Detach every attached session, firing the detach events, and forget all backends.
-function M.reset()
-  M.detach_all()
-  backends = {}
-end
-
 ---Whether the session still runs: the rule is in `backend.lua`.
 ---@param session sidekick_ultra.Session session of a registered backend
 ---@return boolean
@@ -86,13 +80,14 @@ function M.detach(id)
   return session
 end
 
----Detach every attached session, firing the detach events (running or not).
-function M.detach_all()
+---Detach every attached session, firing the detach events (running or not), and forget all backends.
+function M.reset()
   local ids = vim.tbl_keys(attached)
   table.sort(ids)
   for _, id in ipairs(ids) do
     M.detach(id)
   end
+  backends = {}
 end
 
 ---The attached sessions sorted by id. No side effects: `check` and `discover` detach the ones that stopped.

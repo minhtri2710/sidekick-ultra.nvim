@@ -61,11 +61,7 @@ end
 ---Set the plugin up with the given options and every backend disabled, so no backend registers by accident.
 ---@param opts? table
 local function setup(opts)
-  local cfg = vim.deepcopy(opts or {})
-  for _, name in ipairs(require("sidekick-ultra.backends").names()) do
-    cfg[name] = { enabled = false }
-  end
-  sidekick.setup(cfg)
+  fake.reset(nil, opts)
 end
 
 describe("keys", function()

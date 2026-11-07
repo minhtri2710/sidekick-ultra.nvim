@@ -2,6 +2,7 @@ local exec = require("sidekick-ultra.exec")
 local expect = MiniTest.expect
 local proc = require("sidekick-ultra.proc")
 local procname = require("sidekick-ultra.procname")
+local tools = require("sidekick-ultra.tools")
 
 describe("procname", function()
   describe("is_interpreter", function()
@@ -329,13 +330,9 @@ describe("procname", function()
       exec.run = function()
         return { code = 0, stdout = line .. "\n", stderr = "" }
       end
-      local gemini = {
-        name = "gemini",
-        is_proc = function(info)
-          return info.cmd == "gemini"
-        end,
-      }
-      expect.equality({ proc.tool_of({ gemini = gemini }, 7, { "node" }) }, {})
+      -- The built-in matcher finds the word "gemini" anywhere in a command, so only the program name keeps it out.
+      tools.setup()
+      expect.equality({ proc.tool_of({ gemini = tools.get("gemini") }, 7, { "node" }) }, {})
     end)
   end)
 end)

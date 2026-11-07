@@ -654,10 +654,14 @@ describe("actions", function()
       scratch({ "alpha", "beta", "gamma" })
       vim.cmd("normal! ggVj")
       expect.equality(vim.fn.mode(), "V")
-      pick.choose = choose("selection")
+      local pick_selection, mode_at_pick = choose("selection"), nil
+      pick.choose = function(items)
+        mode_at_pick = vim.fn.mode()
+        return pick_selection(items)
+      end
       actions.prompt({})
       expect.equality(backend.delivered, { "alpha\nbeta\n" })
-      expect.equality(vim.fn.mode(), "n")
+      expect.equality(mode_at_pick, "n")
     end)
   end)
 
