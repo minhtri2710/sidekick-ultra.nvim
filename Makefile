@@ -11,6 +11,6 @@ test:
 	env -u SKU_SPEC scripts/test
 
 test-floor:
-	env -u SKU_SPEC NVIM=/tmp/sku-nvim-0.11/nvim-macos-arm64/bin/nvim scripts/test
+	env -u SKU_SPEC NVIM=$(CURDIR)/.tests/nvim-0.11/nvim-macos-arm64/bin/nvim scripts/test
 
 check: fmt lint test
