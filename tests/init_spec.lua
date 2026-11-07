@@ -1,3 +1,4 @@
+local actions = require("sidekick-ultra.actions")
 local fake = require("tests.helpers.fake")
 local notify = require("tests.helpers.notify")
 local registry = require("sidekick-ultra.registry")
@@ -149,13 +150,12 @@ describe("setup", function()
     fake.flush()
     expect.equality(events, { "herdr:claude1" })
     expect.equality(registry.attached(), {})
-    expect.equality(require("sidekick-ultra.watch").active(), false)
     expect.equality(require("sidekick-ultra.status").cli(), {})
   end)
 
-  it("exposes the actions on the module", function()
+  it("exposes the actions themselves as the public API", function()
     for _, name in ipairs({ "send", "prompt", "select", "focus", "close", "render" }) do
-      expect.equality(type(sidekick[name]), "function")
+      expect.equality(sidekick[name] == actions[name], true)
     end
   end)
 end)

@@ -557,6 +557,38 @@ describe("actions", function()
       expect.equality(pick.selects[1].opts.prompt, "sidekick-ultra prompt")
     end)
 
+    it("gives each item the prompt as written: a template, a table's msg, or <function>", function()
+      fake.reset({ claude = { cmd = fake.INSTALLED } }, {
+        prompts = {
+          greet = "hello\nthere",
+          tabled = { msg = "from table" },
+          dyn = function()
+            return "from function"
+          end,
+        },
+      })
+      attached({ "claude" })
+      pick.choose = function() end
+      actions.prompt({})
+      local display = {}
+      for _, item in ipairs(pick.selects[1].items) do
+        display[item.name] = item.display
+      end
+      expect.equality({ display.greet, display.tabled, display.dyn }, { "hello\nthere", "from table", "<function>" })
+    end)
+
+    it("reports a chosen prompt whose session's backend is no longer registered", function()
+      attached({ "claude" })
+      pick.choose = function(items)
+        local item = choose("changes")(items)
+        registry.reset()
+        return item
+      end
+      actions.prompt({})
+      expect.equality(cap.ids(), { "backend_error" })
+      expect.equality(cap.calls[1].msg, "backend not registered: herdr")
+    end)
+
     it("delivers to the session picked first when several are attached, with no second pick", function()
       file_buffer()
       attached({ "claude", "gemini" })
@@ -720,7 +752,7 @@ describe("actions", function()
   end)
 
   describe("focus", function()
-    it("focuses every target session through its backend", function()
+    it("focuses the target session through its backend", function()
       attached({ "claude" })
       actions.focus({})
       expect.equality(backend.calls, { { "focus", "herdr:claude1" } })

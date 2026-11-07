@@ -17,6 +17,16 @@ local function names(states)
   end, states)
 end
 
+---Register a backend that lists a claude and a codex session, and attach both.
+local function two_attached()
+  registry.register(fake.backend("herdr", {
+    sessions = { fake.session("herdr", "claude", 1), fake.session("herdr", "codex", 1) },
+  }))
+  for _, s in ipairs(registry.discover()) do
+    registry.attach(s)
+  end
+end
+
 describe("target", function()
   local cap, pick
   before_each(function()
@@ -225,23 +235,13 @@ describe("target", function()
   end)
 
   describe("with_target", function()
+    ---The id of the session the callback got, and its tool.
     local function run(opts)
       local got
-      target.with_target(opts, function(sessions)
-        got = vim.tbl_map(function(s)
-          return s.id
-        end, sessions)
+      target.with_target(opts, function(state)
+        got = { state.session.id, state.tool.name }
       end)
       return got
-    end
-
-    local function two_attached()
-      registry.register(fake.backend("herdr", {
-        sessions = { fake.session("herdr", "claude", 1), fake.session("herdr", "codex", 1) },
-      }))
-      for _, s in ipairs(registry.discover()) do
-        registry.attach(s)
-      end
     end
 
     it("picks over all matching states and attaches when none is attached", function()
@@ -249,7 +249,7 @@ describe("target", function()
       pick.choose = function(items)
         return items[1]
       end
-      expect.equality(run({ attach = true }), { "herdr:claude1" })
+      expect.equality(run({ attach = true }), { "herdr:claude1", "claude" })
       expect.equality(#pick.selects, 1)
       expect.equality(#registry.attached(), 1)
     end)
@@ -263,14 +263,14 @@ describe("target", function()
       pick.choose = function(items)
         return items[1]
       end
-      local flags = {}
-      local function record(_, started)
-        table.insert(flags, started or false)
+      local got = {}
+      local function record(state, started)
+        table.insert(got, { state.session.id, started or false })
       end
       target.with_target({ attach = true, filter = { name = "codex" } }, record)
       target.with_target({ attach = true, filter = { name = "claude" } }, record)
       target.with_target({ filter = { name = "claude" } }, record)
-      expect.equality(flags, { true, false, false })
+      expect.equality(got, { { "herdr:codexnew1", true }, { "herdr:claude1", false }, { "herdr:claude1", false } })
       expect.equality(b.of("focus"), {})
     end)
 
@@ -297,26 +297,57 @@ describe("target", function()
     it("acts on the only attached match without UI", function()
       registry.register(fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } }))
       registry.attach(registry.discover()[1])
-      expect.equality(run({ attach = true }), { "herdr:claude1" })
+      expect.equality(run({ attach = true }), { "herdr:claude1", "claude" })
       expect.equality(#pick.selects, 0)
     end)
 
-    it("picks among several attached matches unless the action is 'all'", function()
+    it("picks among several attached matches", function()
       two_attached()
       pick.choose = function(items)
         return items[2]
       end
-      expect.equality(run({ attach = true }), { "herdr:codex1" })
+      expect.equality(run({ attach = true }), { "herdr:codex1", "codex" })
       expect.equality(#pick.selects, 1)
       expect.equality(#pick.selects[1].items, 2)
-      expect.equality(run({ all = true }), { "herdr:claude1", "herdr:codex1" })
-      expect.equality(#pick.selects, 1)
     end)
 
     it("narrows the attached matches with the filter", function()
       two_attached()
-      expect.equality(run({ filter = { name = "codex" } }), { "herdr:codex1" })
+      expect.equality(run({ filter = { name = "codex" } }), { "herdr:codex1", "codex" })
       expect.equality(#pick.selects, 0)
+    end)
+  end)
+
+  describe("with_attached", function()
+    local function run(filter)
+      local got = {}
+      target.with_attached(filter, function(state)
+        table.insert(got, state.session.id)
+      end)
+      return got
+    end
+
+    it("passes every attached match without UI", function()
+      two_attached()
+      expect.equality(run(), { "herdr:claude1", "herdr:codex1" })
+      expect.equality(run({ name = "codex" }), { "herdr:codex1" })
+      expect.equality(#pick.selects, 0)
+    end)
+
+    it("reports no_match when no attached session matches", function()
+      expect.equality(run(), {})
+      two_attached()
+      expect.equality(run({ name = "ghost" }), {})
+      expect.equality(cap.ids(), { "no_match", "no_match" })
+    end)
+
+    it("checks that the attached sessions still run first", function()
+      local b = fake.backend("herdr")
+      registry.register(b)
+      local s = fake.session("herdr", "claude")
+      registry.attach(s)
+      s.proc_name = "gone"
+      expect.equality({ run(), cap.ids(), #b.of("list") }, { {}, { "no_match" }, 1 })
     end)
   end)
 end)
