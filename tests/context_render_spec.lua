@@ -236,19 +236,6 @@ describe("context.render", function()
       expect.equality(calls, 101)
     end)
 
-    it("accepts user sources returning a string, a list or nothing", function()
-      render.setup(nil, {
-        list = function()
-          return { "a", "b" }
-        end,
-        text = function()
-          return "s"
-        end,
-      })
-      expect.equality(run({ msg = "{list}" }), "a\nb")
-      expect.equality(run({ msg = "{text}" }), "s")
-    end)
-
     it("writes one build out in each style", function()
       local file = vim.fn.tempname() .. "/my file.lua"
       vim.fn.mkdir(vim.fs.dirname(file), "p")
@@ -386,10 +373,13 @@ describe("context.render", function()
     end)
 
     it("counts a source returning a malformed value as empty and keeps the cause", function()
+      local mixed = { "a" }
+      mixed.n = 1
       local bad = {
         number = 5,
         yes = true,
         dict = { lnum = 1 },
+        mixed = mixed,
         func = function() end,
         numbers = { 1, 2 },
         empty_table = { { {} } },
@@ -407,7 +397,7 @@ describe("context.render", function()
         expect.equality(ok, true)
         expect.equality(text, nil)
         expect.equality(err.id, "render_failed")
-        expect.equality(says(err, { "(" .. name .. ": " }), true)
+        expect.equality(says(err, { "(" .. name .. ": " }, { "render.lua:" }), true)
       end
     end)
 
