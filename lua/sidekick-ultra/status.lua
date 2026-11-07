@@ -1,6 +1,5 @@
----Statusline data. A refresh runs `registry.is_running` for each attached session: an in-process pid check, except
----for a backend that defines its own `is_running` (zellij), which makes one CLI call per attached session.
----A failed check first triggers one discovery (see `registry.attached`).
+---Statusline data: the attached sessions, cached. The cache follows the attach and detach events and runs the
+---liveness check (`registry.check`) when it is older than `MAX_AGE_MS`.
 local registry = require("sidekick-ultra.registry")
 
 local M = {}
@@ -18,35 +17,31 @@ local MAX_AGE_MS = 5000
 local items = {}
 local refreshed_at = nil
 
-function M.refresh()
+local function refresh()
   items = vim.tbl_map(function(session)
     return { id = session.id, tool = session.tool, cwd = session.cwd, backend = session.backend, state = session.state }
   end, registry.attached())
   refreshed_at = vim.uv.now()
 end
 
----One entry per attached session. Refreshed on attach and detach, and when older than 5 s (which also detaches
----sessions that stopped running).
+---One entry per attached session.
 ---@return sidekick_ultra.StatusItem[]
 function M.cli()
   if not refreshed_at or vim.uv.now() - refreshed_at > MAX_AGE_MS then
-    M.refresh()
+    registry.check()
+    refresh()
   end
   return items
 end
 
----Forget the cache (tests).
-function M.reset()
+---Start from an empty cache and follow the attach and detach events.
+function M.setup()
   items = {}
   refreshed_at = nil
-end
-
-function M.setup()
-  local group = vim.api.nvim_create_augroup("sidekick-ultra-status", { clear = true })
   vim.api.nvim_create_autocmd("User", {
-    group = group,
+    group = vim.api.nvim_create_augroup("sidekick-ultra-status", { clear = true }),
     pattern = { registry.ATTACH, registry.DETACH },
-    callback = M.refresh,
+    callback = refresh,
   })
 end
 

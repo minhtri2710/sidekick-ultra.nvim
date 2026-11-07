@@ -4,7 +4,7 @@ local errors = require("sidekick-ultra.errors")
 
 local M = {}
 
-M.NAME = "SidekickUltra"
+local NAME = "SidekickUltra"
 
 ---Subcommands and the keys each accepts, with the value type of each key.
 ---@type table<string, table<string, "string"|"boolean">>
@@ -16,6 +16,10 @@ local SUBS = {
   close = { name = "string", all = "boolean" },
 }
 local ORDER = { "select", "send", "prompt", "focus", "close" }
+
+---The subcommands that render editor context. With a range they run in the last visual selection, which their
+---capture then leaves; the others never enter visual mode.
+local SELECTION = { send = true, prompt = true }
 
 ---@param id sidekick_ultra.ErrorId
 ---@param msg string
@@ -97,7 +101,6 @@ function M.parse(line)
   local opts = {}
   for i = 2, #list do
     local word = list[i].text
-    -- The key is everything before the first `=`; a quoted value never contains the raw key.
     local key, value = word:match("^([%w_]+)=(.*)$")
     if not key or value == "" then
       return fail("invalid_args", "malformed argument " .. word, { arg = word })
@@ -116,8 +119,8 @@ function M.parse(line)
   return sub, opts
 end
 
----Run `:SidekickUltra`. `range` is the command's range count; with a range the last visual selection is restored
----first so `{selection}` works from `:'<,'>SidekickUltra send ...`.
+---Run `:SidekickUltra`. `range` is the command's range count; with a range, `SELECTION` subcommands first restore the
+---last visual selection so `{selection}` works from `:'<,'>SidekickUltra send ...`.
 ---@param line string
 ---@param range? integer
 function M.run(line, range)
@@ -126,7 +129,7 @@ function M.run(line, range)
     errors.notify(opts)
     return
   end
-  if range and range > 0 then
+  if range and range > 0 and SELECTION[sub] then
     vim.cmd("normal! gv")
   end
   actions[sub](opts)
@@ -137,7 +140,7 @@ end
 ---@param cursorpos integer
 ---@return string[]
 function M.complete(arglead, cmdline, cursorpos)
-  local rest = cmdline:sub(1, cursorpos):match(M.NAME .. "!?%s+(.*)$")
+  local rest = cmdline:sub(1, cursorpos):match(NAME .. "!?%s+(.*)$")
   if not rest then
     return {}
   end
@@ -163,7 +166,7 @@ function M.complete(arglead, cmdline, cursorpos)
 end
 
 function M.setup()
-  vim.api.nvim_create_user_command(M.NAME, function(o)
+  vim.api.nvim_create_user_command(NAME, function(o)
     M.run(o.args, o.range)
   end, { nargs = "*", range = true, complete = M.complete, desc = "Drive AI CLIs in herdr panes or rex blocks" })
 end

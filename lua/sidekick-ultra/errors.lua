@@ -24,7 +24,7 @@
 
 local M = {}
 
-M.TITLE = "sidekick-ultra"
+local TITLE = "sidekick-ultra"
 
 ---Ids reported as warnings; every other id is an error.
 local WARN = { no_match = true, nothing_to_send = true }
@@ -65,7 +65,7 @@ end
 ---@param msg string
 ---@param id? string
 function M.message(level, msg, id)
-  vim.notify(msg, level, { title = M.TITLE, error_id = id })
+  vim.notify(msg, level, { title = TITLE, error_id = id })
 end
 
 ---@param msg string

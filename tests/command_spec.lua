@@ -131,6 +131,15 @@ describe("command", function()
       expect.equality(calls[2][3], "n")
     end)
 
+    it("enters visual mode only for the subcommands that read the selection, and leaves none in it", function()
+      vim.api.nvim_buf_set_lines(0, 0, -1, false, { "a", "b", "c" })
+      for _, sub in ipairs({ "select", "focus", "close" }) do
+        vim.cmd("normal! ggVj\27")
+        vim.cmd("'<,'>SidekickUltra " .. sub)
+        expect.equality({ sub, vim.fn.mode() }, { sub, "n" })
+      end
+    end)
+
     it("is registered as :SidekickUltra, accepting a range", function()
       expect.equality(vim.fn.exists(":SidekickUltra"), 2)
       vim.api.nvim_buf_set_lines(0, 0, -1, false, { "a", "b", "c" })

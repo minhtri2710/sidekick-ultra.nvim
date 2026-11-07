@@ -25,6 +25,7 @@ function M.setup(opts)
   require("sidekick-ultra.command").setup()
   require("sidekick-ultra.keys").setup(cfg.keys)
   require("sidekick-ultra.status").setup()
+  require("sidekick-ultra.watch").setup()
 end
 
 ---Render a message or prompt and send it to the target session. See `sidekick_ultra.ActionOpts`.

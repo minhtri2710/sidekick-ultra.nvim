@@ -896,20 +896,17 @@ describe("zellij backend", function()
       expect.equality(waits, {})
     end)
 
-    it("is picked by registry.start, which focuses the new pane afterwards", function()
+    it("is picked by registry.start, which only creates the pane", function()
       registry.register(zellij)
-      local focus = "--session skuA action focus-pane-id terminal_6"
       rec = record({
         ["--session skuA action new-pane --direction right --no-focus --cwd " .. vim.fn.getcwd() .. " --name sku-claude -- /bin/sh"] = fixture(
           "new_pane.txt"
         ),
         [PANES_A] = fixture("list_panes_a_started.json"),
-        [focus] = "",
       })
       local session = registry.start(tools.get("claude"))
       expect.equality(session.id, "zellij:skuA:terminal_6")
-      expect.equality(#rec.subs, 3)
-      expect.equality(rec.keys()[3], focus)
+      expect.equality(#rec.subs, 2)
     end)
   end)
 
@@ -1091,16 +1088,13 @@ describe("zellij backend", function()
         end, list),
         { "zellij:skuA:terminal_1", "zellij:skuA:terminal_2" }
       )
-      expect.equality(list[1].sid, registry.sid("claude", "/tmp/sku-proj-a"))
       local calls = #rec.subs
       expect.equality(registry.attach(list[1]), true)
-      -- The attach event is scheduled; its status refresh asks the backend, which must go through the seam. Let it
-      -- run now, while the seam is still replaced, and leave nothing scheduled behind.
-      vim.wait(100, function()
-        return #rec.subs > calls
-      end)
+      -- The liveness check asks the backend, which must go through the seam.
+      registry.check()
       expect.equality(rec.keys()[calls + 1], PANES_A)
-      expect.equality(#require("sidekick-ultra.status").cli(), 1)
+      expect.equality(#registry.attached(), 1)
+      -- Let the attach event run while the seam is still replaced, and leave nothing scheduled behind.
       registry.detach_all()
       vim.wait(50)
     end)

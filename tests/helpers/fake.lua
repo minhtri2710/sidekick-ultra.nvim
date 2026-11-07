@@ -122,7 +122,6 @@ function M.reset(tools, extra)
     cfg.tools[name] = spec
   end
   require("sidekick-ultra").setup(vim.tbl_extend("force", cfg, extra or {}))
-  require("sidekick-ultra.status").reset()
 end
 
 ---An executable that makes a tool count as installed.

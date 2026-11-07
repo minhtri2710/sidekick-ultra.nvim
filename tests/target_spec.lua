@@ -193,13 +193,12 @@ describe("target", function()
       expect.equality(#registry.attached(), 1)
     end)
 
-    it("starts a not-started tool through the backend inside the mux, then attaches it", function()
+    it("starts a not-started tool through the backend inside the mux, then attaches it, without focusing", function()
       local b = fake.backend("herdr", { is_inside = true })
       registry.register(b)
       local session = target.attach_state(target.states({ name = "codex" })[1])
       expect.equality(session.id, "herdr:codexnew1")
-      expect.equality(#b.of("start"), 1)
-      expect.equality(b.of("focus"), { { "focus", "herdr:codexnew1" } })
+      expect.equality({ #b.of("start"), b.of("focus") }, { 1, {} })
       expect.equality(registry.attached()[1].id, "herdr:codexnew1")
     end)
 
@@ -209,17 +208,6 @@ describe("target", function()
       local _, started = target.attach_state(target.states({ name = "codex" })[1])
       local _, existing = target.attach_state(target.states({ started = true })[1])
       expect.equality({ started, existing }, { true, false })
-      expect.equality(#b.of("focus"), 1)
-    end)
-
-    it("does not focus a started tool with focus = false, but attaches it", function()
-      local b = fake.backend("herdr", { is_inside = true })
-      registry.register(b)
-      local session = target.attach_state(target.states({ name = "codex" })[1], { focus = false })
-      expect.equality(
-        { b.of("focus"), registry.attached()[1].id, session.id },
-        { {}, "herdr:codexnew1", "herdr:codexnew1" }
-      )
     end)
 
     it("refuses to start with not_in_mux and creates nothing", function()
@@ -266,20 +254,6 @@ describe("target", function()
       expect.equality(#registry.attached(), 1)
     end)
 
-    it("focuses a tool it starts, unless the action passes focus = false", function()
-      local b = fake.backend("herdr", { is_inside = true })
-      registry.register(b)
-      pick.choose = function(items)
-        return items[1]
-      end
-      expect.equality(run({ attach = true, filter = { name = "codex" } }), { "herdr:codexnew1" })
-      expect.equality(b.of("focus"), { { "focus", "herdr:codexnew1" } })
-      registry.detach("herdr:codexnew1")
-      b.calls = {}
-      expect.equality(run({ attach = true, filter = { name = "codex" }, focus = false }), { "herdr:codexnew2" })
-      expect.equality({ #b.of("start"), #b.of("focus") }, { 1, 0 })
-    end)
-
     it("tells the callback whether this call started the tool", function()
       local b = fake.backend("herdr", {
         is_inside = true,
@@ -297,6 +271,17 @@ describe("target", function()
       target.with_target({ attach = true, filter = { name = "claude" } }, record)
       target.with_target({ filter = { name = "claude" } }, record)
       expect.equality(flags, { true, false, false })
+      expect.equality(b.of("focus"), {})
+    end)
+
+    it("checks that the attached sessions still run before it chooses among them", function()
+      local b = fake.backend("herdr")
+      registry.register(b)
+      local s = fake.session("herdr", "claude")
+      registry.attach(s)
+      s.proc_name = "gone"
+      expect.equality(run({}), nil)
+      expect.equality({ cap.ids(), #b.of("list") }, { { "no_match" }, 1 })
     end)
 
     it("reports no_match when nothing is attached and the action may not attach", function()
