@@ -1,20 +1,20 @@
 ---`:checkhealth sidekick-ultra`
+local backends = require("sidekick-ultra.backends")
 local config = require("sidekick-ultra.config")
 local exec = require("sidekick-ultra.exec")
+local registry = require("sidekick-ultra.registry")
 local tools = require("sidekick-ultra.tools")
 
 local M = {}
 
----Environment variable names herdr and rex use to find their server; only whether they are set is reported.
-local HERDR_SERVER_VARS = { "HERDR_SOCKET_PATH", "HERDR_SESSION" }
-
----Report the version `<bin> -V` (tmux) or `<bin> --version` (zellij) prints.
+---Report the version `<bin> <flag>` prints, and warn when it is older than the backend's minimum.
 ---@param name string
 ---@param bin string
----@param min? integer[] {major, minor}: warn when the reported version is older
-local function version(name, bin, min)
+---@param version { flag: string, min?: integer[] }
+local function report_version(name, bin, version)
   local health = vim.health
-  local res, err = exec.run({ bin, name == "tmux" and "-V" or "--version" }, { backend = name, cmd = "version" })
+  local min = version.min
+  local res, err = exec.run({ bin, version.flag }, { backend = name, cmd = "version" })
   if not res then
     health.warn(("%s: cannot read the version: %s"):format(name, err.msg))
   elseif res.code ~= 0 then
@@ -34,64 +34,70 @@ local function version(name, bin, min)
   end
 end
 
----@param name string
+---@param info sidekick_ultra.BackendInfo
 ---@param cfg sidekick_ultra.Config
----@return boolean inside
-local function backend(name, cfg)
+local function report_backend(info, cfg)
   local health = vim.health
-  if not cfg[name].enabled then
+  local name, own = info.name, cfg[info.name]
+  if not own.enabled then
     health.info(name .. ": disabled")
-    return false
+    return
   end
   local loaded, mod = pcall(require, "sidekick-ultra.backends." .. name)
   if not loaded then
     health.error(name .. ": backend module cannot be loaded: " .. tostring(mod))
-    return false
+    return
   end
   local ok, path, source = mod.available()
   if ok then
     health.ok(("%s: %s%s"):format(name, path or "available", source and (" (from " .. source .. ")") or ""))
-  elseif name == "rex" and cfg.rex.bin then
-    health.error(
-      ("rex: rex.bin = %q is missing or not executable"):format(cfg.rex.bin),
-      { "Fix or remove `rex.bin`: a configured binary has no fallback to PATH or the bundled rex" }
-    )
   else
-    health.error(
-      name .. ": binary not found",
-      { "Install " .. name .. " or disable it with `" .. name .. " = { enabled = false }`" }
-    )
-  end
-  if name == "herdr" then
-    local set = vim.tbl_filter(function(var)
-      return vim.env[var] ~= nil
-    end, HERDR_SERVER_VARS)
-    if #set > 0 then
-      health.info("herdr: server selected by " .. table.concat(set, ", "))
-    else
-      health.info("herdr: neither HERDR_SOCKET_PATH nor HERDR_SESSION is set; the default server is used")
-    end
-  elseif name == "rex" then
-    if cfg.rex.server then
-      health.info("rex: server is configured (rex.server)")
-    else
-      health.info("rex: rex.server is not configured")
-    end
-  else
-    local inside = ok and mod.inside()
-    health.info(("%s: nvim %s inside %s"):format(name, inside and "runs" or "does not run", name))
-    if name == "tmux" then
-      if cfg.tmux.socket then
-        health.info("tmux: socket is configured (tmux.socket); every call uses -S")
-      else
-        health.info("tmux: tmux.socket is not configured; calls go to the server of $TMUX, else the default server")
+    local binary_key
+    for key, option in pairs(info.options) do
+      if option.binary and own[key] then
+        binary_key = key
       end
     end
-    if ok then
-      version(name, path, mod.MIN_VERSION)
+    if binary_key then
+      health.error(("%s: %s.%s = %q is missing or not executable"):format(name, name, binary_key, own[binary_key]), {
+        ("Fix or remove `%s.%s`: a configured binary has no fallback to PATH or the bundled %s"):format(
+          name,
+          binary_key,
+          name
+        ),
+      })
+    else
+      health.error(
+        name .. ": binary not found",
+        { "Install " .. name .. " or disable it with `" .. name .. " = { enabled = false }`" }
+      )
     end
   end
-  return ok and mod.inside()
+  if info.server_vars then
+    local set = vim.tbl_filter(function(var)
+      return vim.env[var] ~= nil
+    end, info.server_vars)
+    if #set > 0 then
+      health.info(name .. ": server selected by " .. table.concat(set, ", "))
+    else
+      health.info(
+        ("%s: neither %s is set; the default server is used"):format(name, table.concat(info.server_vars, " nor "))
+      )
+    end
+  end
+  local inside = ok and mod.inside()
+  health.info(("%s: nvim %s inside %s"):format(name, inside and "runs" or "does not run", name))
+  local keys = vim.tbl_keys(info.options)
+  table.sort(keys)
+  for _, key in ipairs(keys) do
+    local report = info.options[key].report
+    if report then
+      health.info(name .. ": " .. (own[key] ~= nil and report.set or report.unset))
+    end
+  end
+  if ok and info.version then
+    report_version(name, path, info.version)
+  end
 end
 
 function M.check()
@@ -106,16 +112,14 @@ function M.check()
   end
 
   health.start("backends")
-  local inside = {}
-  for _, name in ipairs({ "herdr", "rex", "tmux", "zellij" }) do
-    if backend(name, cfg) then
-      table.insert(inside, name)
-    end
+  for _, info in ipairs(backends.all) do
+    report_backend(info, cfg)
   end
-  if #inside > 0 then
-    health.ok("nvim runs inside " .. table.concat(inside, " and ") .. ": start is available")
+  local start, err = registry.start_backend()
+  if start then
+    health.ok(("nvim runs inside %s: start is available"):format(start.name))
   else
-    health.info("nvim does not run inside herdr, rex, tmux or zellij: start is unavailable")
+    health.info("start is unavailable: " .. err.msg)
   end
 
   health.start("context")

@@ -1,8 +1,49 @@
 ---The default keymaps: one table, used both to define the maps (`setup`) and to list lazy.nvim key triggers
----(`triggers`). It has no top-level `require`, so `lazy.lua` can `dofile` it before the plugin is on the runtimepath.
+---(`triggers`), and the check of the `keys` option (`resolve`), which `config` and `lazy.lua` both call. It has no
+---top-level `require`, so `lazy.lua` can `dofile` it before the plugin is on the runtimepath.
 local M = {}
 
 M.DEFAULT_PREFIX = "<leader>a"
+
+---The first problem in a `keys` option. `path` is the full key path. A key that is not allowed has `allowed` (the
+---allowed keys); any other problem has `expected` and the offending `got`.
+---@class sidekick_ultra.KeysProblem
+---@field path string
+---@field expected? string
+---@field got? any
+---@field allowed? string[]
+
+---Check a `keys` option and resolve it: nil is the default prefix, false is no keymaps, `{ prefix? = string }` is a
+---prefix. A key besides `prefix` is the first problem found, in key order, then a `prefix` that is not a non-empty
+---string.
+---@param value any the user's `keys` option
+---@return ({ prefix: string }|false)? resolved
+---@return sidekick_ultra.KeysProblem? problem
+function M.resolve(value)
+  if value == nil then
+    return { prefix = M.DEFAULT_PREFIX }
+  elseif value == false then
+    return false
+  elseif type(value) ~= "table" then
+    return nil, { path = "keys", expected = "table or false", got = value }
+  end
+  local names = vim.tbl_keys(value)
+  table.sort(names, function(a, b)
+    return tostring(a) < tostring(b)
+  end)
+  for _, name in ipairs(names) do
+    if type(name) ~= "string" then
+      return nil, { path = "keys." .. tostring(name), expected = "string key", got = name }
+    elseif name ~= "prefix" then
+      return nil, { path = "keys." .. name, allowed = { "prefix" } }
+    end
+  end
+  local prefix = value.prefix
+  if prefix ~= nil and (type(prefix) ~= "string" or prefix == "") then
+    return nil, { path = "keys.prefix", expected = "non-empty string", got = prefix }
+  end
+  return { prefix = prefix or M.DEFAULT_PREFIX }
+end
 
 local function api()
   return require("sidekick-ultra")

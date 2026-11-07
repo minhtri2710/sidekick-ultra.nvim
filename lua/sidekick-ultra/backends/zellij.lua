@@ -28,11 +28,20 @@ M.wait = function(ms)
   vim.wait(ms)
 end
 
+---The binary `available()` found when `setup()` ran; every command runs it.
+---@type string?
+local bin_path
+
 ---@return boolean ok
 ---@return string? path
 ---@return string? source
 function M.available()
   return exec.on_path("zellij")
+end
+
+---Find the binary.
+function M.setup()
+  bin_path = select(2, M.available())
 end
 
 function M.inside()
@@ -49,14 +58,10 @@ end
 ---@param label string subcommand label for errors
 ---@param session? string
 ---@param ... string
----@return string[]? argv
----@return table|sidekick_ultra.Error opts exec options, or the error when zellij cannot be found
+---@return string[] argv
+---@return sidekick_ultra.ExecOpts opts
 local function command(label, session, ...)
-  local ok, bin = M.available()
-  if not ok then
-    return nil, failure(label, "zellij binary not found")
-  end
-  local argv = { bin }
+  local argv = { bin_path }
   if session then
     vim.list_extend(argv, { "--session", session })
   end
@@ -70,11 +75,7 @@ end
 ---@return table? res
 ---@return sidekick_ultra.Error? err
 local function run(label, session, ...)
-  local argv, opts = command(label, session, ...)
-  if not argv then
-    return nil, opts
-  end
-  return exec.check(argv, opts)
+  return exec.check(command(label, session, ...))
 end
 
 ---The program of a `pane_command`: the basename of its first word, or the script's name when that word is a node or
@@ -94,9 +95,6 @@ end
 ---@return boolean? silent true when zellij exited 0 and printed nothing (no answer, worth asking again)
 local function panes_of(session)
   local argv, opts = command("list-panes", session, "action", "list-panes", "--all", "--json", "--command", "--state")
-  if not argv then
-    return nil, opts
-  end
   local res, err = exec.check(argv, opts)
   if not res then
     return nil, err
@@ -159,9 +157,6 @@ end
 ---@return sidekick_ultra.Error? err
 local function session_names()
   local argv, opts = command("list-sessions", nil, "list-sessions", "-n", "-s")
-  if not argv then
-    return nil, opts
-  end
   local res, err = exec.run(argv, opts)
   if not res then
     return nil, err

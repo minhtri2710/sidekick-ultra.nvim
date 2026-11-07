@@ -55,6 +55,18 @@ describe("registry", function()
       end)
     end)
 
+    it("accepts a backend with setup and rejects one whose setup is not a function", function()
+      local b = fake.backend("tmux")
+      b.setup = function() end
+      registry.register(b)
+      expect.equality(registry.backend("tmux") == b, true)
+      local bad = fake.backend("zellij")
+      bad.setup = "yes"
+      expect.error(function()
+        registry.register(bad)
+      end)
+    end)
+
     it("rejects a second backend with the same name", function()
       registry.register(fake.backend("herdr"))
       expect.error(function()
@@ -400,8 +412,15 @@ describe("registry", function()
       expect.equality({ select({ "rex", "zellij" }, nil) }, { nil, "not_in_mux" })
     end)
 
-    it("refuses when both are inside and TERM_PROGRAM names neither", function()
+    it("refuses when both are inside and TERM_PROGRAM names neither, naming the muxes it is inside", function()
       expect.equality({ select({ "herdr", "rex" }, "iTerm.app") }, { nil, "not_in_mux" })
+      local _, err = registry.start_backend()
+      expect.equality(err.msg:find("inside several multiplexers (herdr, rex)", 1, true) ~= nil, true)
+    end)
+
+    it("refuses with a message that says it is inside none when no backend is inside", function()
+      local _, err = registry.start_backend()
+      expect.equality(err.msg:find("does not run inside a supported multiplexer", 1, true) ~= nil, true)
     end)
 
     it("refuses when both are inside and TERM_PROGRAM is unset", function()

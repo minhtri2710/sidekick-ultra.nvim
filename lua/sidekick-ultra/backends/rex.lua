@@ -1,7 +1,6 @@
 ---The rex backend: sessions are rex blocks. Every command is `<bin> --autostart=false [-S <server>] <subcommand>`.
 ---The shapes were checked against a live rex 0.0.1793377904-ge6592f (Rex Beta build 1696) in D3. What is still
 ---unverified is listed in tests/fixtures/rex/UNVERIFIED.txt.
-local config = require("sidekick-ultra.config")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
 local proc = require("sidekick-ultra.proc")
@@ -12,27 +11,39 @@ local M = { name = "rex" }
 ---Where the Rex Beta app keeps its CLI. A field so specs can point it elsewhere.
 M.bundle_bin = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
 
+---@type { bin?: string, server?: string }
+local options = {}
+---The binary `available()` found when `setup()` ran; every command runs it.
+---@type string?
+local bin_path
+
 ---@return boolean ok
 ---@return string? path
 ---@return string? source "option"|"PATH"|"bundle"
 function M.available()
-  local bin = config.get().rex.bin
-  if bin then
+  if options.bin then
     -- A configured binary is the only candidate: a wrong path must not quietly run another rex.
-    local path = vim.fn.exepath(vim.fs.normalize(bin))
+    local path = vim.fn.exepath(vim.fs.normalize(options.bin))
     if path == "" then
       return false
     end
     return true, path, "option"
   end
-  local path = vim.fn.exepath("rex")
-  if path ~= "" then
-    return true, path, "PATH"
+  local ok, path, source = exec.on_path("rex")
+  if ok then
+    return ok, path, source
   end
   if vim.fn.executable(M.bundle_bin) == 1 then
     return true, M.bundle_bin, "bundle"
   end
   return false
+end
+
+---Replace the options and find the binary.
+---@param opts { bin?: string, server?: string }
+function M.setup(opts)
+  options = { bin = opts.bin, server = opts.server }
+  bin_path = select(2, M.available())
 end
 
 function M.inside()
@@ -47,34 +58,22 @@ local function failure(label, msg)
 end
 
 ---The full argv for a subcommand. Never relies on REX_SERVER (rex ignored it in firstmate's runs).
----@param label string subcommand label for errors
 ---@param ... string
----@return string[]? argv
----@return table|sidekick_ultra.Error opts exec options, or the error when rex cannot be found
-local function command(label, ...)
-  local ok, bin = M.available()
-  if not ok then
-    return nil, failure(label, "rex binary not found")
+---@return string[] argv
+local function command(...)
+  local argv = { bin_path, "--autostart=false" }
+  if options.server then
+    vim.list_extend(argv, { "-S", options.server })
   end
-  local argv = { bin, "--autostart=false" }
-  local server = config.get().rex.server
-  if server then
-    vim.list_extend(argv, { "-S", server })
-  end
-  vim.list_extend(argv, { ... })
-  return argv, { backend = M.name, cmd = label }
+  return vim.list_extend(argv, { ... })
 end
 
----@param label string
+---@param label string subcommand label for errors
 ---@param ... string
 ---@return any? decoded
 ---@return sidekick_ultra.Error? err
 local function json(label, ...)
-  local argv, opts = command(label, ...)
-  if not argv then
-    return nil, opts
-  end
-  return exec.json(argv, opts)
+  return exec.json(command(...), { backend = M.name, cmd = label })
 end
 
 ---@param label string
@@ -82,11 +81,7 @@ end
 ---@return true? ok
 ---@return sidekick_ultra.Error? err
 local function run(label, ...)
-  local argv, opts = command(label, ...)
-  if not argv then
-    return nil, opts
-  end
-  local _, err = exec.check(argv, opts)
+  local _, err = exec.check(command(...), { backend = M.name, cmd = label })
   if err then
     return nil, err
   end

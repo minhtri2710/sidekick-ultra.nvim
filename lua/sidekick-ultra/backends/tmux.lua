@@ -6,16 +6,12 @@
 ---nvim (`nvim_get_proc_children`, `nvim_get_proc`). Only a process whose name is a node or python interpreter costs a
 ---`ps` call, to read the script it runs (see proc); no other argv and no environment is read. tmux has no agent
 ---status, so `send` has no blocked guard.
-local config = require("sidekick-ultra.config")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
 local proc = require("sidekick-ultra.proc")
 
 ---@type sidekick_ultra.Backend
 local M = { name = "tmux" }
-
----Oldest tmux `send` works with: `paste-buffer -S` was added in 3.7 (CHANGES FROM 3.6b TO 3.7). Used by health.
-M.MIN_VERSION = { 3, 7 }
 
 ---Fields of the `list-panes` rows, tab separated (the separator is a real tab: tmux passes it through). The working
 ---directory comes last, so a path that holds a tab stays whole; it is the pane's current path, or the path the pane
@@ -45,6 +41,16 @@ end
 
 local buffer_count = 0
 
+---`tmux.socket` from the last `setup()`.
+---@type string?
+local socket
+
+---Replace the options.
+---@param opts { socket?: string }
+function M.setup(opts)
+  socket = opts.socket
+end
+
 ---@return boolean ok
 ---@return string? path
 ---@return string? source
@@ -72,7 +78,6 @@ function M.inside()
   if env == "" or (vim.env.TMUX_PANE or "") == "" then
     return false
   end
-  local socket = config.get().tmux.socket
   return socket == nil or same_path(env:match("^[^,]*"), socket)
 end
 
@@ -87,7 +92,6 @@ end
 ---@return string[] argv `tmux [-S socket] ...`
 local function argv_of(args)
   local argv = { "tmux" }
-  local socket = config.get().tmux.socket
   if socket then
     vim.list_extend(argv, { "-S", socket })
   end

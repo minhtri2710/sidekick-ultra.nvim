@@ -148,6 +148,7 @@ describe("zellij backend", function()
       { claude = { cmd = fake.INSTALLED }, codex = { cmd = fake.INSTALLED } },
       { zellij = { enabled = false } }
     )
+    zellij.setup()
   end)
 
   after_each(function()
@@ -462,13 +463,19 @@ describe("zellij backend", function()
       expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-sessions", 1 })
     end)
 
-    it("fails with backend_error and runs nothing when the binary cannot be found", function()
+    it("runs the binary found at setup, not one looked up again for each call", function()
       vim.env.PATH = "/nonexistent-sku-path"
-      rec = record({})
+      rec = record({ [LIST_SESSIONS] = fixture("list_sessions.txt"), [PANES_A] = "[]", [PANES_B] = "[]" })
+      zellij.list(tools.all())
+      expect.equality(rec.calls[1].argv[1], bin)
+    end)
+
+    it("reports the failed spawn as backend_error when the binary has gone since setup", function()
+      vim.fn.delete(bin)
       local list, err = zellij.list(tools.all())
       expect.equality(list, nil)
-      expect.equality({ err.id, err.backend }, { "backend_error", "zellij" })
-      expect.equality(rec.calls, {})
+      expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "zellij", "list-sessions" })
+      expect.equality(vim.startswith(err.msg, "cannot run " .. bin), true)
     end)
   end)
 

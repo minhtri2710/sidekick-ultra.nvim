@@ -3,7 +3,7 @@ local fake = require("tests.helpers.fake")
 
 local expect = MiniTest.expect
 
-local NAMES = { "herdr", "rex", "tmux", "zellij" }
+local NAMES = require("sidekick-ultra.backends").names()
 
 describe("health", function()
   local report, orig, loaded, orig_run, version_calls
@@ -130,11 +130,19 @@ describe("health", function()
       b.available = function()
         return true, "/opt/" .. name, "PATH"
       end
-      -- The real tmux backend names its floor; a fake zellij has none, like the real one.
-      b.MIN_VERSION = name == "tmux" and { 3, 7 } or nil
       package.loaded["sidekick-ultra.backends." .. name] = b
     end
   end
+
+  it("reports whether nvim runs inside herdr and rex as it does for tmux and zellij", function()
+    package.loaded["sidekick-ultra.backends.herdr"] = fake.backend("herdr", { is_inside = true })
+    package.loaded["sidekick-ultra.backends.rex"] = fake.backend("rex")
+    fake.reset(nil, { herdr = { enabled = true }, rex = { enabled = true } })
+    check()
+    expect.equality(has("info", "herdr: nvim runs inside herdr"), true)
+    expect.equality(has("info", "rex: nvim does not run inside rex"), true)
+    expect.equality(version_calls, {})
+  end)
 
   it("reports the tmux and zellij binary, inside state and version through the exec seam", function()
     muxes(true, false)
@@ -217,10 +225,54 @@ describe("health", function()
     expect.equality(has("info", "tmux: tmux.socket is not configured"), true)
   end)
 
-  it("names all four multiplexers when nvim runs inside none", function()
-    fake.reset()
-    check()
-    expect.equality(has("info", "nvim does not run inside herdr, rex, tmux or zellij: start is unavailable"), true)
+  describe("start", function()
+    local term
+
+    before_each(function()
+      term = vim.env.TERM_PROGRAM
+    end)
+    after_each(function()
+      vim.env.TERM_PROGRAM = term
+    end)
+
+    it("is unavailable when nvim runs inside two muxes and TERM_PROGRAM names neither", function()
+      muxes(true, true)
+      vim.env.TERM_PROGRAM = "iTerm.app"
+      fake.reset(nil, { tmux = { enabled = true }, zellij = { enabled = true } })
+      check()
+      expect.equality(has("ok", "start is available"), false)
+      expect.equality(has("info", "start is unavailable"), true)
+    end)
+
+    it("names the one backend start uses when nvim runs inside two muxes and TERM_PROGRAM names one", function()
+      muxes(true, true)
+      vim.env.TERM_PROGRAM = "tmux"
+      fake.reset(nil, { tmux = { enabled = true }, zellij = { enabled = true } })
+      check()
+      expect.equality(has("ok", "nvim runs inside tmux: start is available"), true)
+      expect.equality(has("ok", "zellij: start is available"), false)
+    end)
+
+    it("is unavailable when nvim runs inside a mux whose backend is not registered", function()
+      local gone = fake.backend("tmux", { is_inside = true })
+      gone.available = function()
+        return false
+      end
+      package.loaded["sidekick-ultra.backends.tmux"] = gone
+      fake.reset(nil, { tmux = { enabled = true } })
+      check()
+      expect.equality(has("ok", "start is available"), false)
+      expect.equality(has("info", "start is unavailable"), true)
+    end)
+
+    it("is unavailable before setup() ran, as no backend is registered", function()
+      muxes(true, false)
+      fake.reset()
+      require("sidekick-ultra.registry").reset()
+      check()
+      expect.equality(has("ok", "start is available"), false)
+      expect.equality(has("info", "start is unavailable"), true)
+    end)
   end)
 
   it("errors for a missing tmux or zellij binary and does not ask it for a version", function()

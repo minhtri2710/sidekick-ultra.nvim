@@ -75,10 +75,8 @@ describe("rex backend", function()
 
   ---@param rex_opts table the `rex` options besides `enabled`
   local function setup(rex_opts)
-    fake.reset(
-      { claude = { cmd = fake.INSTALLED }, codex = { cmd = fake.INSTALLED } },
-      { rex = vim.tbl_extend("force", { enabled = false }, rex_opts) }
-    )
+    fake.reset({ claude = { cmd = fake.INSTALLED }, codex = { cmd = fake.INSTALLED } }, { rex = { enabled = false } })
+    rex.setup(rex_opts)
   end
 
   local function a2()
@@ -194,13 +192,29 @@ describe("rex backend", function()
       expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "session.view", 4 })
     end)
 
-    it("fails with backend_error and runs nothing when the binary cannot be found", function()
-      setup({ bin = dir .. "/missing" })
-      rec = record({})
+    it("replaces the options at every setup, keeping none of the earlier ones", function()
+      setup({ bin = bin, server = "unix:///tmp/sku.sock" })
+      setup({ bin = bin })
+      rec = record({ ["ls --json"] = fixture("ls_empty") })
+      rex.list(tools.all())
+      expect.equality(rec.calls[1].argv, { bin, "--autostart=false", "ls", "--json" })
+    end)
+
+    it("runs the binary found at setup, not one looked up again for each call", function()
+      vim.env.PATH = dir .. ":" .. env.PATH
+      setup({})
+      vim.env.PATH = "/nonexistent-sku-path"
+      rec = record({ ["ls --json"] = fixture("ls_empty") })
+      rex.list(tools.all())
+      expect.equality(rec.calls[1].argv[1], bin)
+    end)
+
+    it("reports the failed spawn as backend_error when the binary has gone since setup", function()
+      vim.fn.delete(bin)
       local list, err = rex.list(tools.all())
       expect.equality(list, nil)
-      expect.equality({ err.id, err.backend }, { "backend_error", "rex" })
-      expect.equality(rec.calls, {})
+      expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "rex", "ls" })
+      expect.equality(vim.startswith(err.msg, "cannot run " .. bin), true)
     end)
   end)
 

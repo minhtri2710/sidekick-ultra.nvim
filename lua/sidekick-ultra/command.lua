@@ -1,5 +1,6 @@
 ---`:SidekickUltra <sub> [key=value ...]`: a key=value parser (arguments are never evaluated), dispatch, completion.
 local actions = require("sidekick-ultra.actions")
+local backends = require("sidekick-ultra.backends")
 local errors = require("sidekick-ultra.errors")
 
 local M = {}
@@ -166,9 +167,10 @@ function M.complete(arglead, cmdline, cursorpos)
 end
 
 function M.setup()
+  local desc = "Drive AI CLIs in " .. table.concat(backends.names(), ", ")
   vim.api.nvim_create_user_command(NAME, function(o)
     M.run(o.args, o.range)
-  end, { nargs = "*", range = true, complete = M.complete, desc = "Drive AI CLIs in herdr panes or rex blocks" })
+  end, { nargs = "*", range = true, complete = M.complete, desc = desc })
 end
 
 return M

@@ -2,6 +2,7 @@
 ---detach events. It calls no other core module: status and watch subscribe to the events.
 local backend_contract = require("sidekick-ultra.backend")
 local errors = require("sidekick-ultra.errors")
+local proc = require("sidekick-ultra.proc")
 local tools = require("sidekick-ultra.tools")
 
 local M = {}
@@ -50,8 +51,7 @@ function M.is_running(session)
   if backend and backend.is_running then
     return backend.is_running(session)
   end
-  local ok, proc = pcall(vim.api.nvim_get_proc, session.pid)
-  return ok and type(proc) == "table" and proc.name == session.proc_name
+  return proc.name(session.pid) == session.proc_name
 end
 
 ---@param event string
@@ -165,15 +165,25 @@ function M.start_backend()
   if #inside == 1 then
     return inside[1]
   end
-  if #inside > 1 then
-    local term = vim.env.TERM_PROGRAM
-    for _, backend in ipairs(inside) do
-      if backend.name == term then
-        return backend
-      end
+  if #inside == 0 then
+    return nil, errors.new("not_in_mux", "nvim does not run inside a supported multiplexer; cannot start a tool")
+  end
+  local term = vim.env.TERM_PROGRAM
+  for _, backend in ipairs(inside) do
+    if backend.name == term then
+      return backend
     end
   end
-  return nil, errors.new("not_in_mux", "nvim does not run inside a supported multiplexer; cannot start a tool")
+  local names = vim.tbl_map(function(backend)
+    return backend.name
+  end, inside)
+  return nil,
+    errors.new(
+      "not_in_mux",
+      ("nvim runs inside several multiplexers (%s) and TERM_PROGRAM names none of them; cannot start a tool"):format(
+        table.concat(names, ", ")
+      )
+    )
 end
 
 ---Create a session of `tool` next to nvim through the selected backend, without focusing or attaching it.

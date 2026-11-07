@@ -185,6 +185,44 @@ describe("keys", function()
     end)
   end)
 
+  describe("keys.lua loaded by path", function()
+    ---Load keys.lua as lazy.lua does, before the plugin is on the runtimepath: a chunk whose `require` fails.
+    local function load_alone(path)
+      local env = setmetatable({
+        require = function(module)
+          error("required " .. module, 0)
+        end,
+      }, { __index = getfenv(0) })
+      return setfenv(assert(loadfile(path)), env)
+    end
+
+    it("resolves the option and lists the triggers without requiring any module", function()
+      local alone = load_alone(ROOT .. "/lua/sidekick-ultra/keys.lua")()
+      expect.equality(alone.resolve(nil), { prefix = "<leader>a" })
+      expect.equality(alone.resolve({ prefix = "<leader>S" }), { prefix = "<leader>S" })
+      expect.equality(alone.resolve(false), false)
+      expect.equality(#alone.triggers("<leader>S"), 8)
+    end)
+
+    it("is caught when a chunk requires a module at load time", function()
+      local file = vim.fn.tempname()
+      vim.fn.writefile({ 'local config = require("sidekick-ultra.config")', "return {}" }, file)
+      local ok, err = pcall(load_alone(file))
+      vim.fn.delete(file)
+      expect.equality({ ok, err }, { false, "required sidekick-ultra.config" })
+    end)
+
+    it("reports the first problem of an invalid option: the key path, and what was expected", function()
+      expect.equality({ keys.resolve("x") }, { nil, { path = "keys", expected = "table or false", got = "x" } })
+      expect.equality(
+        { keys.resolve({ prefix = "" }) },
+        { nil, { path = "keys.prefix", expected = "non-empty string", got = "" } }
+      )
+      expect.equality({ keys.resolve({ b = 1, a = 2 }) }, { nil, { path = "keys.a", allowed = { "prefix" } } })
+      expect.equality({ keys.resolve({ "x" }) }, { nil, { path = "keys.1", expected = "string key", got = 1 } })
+    end)
+  end)
+
   describe("lazy.lua", function()
     local saved
     before_each(function()
