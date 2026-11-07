@@ -12,18 +12,17 @@
 ---A running instance of a tool. A plain record: the core never calls methods on it; it passes it back to the
 ---backend that produced it. Backends may add their own fields (pane or block ids, session ids).
 ---@class sidekick_ultra.Session
----@field id string `<backend>:<native id>`, unique across backends (`herdr:<pane_id>`, `rex:<block_id>`, `tmux:%N`)
+---@field id string `<backend>:<native id>`, unique across backends (`herdr:<pane_id>`, `rex:<block_id>`, `tmux:%N`,
+---   `zellij:<session>:terminal_<N>`)
 ---@field backend string backend `name`
 ---@field tool string configured tool name
 ---@field cwd string absolute working directory of the pane or block
 ---@field pid? integer foreground process id recorded at discovery. Required unless the backend defines
 ---   `is_running`, which is then the only liveness check and may work without a pid.
 ---@field proc_name string foreground process name. Without a backend `is_running`, it must equal
----   `vim.api.nvim_get_proc(pid).name` as nvim reads it at discovery time, because `registry.is_running` compares
----   exactly that. Never copy the mux's own process name (it can differ: truncated on macOS, or retitled by the
----   tool); read it in nvim.
+---   `vim.api.nvim_get_proc(pid).name` as nvim reads it, because the liveness rule below compares exactly that. Never
+---   copy the mux's own process name (it can differ: truncated on macOS, or retitled by the tool); read it in nvim.
 ---@field state? sidekick_ultra.AgentState last agent state the backend reported
----@field sid? string `<tool> <hex>`; set by the registry on discovery, backends leave it nil
 
 ---@alias sidekick_ultra.AgentState "idle"|"working"|"blocked"|"done"|"unknown"
 
@@ -56,10 +55,15 @@
 ---@field submit fun(session: sidekick_ultra.Session): true?, sidekick_ultra.Error?
 ---Bring the session's pane or block to the front of the mux.
 ---@field focus fun(session: sidekick_ultra.Session): true?, sidekick_ultra.Error?
----Optional. Whether the session still runs; when defined, `registry.is_running` returns its result and never does the
----pid and name check. It may call the mux through `sidekick-ultra.exec`. It runs on every status refresh (at most every
----5 s) and when attached sessions are listed, so keep it to a single cheap call. A failed check also triggers one
----discovery (every registered backend's `list`) before the session is detached. Backends without it need `pid`.
+---Optional. Whether the session still runs; when defined, it alone decides and the pid and name check is not done. It
+---may call the mux through `sidekick-ultra.exec`, so keep it to one cheap call: it runs for every attached session each
+---time liveness is checked.
+---
+---The liveness rule: a session runs when its backend's `is_running` says so, or, without one, when a process with the
+---recorded `pid` exists and has the recorded `proc_name`. `registry.check()` applies it to every attached session and
+---lists no backend while all pass. When one fails, one discovery replaces the attached records by id (a record taken
+---at `start` may be a launcher that has since become the tool), then detaches the sessions that a listing backend no
+---longer lists or that still fail the rule. The statusline runs the check when its cache is stale.
 ---@field is_running? fun(session: sidekick_ultra.Session): boolean
 
 local M = {}

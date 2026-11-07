@@ -50,14 +50,14 @@ describe("actions", function()
     })
     cap = notify.capture()
     pick = ui.capture()
-    orig_sleep = actions.sleep
+    orig_sleep = vim.uv.sleep
     orig_cwd = vim.fn.getcwd()
     tmp = vim.fn.resolve(vim.fn.tempname())
     vim.fn.mkdir(tmp, "p")
     scratch()
   end)
   after_each(function()
-    actions.sleep = orig_sleep
+    vim.uv.sleep = orig_sleep
     cap.restore()
     pick.restore()
     registry.reset()
@@ -82,7 +82,7 @@ describe("actions", function()
 
     it("sends a focus-in, waits 50 ms, then the text for a mux_focus tool", function()
       attached({ "qwen" })
-      actions.sleep = function(ms)
+      vim.uv.sleep = function(ms)
         table.insert(backend.calls, { "sleep", ms })
       end
       actions.send({ msg = "hi", submit = true })
@@ -105,7 +105,7 @@ describe("actions", function()
 
       it("refuses the focus-in itself with " .. id .. ": no text, no submit, no focus", function()
         attached({ "qwen" }, { fail = { send = errors.new(id, "x") } })
-        actions.sleep = function()
+        vim.uv.sleep = function()
           error("must not wait")
         end
         actions.send({ msg = "hi", submit = true, focus = true })
@@ -123,7 +123,7 @@ describe("actions", function()
           end,
         },
       })
-      actions.sleep = function() end
+      vim.uv.sleep = function() end
       actions.send({ msg = "hi", submit = true, focus = true })
       expect.equality(backend.delivered, { ESC_I })
       expect.equality(cap.ids(), { "session_blocked" })
@@ -208,7 +208,10 @@ describe("actions", function()
       it("notifies a refused focus, keeps the session attached and still delivers", function()
         started_backend({ fail = { focus = errors.new("backend_error", "x") } })
         actions.send({ msg = "hi", name = "codex" })
-        expect.equality(cap.ids(), { "backend_error" })
+        local failures = vim.tbl_filter(function(call)
+          return call.id
+        end, cap.calls)
+        expect.equality({ #failures, failures[1].id }, { 1, "backend_error" })
         expect.equality(registry.attached()[1].id, "herdr:codexnew1")
         expect.equality(backend.delivered, { "hi\n" })
       end)
@@ -229,6 +232,15 @@ describe("actions", function()
       vim.cmd("normal! ggVj")
       expect.equality(vim.fn.mode(), "V")
       actions.send({})
+      expect.equality(backend.delivered, { "alpha\nbeta\n" })
+      expect.equality(vim.fn.mode(), "n")
+    end)
+
+    it("sends the selection of a ranged :SidekickUltra send, and leaves visual mode", function()
+      attached({ "claude" })
+      scratch({ "alpha", "beta", "gamma" })
+      vim.cmd("normal! ggVj\27")
+      vim.cmd("'<,'>SidekickUltra send")
       expect.equality(backend.delivered, { "alpha\nbeta\n" })
       expect.equality(vim.fn.mode(), "n")
     end)
@@ -308,7 +320,7 @@ describe("actions", function()
       vim.cmd("edit " .. vim.fn.fnameescape(file))
     end
 
-    it("lists the renderable prompts sorted, shows name and raw template, and sends the choice", function()
+    it("lists the renderable prompts sorted and sends the choice", function()
       attached({ "codex" })
       pick.choose = choose("changes")
       actions.prompt({})
@@ -318,11 +330,6 @@ describe("actions", function()
       -- A scratch buffer has no file, so every prompt that needs {function}, {this}-selection, ... is left out.
       expect.equality(vim.tbl_contains(listed, "explain"), false)
       expect.equality(vim.tbl_contains(listed, "diagnostics"), false)
-      local shown = pick.selects[1].opts.format_item({ name = "diagnostics_all", preview = { text = "x" } })
-      expect.equality(
-        shown,
-        ("%-18s %s"):format("diagnostics_all", "Can you help me fix these diagnostics?\\n{diagnostics_all}")
-      )
       expect.equality(backend.delivered, { "Can you review my changes?\n" })
     end)
 
@@ -355,150 +362,11 @@ describe("actions", function()
       expect.equality(cap.calls, {})
     end)
 
-    it("passes the snacks preview option with the preview pane shown, and an exact preview text", function()
+    it("previews the exact text of each prompt", function()
       attached({ "codex" })
       pick.choose = function() end
       actions.prompt({})
-      local snacks = pick.selects[1].opts.snacks
-      expect.equality(snacks.preview, "preview")
-      local box = snacks.layout.layout
-      expect.equality({ box[1].win, box[2].win, box[3].win }, { "input", "list", "preview" })
-      expect.equality(#box, 3)
-      expect.equality(snacks.layout.hidden, nil)
       expect.equality(preview("changes"), "Can you review my changes?")
-    end)
-
-    describe("picker size", function()
-      local orig_columns, orig_lines
-
-      before_each(function()
-        orig_columns, orig_lines = vim.o.columns, vim.o.lines
-        vim.o.columns, vim.o.lines = 80, 24
-      end)
-      after_each(function()
-        vim.o.columns, vim.o.lines = orig_columns, orig_lines
-      end)
-
-      ---The sizes the prompt picker asks snacks for when only `prompts` are listed.
-      local function sizes(prompts)
-        local only = {}
-        for name in pairs(require("sidekick-ultra.context.render").default_prompts) do
-          only[name] = false
-        end
-        fake.reset({ codex = { cmd = fake.INSTALLED } }, { prompts = vim.tbl_extend("force", only, prompts) })
-        attached({ "codex" })
-        pick.choose = function() end
-        actions.prompt({})
-        local box = pick.selects[#pick.selects].opts.snacks.layout.layout
-        return { width = box.width, height = box.height, list = box[2].height, preview = box[3].height }
-      end
-
-      local function many(n, extra)
-        local prompts = vim.tbl_extend("force", {}, extra or {})
-        for i = 1, n do
-          prompts[("p%02d"):format(i)] = "x"
-        end
-        return prompts
-      end
-
-      local function lines_of(n)
-        return table.concat(vim.fn["repeat"]({ "x" }, n), "\n")
-      end
-
-      it("is small for a short prompt: the minimum width, two list rows, one preview row", function()
-        expect.equality(sizes({ a = "Hi" }), { width = 40, height = 6, list = 2, preview = 1 })
-      end)
-
-      it("grows with the list label and the preview text, up to the width cap", function()
-        expect.equality(sizes({ mid = ("x"):rep(30) }), { width = 52, height = 6, list = 2, preview = 1 })
-        expect.equality(sizes({ long = ("word "):rep(60) }), { width = 72, height = 6, list = 2, preview = 1 })
-      end)
-
-      it("gives a preview that does not wrap one row per line, however long the lines", function()
-        local line = ("word "):rep(60)
-        local text = table.concat(vim.fn["repeat"]({ line }, 15), "\n")
-        vim.o.lines = 40
-        expect.equality(sizes({ diag = text }), { width = 72, height = 20, list = 2, preview = 15 })
-      end)
-
-      it("stops the width at the inner width of snacks' own select picker", function()
-        local long = { long = ("word "):rep(60) }
-        for columns, width in pairs({ [120] = 80, [200] = 98, [300] = 100 }) do
-          vim.o.columns = columns
-          expect.equality(sizes(long).width, width)
-        end
-        vim.o.columns = 200
-        expect.equality(sizes({ mid = ("x"):rep(30) }).width, 52)
-      end)
-
-      it("turns the preview's wrap off, whatever the user's option", function()
-        sizes({ a = "Hi" })
-        expect.equality(pick.selects[#pick.selects].opts.snacks.win.preview.wo.wrap, false)
-      end)
-
-      it("sizes the preview for the item that needs the most rows", function()
-        expect.equality(sizes({ a = "Hi", b = "one\ntwo\nthree" }), { width = 40, height = 8, list = 2, preview = 3 })
-      end)
-
-      it("reads the columns when the picker opens, and keeps the width under them", function()
-        vim.o.columns = 84
-        expect.equality(sizes({ long = ("word "):rep(60) }).width, 76)
-        vim.o.columns = 44
-        expect.equality(sizes({ long = ("word "):rep(60) }).width, 36)
-      end)
-
-      it("caps the preview at half the lines", function()
-        expect.equality(sizes({ tall = lines_of(40) }), { width = 72, height = 17, list = 2, preview = 12 })
-      end)
-
-      it("grows the list with the items, between 2 and 10 rows", function()
-        expect.equality(sizes(many(1)).list, 2)
-        expect.equality(sizes(many(5)).list, 5)
-        expect.equality(sizes(many(12)), { width = 40, height = 14, list = 10, preview = 1 })
-      end)
-
-      it("keeps the box 4 rows short of the screen, taking the rows from the preview", function()
-        expect.equality(sizes(many(12, { tall = lines_of(40) })), { width = 72, height = 20, list = 10, preview = 7 })
-      end)
-
-      it("keeps the list at 2 rows, and the box 4 rows short, on the smallest screen that holds them", function()
-        vim.o.lines = 10
-        expect.equality(sizes(many(12, { tall = lines_of(40) })), { width = 72, height = 6, list = 2, preview = 1 })
-      end)
-
-      it("shrinks the list to 1 row, rather than pass 4 rows short, on a screen one row smaller", function()
-        vim.o.lines = 9
-        expect.equality(sizes(many(12, { tall = lines_of(40) })), { width = 72, height = 5, list = 1, preview = 1 })
-      end)
-
-      it("keeps the 5-row floor (list 1, preview 1) on a screen too short for it", function()
-        vim.o.lines = 8
-        expect.equality(sizes(many(12)), { width = 40, height = 5, list = 1, preview = 1 })
-      end)
-
-      it("counts the number column in the width", function()
-        -- The label of a function prompt is "<function>", so the preview line is the widest text.
-        local function line_of(n)
-          return {
-            f = function()
-              return ("x"):rep(n)
-            end,
-          }
-        end
-        expect.equality(sizes(line_of(60)).width, 64)
-      end)
-
-      it("measures the width in display cells, not bytes", function()
-        local wide = vim.fn.nr2char(0x3042):rep(30)
-        expect.equality(
-          sizes({
-            f = function()
-              return wide
-            end,
-          }).width,
-          64
-        )
-      end)
     end)
 
     for _, case in ipairs({
@@ -648,7 +516,7 @@ describe("actions", function()
                 table.insert(backend.calls, { "picker" })
                 return choose("changes")(items)
               end
-              actions.sleep = function() end
+              vim.uv.sleep = function() end
               local opts = vim.tbl_extend("force", { name = name }, extra)
               opts.focus = focus ~= "unset" or nil
               actions.prompt(opts)
@@ -734,6 +602,16 @@ describe("actions", function()
       expect.equality(backend.calls, {})
     end)
 
+    it("uses the selection of a ranged :SidekickUltra prompt, and leaves visual mode", function()
+      attached({ "claude" })
+      scratch({ "alpha", "beta", "gamma" })
+      vim.cmd("normal! ggVj\27")
+      pick.choose = choose("selection")
+      vim.cmd("'<,'>SidekickUltra prompt")
+      expect.equality(backend.delivered, { "alpha\nbeta\n" })
+      expect.equality(vim.fn.mode(), "n")
+    end)
+
     it("leaves visual mode before it writes", function()
       attached({ "claude" })
       scratch({ "alpha", "beta", "gamma" })
@@ -810,6 +688,18 @@ describe("actions", function()
         expect.equality({ #backend.of("start"), #backend.of("focus") }, { 1, 0 })
       end)
 
+      it("does not focus an already running session with focus = false", function()
+        backend = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
+        registry.register(backend)
+        pick.choose = function(items)
+          return vim.tbl_filter(function(s)
+            return s.started
+          end, items)[1]
+        end
+        actions.select({ focus = false })
+        expect.equality({ #registry.attached(), backend.of("focus") }, { 1, {} })
+      end)
+
       it("does not focus an already running session by default", function()
         backend = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
         registry.register(backend)
@@ -860,6 +750,12 @@ describe("actions", function()
       expect.equality(registry.attached()[1].id, "herdr:codexnew1")
     end)
 
+    it("focuses even with focus = false: that key only governs the other actions", function()
+      attached({ "claude" })
+      actions.focus({ focus = false })
+      expect.equality(backend.calls, { { "focus", "herdr:claude1" } })
+    end)
+
     it("reports a failing focus", function()
       attached({ "claude" }, { fail = { focus = errors.new("backend_error", "x") } })
       actions.focus({})
@@ -907,6 +803,13 @@ describe("actions", function()
   end)
 
   describe("render", function()
+    it("leaves visual mode after capturing the selection", function()
+      scratch({ "alpha", "beta", "gamma" })
+      vim.cmd("normal! ggVj")
+      expect.equality(actions.render({ msg = "{selection}" }), "alpha\nbeta")
+      expect.equality(vim.fn.mode(), "n")
+    end)
+
     it("returns the rendered text without sending", function()
       attached({ "claude" })
       local text, err = actions.render({ msg = "{file|line}" })

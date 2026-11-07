@@ -1,5 +1,5 @@
 ---Choosing the session an action acts on: states (sessions and not-started tools), filters, sort order, the picker,
----the "with target" rule, and attaching or starting a chosen state.
+---the "with target" rule, and attaching or starting a chosen state. It never focuses: `actions` decides that.
 local errors = require("sidekick-ultra.errors")
 local registry = require("sidekick-ultra.registry")
 local tools = require("sidekick-ultra.tools")
@@ -31,7 +31,6 @@ local M = {}
 ---@field filter? sidekick_ultra.Filter
 ---@field all? boolean act on every attached match instead of choosing one
 ---@field attach? boolean the action may attach (or start) a session when none is attached
----@field focus? boolean focus a session this starts; false skips it
 
 ---@param path string
 ---@return string
@@ -62,7 +61,7 @@ end
 ---@param state sidekick_ultra.State
 ---@param filter? sidekick_ultra.Filter
 ---@return boolean
-function M.matches(state, filter)
+local function matches(state, filter)
   filter = filter or {}
   if filter.name ~= nil and filter.name ~= state.name then
     return false
@@ -84,7 +83,7 @@ end
 ---Installed first, then states without a session or in nvim's cwd, then started, then tool name, then id.
 ---@param states sidekick_ultra.State[]
 ---@return sidekick_ultra.State[]
-function M.sort(states)
+local function sort(states)
   local function rank(state)
     return {
       state.installed and 0 or 1,
@@ -106,19 +105,18 @@ function M.sort(states)
   return states
 end
 
----Discover sessions and list them with every configured tool, filtered and sorted.
+---Discover sessions once and list them with every configured tool, filtered and sorted.
 ---@param filter? sidekick_ultra.Filter
 ---@return sidekick_ultra.State[]
 function M.states(filter)
-  local running, discovered = registry.attached()
-  local sessions = discovered or registry.discover()
+  local sessions = registry.discover()
   local attached = {}
-  for _, session in ipairs(running) do
+  for _, session in ipairs(registry.attached()) do
     attached[session.id] = true
   end
   local ret = {}
   local function add(state)
-    if state and M.matches(state, filter) then
+    if state and matches(state, filter) then
       table.insert(ret, state)
     end
   end
@@ -135,21 +133,22 @@ function M.states(filter)
       cwd = true,
     })
   end
-  return M.sort(ret)
+  return sort(ret)
 end
 
----The attached sessions that match `filter`, as states.
+---The attached sessions that match `filter`, as states, after the liveness check.
 ---@param filter? sidekick_ultra.Filter
 ---@return sidekick_ultra.State[]
-function M.attached_states(filter)
+local function attached_states(filter)
+  registry.check()
   local ret = {}
   for _, session in ipairs(registry.attached()) do
     local state = session_state(session, true)
-    if state and M.matches(state, filter) then
+    if state and matches(state, filter) then
       table.insert(ret, state)
     end
   end
-  return M.sort(ret)
+  return sort(ret)
 end
 
 ---@param state sidekick_ultra.State
@@ -185,12 +184,11 @@ function M.pick(states, opts, cb)
 end
 
 ---Attach the chosen state, starting its tool first when it has no session. A missing tool is `not_installed` (its
----url is opened when it has one). A tool it starts is focused unless `opts.focus == false`.
+---url is opened when it has one).
 ---@param state sidekick_ultra.State
----@param opts? { focus?: boolean }
 ---@return sidekick_ultra.Session? session
 ---@return boolean? started the session was started by this call
-function M.attach_state(state, opts)
+function M.attach_state(state)
   if not state.installed then
     errors.notify(
       errors.new("not_installed", state.name .. " is not installed", { tool = state.name, url = state.tool.url })
@@ -208,7 +206,7 @@ function M.attach_state(state, opts)
   local session, started = state.session, false
   if not session then
     local err
-    session, err = registry.start(state.tool, opts)
+    session, err = registry.start(state.tool)
     if not session then
       errors.notify(err)
       return nil
@@ -224,18 +222,18 @@ end
 ---Resolve the sessions an action acts on and pass them to `cb`:
 ---no attached match and the action may attach: pick over every matching state and attach it;
 ---several attached matches and not `all`: pick one of them; otherwise every attached match.
----@param opts sidekick_ultra.TargetOpts
 ---`cb` also gets `started`: true when this call started the tool of the one session it passes.
+---@param opts sidekick_ultra.TargetOpts
 ---@param cb fun(sessions: sidekick_ultra.Session[], started?: boolean)
 function M.with_target(opts, cb)
-  local matching = M.attached_states(opts.filter)
+  local matching = attached_states(opts.filter)
   if #matching == 0 then
     if not opts.attach then
       errors.notify(errors.new("no_match", "no attached session matches"))
       return
     end
     M.pick(M.states(opts.filter), { auto = true }, function(state)
-      local session, started = M.attach_state(state, { focus = opts.focus })
+      local session, started = M.attach_state(state)
       if session then
         cb({ session }, started)
       end

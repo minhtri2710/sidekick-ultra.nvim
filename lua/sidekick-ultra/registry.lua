@@ -1,9 +1,8 @@
----Backends, discovered sessions, the attached set and the attach/detach events. All mutable core state lives here
----(plus the watch handles it switches on and off); `reset()` clears it for tests.
+---The registered backends, the attached sessions, discovery of sessions through the backends, and the attach and
+---detach events. It calls no other core module: status and watch subscribe to the events.
 local backend_contract = require("sidekick-ultra.backend")
 local errors = require("sidekick-ultra.errors")
 local tools = require("sidekick-ultra.tools")
-local watch = require("sidekick-ultra.watch")
 
 local M = {}
 
@@ -37,27 +36,13 @@ function M.backend(name)
   end
 end
 
----Forget all backends and attached sessions and stop watching.
+---Forget all backends and attached sessions, without events. `setup` detaches first, so the events fire.
 function M.reset()
   backends = {}
   attached = {}
-  watch.stop()
 end
 
----`<tool> <hex>`: the first `16 - #tool` characters of the sha256 of the normalized absolute cwd.
----@param tool string
----@param cwd string
----@return string
-function M.sid(tool, cwd)
-  local path = vim.fs.normalize(vim.fn.fnamemodify(cwd, ":p"))
-  if #path > 1 then
-    path = path:gsub("/+$", "")
-  end
-  return tool .. " " .. vim.fn.sha256(path):sub(1, 16 - #tool)
-end
-
----Whether the session still runs. A backend that defines `is_running` decides (it may call its mux); otherwise this
----is true when a process with the recorded pid exists and has the recorded name, with no external call.
+---Whether the session still runs: the rule is in `backend.lua`.
 ---@param session sidekick_ultra.Session
 ---@return boolean
 function M.is_running(session)
@@ -85,7 +70,6 @@ function M.attach(session)
     return false
   end
   attached[session.id] = session
-  watch.update(true)
   fire(M.ATTACH, session.id)
   return true
 end
@@ -98,7 +82,6 @@ function M.detach(id)
     return nil
   end
   attached[id] = nil
-  watch.update(next(attached) ~= nil)
   fire(M.DETACH, id)
   return session
 end
@@ -112,39 +95,22 @@ function M.detach_all()
   end
 end
 
----The attached sessions sorted by id. A session that fails the running check may only be a record taken at start
----(a launcher or shell that became the tool), so one `discover()` first replaces the records by id; sessions that
----still fail the check are then detached. With every check passing there is no discovery.
----@return sidekick_ultra.Session[] attached
----@return sidekick_ultra.Session[]? discovered what that discovery listed, nil when none ran
+---The attached sessions sorted by id. No side effects: `check` and `discover` detach the ones that stopped.
+---@return sidekick_ultra.Session[]
 function M.attached()
   local ids = vim.tbl_keys(attached)
   table.sort(ids)
-  local failing = vim.tbl_filter(function(id)
-    return not M.is_running(attached[id])
+  return vim.tbl_map(function(id)
+    return attached[id]
   end, ids)
-  local discovered
-  if #failing > 0 then
-    discovered = M.discover()
-  end
-  local ret = {}
-  for _, id in ipairs(ids) do
-    local session = attached[id]
-    if session and (not vim.tbl_contains(failing, id) or M.is_running(session)) then
-      table.insert(ret, session)
-    else
-      M.detach(id)
-    end
-  end
-  return ret, discovered
 end
 
----Ask every backend for its sessions. A backend that fails reports its error once and contributes nothing (its
----attached sessions stay attached). A duplicate id is reported and the first session is kept. Afterwards attached
----entries are refreshed from the listing, and attached ids that are gone from a backend that listed are detached.
----@return sidekick_ultra.Session[]
+---Ask every backend for its sessions. A backend that fails reports its error once and contributes nothing. A
+---duplicate id is reported and the first session is kept. Then each attached session is replaced by its listed
+---record, and detached when a backend that listed no longer lists it or when it still fails `is_running`.
+---@return sidekick_ultra.Session[] listed
 function M.discover()
-  local ret, by_id, failed = {}, {}, {}
+  local listed, by_id, failed = {}, {}, {}
   for _, backend in ipairs(backends) do
     local ok, list, err = pcall(backend.list, tools.all())
     if not ok then
@@ -157,9 +123,8 @@ function M.discover()
             errors.new("duplicate_session", "duplicate session id " .. session.id, { session_id = session.id })
           )
         else
-          session.sid = M.sid(session.tool, session.cwd)
           by_id[session.id] = session
-          table.insert(ret, session)
+          table.insert(listed, session)
         end
       end
     else
@@ -167,14 +132,26 @@ function M.discover()
       errors.notify(err)
     end
   end
-  for id, old in pairs(attached) do
-    if by_id[id] then
-      attached[id] = by_id[id]
-    elseif not failed[old.backend] then
-      M.detach(id)
+  for _, old in ipairs(M.attached()) do
+    local session = by_id[old.id] or old
+    if (not by_id[old.id] and not failed[old.backend]) or not M.is_running(session) then
+      M.detach(old.id)
+    else
+      attached[old.id] = session
     end
   end
-  return ret
+  return listed
+end
+
+---Run the liveness check on every attached session. The first failure runs one `discover()`, which replaces the
+---records and detaches what is gone. With every check passing no backend is listed.
+function M.check()
+  for _, session in ipairs(M.attached()) do
+    if not M.is_running(session) then
+      M.discover()
+      return
+    end
+  end
 end
 
 ---The backend `start` uses: among the registered backends whose `inside()` is true, the only one, or with several
@@ -199,29 +176,16 @@ function M.start_backend()
   return nil, errors.new("not_in_mux", "nvim does not run inside a supported multiplexer; cannot start a tool")
 end
 
----Create a session of `tool` next to nvim through the selected backend and focus it unless `opts.focus == false`.
----A focus refusal is notified; the session is still returned. Does not attach it.
+---Create a session of `tool` next to nvim through the selected backend, without focusing or attaching it.
 ---@param tool sidekick_ultra.Tool
----@param opts? { focus?: boolean }
 ---@return sidekick_ultra.Session? session
 ---@return sidekick_ultra.Error? err
-function M.start(tool, opts)
+function M.start(tool)
   local backend, err = M.start_backend()
   if not backend then
     return nil, err
   end
-  local session, start_err = backend.start(tool, { cwd = vim.fn.getcwd(), env = vim.deepcopy(tool.env) })
-  if not session then
-    return nil, start_err
-  end
-  session.sid = M.sid(session.tool, session.cwd)
-  if not (opts and opts.focus == false) then
-    local ok, focus_err = backend.focus(session)
-    if not ok then
-      errors.notify(focus_err)
-    end
-  end
-  return session
+  return backend.start(tool, { cwd = vim.fn.getcwd(), env = vim.deepcopy(tool.env) })
 end
 
 return M

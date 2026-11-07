@@ -70,21 +70,8 @@ describe("registry", function()
     end)
   end)
 
-  describe("sid", function()
-    it("is the tool plus the first 16 - len(tool) hex characters of the sha256 of the cwd", function()
-      local sid = registry.sid("claude", "/tmp/sku-dir")
-      expect.equality(sid, "claude " .. vim.fn.sha256("/tmp/sku-dir"):sub(1, 10))
-      expect.equality(#sid, #"claude " + 16 - #"claude")
-    end)
-
-    it("normalizes the cwd and differs per directory", function()
-      expect.equality(registry.sid("codex", "/tmp/a/"), registry.sid("codex", "/tmp/a"))
-      expect.no_equality(registry.sid("codex", "/tmp/a"), registry.sid("codex", "/tmp/b"))
-    end)
-  end)
-
   describe("discover", function()
-    it("collects the sessions of every backend and sets sid", function()
+    it("collects the sessions of every backend", function()
       local a = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
       local b = fake.backend("rex", { sessions = { fake.session("rex", "codex") } })
       registry.register(a)
@@ -96,7 +83,6 @@ describe("registry", function()
         end, sessions),
         { "herdr:claude1", "rex:codex1" }
       )
-      expect.equality(sessions[1].sid, registry.sid("claude", vim.fn.getcwd()))
       expect.equality(a.calls[1][1], "list")
       expect.equality(vim.tbl_contains(a.calls[1][2], "claude"), true)
     end)
@@ -195,6 +181,7 @@ describe("registry", function()
       registry.attach(s)
       s.proc_name = "someone-else"
       b.sessions = {}
+      registry.check()
       expect.equality(registry.attached(), {})
       expect.equality(#b.of("list"), 1)
       settle()
@@ -205,6 +192,7 @@ describe("registry", function()
       local s = fake.session("herdr", "claude")
       registry.attach(s)
       s.proc_name = "someone-else"
+      registry.check()
       expect.equality(registry.attached(), {})
       settle()
       expect.equality(events[#events], { registry.DETACH, "herdr:claude1" })
@@ -216,6 +204,7 @@ describe("registry", function()
       local s = fake.session("herdr", "claude")
       registry.attach(s)
       s.proc_name = "someone-else"
+      registry.check()
       expect.equality(registry.attached(), {})
       expect.equality(cap.ids(), { "backend_error" })
       settle()
@@ -226,9 +215,31 @@ describe("registry", function()
       local b = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
       registry.register(b)
       registry.attach(fake.session("herdr", "claude"))
-      expect.equality(#registry.attached(), 1)
+      registry.check()
+      registry.check()
       expect.equality(#registry.attached(), 1)
       expect.equality(b.of("list"), {})
+    end)
+
+    it("returns the attached set as it is: no check, no listing, no detach", function()
+      local b = fake.backend("herdr", { sessions = {} })
+      registry.register(b)
+      local s = fake.session("herdr", "claude")
+      registry.attach(s)
+      s.proc_name = "someone-else"
+      expect.equality(#registry.attached(), 1)
+      settle()
+      expect.equality({ b.of("list"), events }, { {}, { { registry.ATTACH, "herdr:claude1" } } })
+    end)
+
+    it("detaches a listed session whose fresh record still fails the check", function()
+      local b = fake.backend("herdr", {
+        sessions = { fake.session("herdr", "claude", 1, { proc_name = "someone-else" }) },
+      })
+      registry.register(b)
+      registry.attach(fake.session("herdr", "claude"))
+      registry.discover()
+      expect.equality(registry.attached(), {})
     end)
 
     it("discovers once for several failing sessions, keeping the ones the listing refreshes", function()
@@ -240,12 +251,12 @@ describe("registry", function()
       registry.attach(one)
       registry.attach(two)
       one.proc_name, two.proc_name = "exec-ed", "exec-ed"
-      local attached = registry.attached()
+      registry.check()
       expect.equality(#b.of("list"), 1)
       expect.equality(
         vim.tbl_map(function(s)
           return { s.id, s.state }
-        end, attached),
+        end, registry.attached()),
         { { "herdr:claude1", "working" } }
       )
       settle()
@@ -340,6 +351,7 @@ describe("registry", function()
       registry.register(b)
       registry.attach(one)
       registry.attach(fake.session("zellij", "claude", 2))
+      registry.check()
       expect.equality(
         vim.tbl_map(function(s)
           return s.id
@@ -398,60 +410,48 @@ describe("registry", function()
   end)
 
   describe("start", function()
-    it("passes cwd and env to the selected backend and sets sid", function()
+    local tool = function()
+      return require("sidekick-ultra.tools").get("claude")
+    end
+
+    it("passes cwd and env to the selected backend", function()
       local b = fake.backend("herdr", { is_inside = true })
       registry.register(b)
-      local tool = require("sidekick-ultra.tools").get("claude")
-      tool.env = { A = "b" }
-      local session = registry.start(tool)
+      local claude = tool()
+      claude.env = { A = "b" }
+      registry.start(claude)
       expect.equality(b.calls[1][1], "start")
       expect.equality(b.calls[1][3], { cwd = vim.fn.getcwd(), env = { A = "b" } })
-      expect.equality(session.sid, registry.sid("claude", session.cwd))
     end)
 
-    it("focuses the new session once through its backend, after the start", function()
+    it("only creates the session: no focus, not attached", function()
       local b = fake.backend("herdr", { is_inside = true })
       registry.register(b)
-      local session = registry.start(require("sidekick-ultra.tools").get("claude"))
+      local session = registry.start(tool())
+      expect.equality(session.id, "herdr:claudenew1")
       expect.equality(
         vim.tbl_map(function(call)
-          return { call[1], call[2] }
-        end, vim.list_slice(b.calls, 1, 2)),
-        { { "start", "claude" }, { "focus", session.id } }
+          return call[1]
+        end, b.calls),
+        { "start" }
       )
-      expect.equality(#b.calls, 2)
-    end)
-
-    it("does not focus with focus = false", function()
-      local b = fake.backend("herdr", { is_inside = true })
-      registry.register(b)
-      expect.equality(registry.start(require("sidekick-ultra.tools").get("claude"), { focus = false }) ~= nil, true)
-      expect.equality(b.of("focus"), {})
-    end)
-
-    it("notifies a focus refusal and still returns the session", function()
-      local err = require("sidekick-ultra.errors").new("backend_error", "x")
-      local b = fake.backend("herdr", { is_inside = true, fail = { focus = err } })
-      registry.register(b)
-      local session, got = registry.start(require("sidekick-ultra.tools").get("claude"))
-      expect.equality({ session.id, got, cap.ids() }, { "herdr:claudenew1", nil, { "backend_error" } })
+      expect.equality(registry.attached(), {})
     end)
 
     it("creates nothing and returns not_in_mux outside a mux", function()
       local b = fake.backend("herdr", { is_inside = false })
       registry.register(b)
-      local session, err = registry.start(require("sidekick-ultra.tools").get("claude"))
+      local session, err = registry.start(tool())
       expect.equality({ session, err.id }, { nil, "not_in_mux" })
-      expect.equality({ b.of("start"), b.of("focus") }, { {}, {} })
+      expect.equality(b.calls, {})
     end)
 
     it("returns the backend error", function()
       local err = require("sidekick-ultra.errors").new("backend_error", "x")
       local b = fake.backend("herdr", { is_inside = true, start_err = err })
       registry.register(b)
-      local session, got = registry.start(require("sidekick-ultra.tools").get("claude"))
+      local session, got = registry.start(tool())
       expect.equality({ session, got.id }, { nil, "backend_error" })
-      expect.equality(b.of("focus"), {})
     end)
   end)
 end)

@@ -1,5 +1,6 @@
----The user-facing actions: send, prompt, select, focus, close, render.
+---The user-facing actions: send, prompt, select, focus, close, render. They own every focus decision.
 local errors = require("sidekick-ultra.errors")
+local picker = require("sidekick-ultra.picker")
 local registry = require("sidekick-ultra.registry")
 local render = require("sidekick-ultra.context.render")
 local snapshot = require("sidekick-ultra.context.snapshot")
@@ -14,13 +15,8 @@ local M = {}
 ---@field msg? string message template
 ---@field prompt? string prompt name
 ---@field submit? boolean press Enter after sending
----@field focus? boolean focus the session's pane or block; false also skips the focus of a tool this starts
+---@field focus? boolean `true` focuses the session after the action; unset focuses only a tool the action started; `false` never
 ---@field all? boolean (close) detach every match
-
----Sleep for `ms`. A field so tests can observe the wait.
-M.sleep = function(ms)
-  vim.uv.sleep(ms)
-end
 
 local FOCUS_IN = "\27[I"
 local FOCUS_WAIT_MS = 50
@@ -35,9 +31,22 @@ local function filter_of(opts)
   return filter
 end
 
----@return boolean
-local function in_visual()
-  return vim.fn.mode():find("^[vV\22]") ~= nil
+---The one reading of `opts.focus`.
+---@param opts sidekick_ultra.ActionOpts
+---@return boolean always `focus = true`: focus the session, whether or not the action started its tool
+---@return boolean on_start `focus` is not `false`: focus a tool the action started
+local function focus_of(opts)
+  return opts.focus == true, opts.focus ~= false
+end
+
+---Capture the editor state, leaving visual mode once a selection is recorded: no action keeps the editor in it.
+---@return sidekick_ultra.Snapshot
+local function capture()
+  local snap = snapshot.capture()
+  if snap.selection then
+    vim.cmd("normal! \27")
+  end
+  return snap
 end
 
 ---Run a backend method for a session; notify and return false on failure.
@@ -73,31 +82,25 @@ local function compose(opts, snap)
   return render.build({ msg = msg, prompt = opts.prompt }, snap)
 end
 
----Deliver `text` to one session: [focus-in, wait], text and LF, [Enter], [focus]. Stops at the first refusal.
+---Write the segments to the session in its tool's location style: [focus-in, wait], text and LF, [Enter]. Stops at
+---the first refusal, which is notified.
 ---@param session sidekick_ultra.Session
----@param text string
----@param opts sidekick_ultra.ActionOpts
----@return boolean reached_focus true when it got to its own focus step, whether or not that focus succeeded
-local function deliver(session, text, opts)
+---@param segments (string|sidekick_ultra.Location)[]
+---@param submit? boolean
+---@return boolean delivered every step was accepted
+local function deliver(session, segments, submit)
   local tool = tools.get(session.tool)
+  local text = tools.format(segments, tool and tool.location)
   if tool and tool.mux_focus then
     if not call(session, "send", FOCUS_IN) then
       return false
     end
-    M.sleep(FOCUS_WAIT_MS)
+    vim.uv.sleep(FOCUS_WAIT_MS)
   end
-  -- A render that is a single newline is delivered as that newline alone.
   if not call(session, "send", text == "\n" and text or text .. "\n") then
     return false
   end
-  if opts.submit and not call(session, "submit") then
-    return false
-  end
-  if not opts.focus then
-    return false
-  end
-  call(session, "focus")
-  return true
+  return not submit or call(session, "submit")
 end
 
 ---Warn and return false when the render has no text to send.
@@ -111,28 +114,12 @@ local function has_text(segments)
   return true
 end
 
----Leave visual mode, then write the render to each session in its tool's location style.
----@param sessions sidekick_ultra.Session[]
----@param segments (string|sidekick_ultra.Location)[]
----@param opts sidekick_ultra.ActionOpts
----@return boolean reached_focus whether the last delivery reached its own focus
-local function write(sessions, segments, opts)
-  if in_visual() then
-    vim.cmd("normal! \27")
-  end
-  local reached_focus = false
-  for _, session in ipairs(sessions) do
-    local tool = tools.get(session.tool)
-    reached_focus = deliver(session, tools.format(segments, tool and tool.location), opts)
-  end
-  return reached_focus
-end
-
----Render a message or prompt against the current context and send it to the target session(s).
+---Render a message or prompt against the current context and send it to the target session. A tool this starts is
+---focused before the text, and `focus = true` focuses the session again after a delivery.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.send(opts)
   opts = opts or {}
-  local segments, err = compose(opts, snapshot.capture())
+  local segments, err = compose(opts, capture())
   if not segments then
     errors.notify(err)
     return
@@ -140,99 +127,26 @@ function M.send(opts)
   if not has_text(segments) then
     return
   end
-  target.with_target({ filter = filter_of(opts), attach = true, focus = opts.focus }, function(sessions)
-    write(sessions, segments, opts)
-  end)
-end
-
----@param item table
----@return string
-local function label(item)
-  return ("%-18s %s"):format(item.name, (render.display(item.name):gsub("\n", "\\n")))
-end
-
-local PICKER_MIN_WIDTH = 40
-local PICKER_MARGIN = 8 -- columns left free beside the box (its own border adds 2 more)
-local LIST_MIN, LIST_MAX = 2, 10
--- Rows in the box besides the list and the preview text: the input and its bottom border, and the preview's top border.
-local BOX_CHROME = 3
-local BOX_FREE_ROWS = 4 -- rows left free below the box height (its border and the command line)
-local NUMBER_MIN = 4 -- the preview's number column, which snacks leaves on (`numberwidth` default)
-
----Size the snacks `select` box to the longest listed prompt. snacks sizes a picker once, when it opens, so the box fits
----the largest item, not the highlighted one. The sizes are the box `width` and `height` (inside the border), the
----list `height` and the preview `height`, all absolute (>= 1: `snacks/win.lua`, `M:dim`), so the box shrinks to fit
----the children (`snacks/layout.lua`, `M:update_box`). `select_prompt` turns the preview's `wrap` off whatever the
----user's `wrap` is, so a line takes one row and one longer than the width is cut at the edge. The width stops at the
----inner width snacks gives its own `select` picker: the preset (`layouts.lua`, `M.select`) is `width = 0.5` (less the
----border's 2 columns), `min_width = 80`, `max_width = 100`, applied in `snacks/win.lua`, `M:dim` (`size`, then the
----`ret.width` clamps). The box stays `BOX_FREE_ROWS` short of the screen while the chrome, one list
----row and one preview row fit in it (`lines >= 9`). Below that the box is its floor of 5 rows (7 with its border): a
----list row and a preview row are the least snacks can draw, and the box would clip or cover the command line.
----@param items table[]
----@return table layout a snacks layout; its children keep the structure of the `select` preset (`layouts.lua`)
-local function fit_layout(items)
-  local columns, lines = vim.o.columns, vim.o.lines
-  local need, rows = 0, 1
-  for _, item in ipairs(items) do
-    local text = vim.split(item.preview.text, "\n", { plain = true })
-    local number = math.max(NUMBER_MIN, #tostring(#text) + 1)
-    rows = math.max(rows, #text)
-    -- A list row is the index, ". " and the label.
-    need = math.max(need, #tostring(#items) + 2 + vim.fn.strdisplaywidth(label(item)))
-    for _, line in ipairs(text) do
-      need = math.max(need, vim.fn.strdisplaywidth(line) + number)
+  target.with_target({ filter = filter_of(opts), attach = true }, function(sessions, started)
+    local session = sessions[1]
+    local always, on_start = focus_of(opts)
+    if started and on_start then
+      call(session, "focus")
     end
-  end
-  local normal = math.min(math.max(math.floor(columns * 0.5) - 2, 80), 100)
-  local width = math.min(math.max(need, PICKER_MIN_WIDTH), normal, columns - PICKER_MARGIN)
-
-  -- Rows for the list and the preview together, keeping the box `BOX_FREE_ROWS` short of the screen. The list gives way
-  -- first, down to one row, so the preview keeps a row; the preview takes what is left, up to half the screen.
-  local room = lines - BOX_FREE_ROWS - BOX_CHROME
-  local list = math.max(math.min(math.max(#items, LIST_MIN), LIST_MAX, room - 1), 1)
-  local preview = math.max(math.min(rows, math.floor(lines * 0.5), room - list), 1)
-
-  -- selene's mixed_table rule rejects the preset's dict-plus-children literal, so the children are added after.
-  local box = {
-    backdrop = false,
-    width = width,
-    height = BOX_CHROME + list + preview,
-    box = "vertical",
-    border = true,
-    title = "{title}",
-    title_pos = "center",
-  }
-  vim.list_extend(box, {
-    { win = "input", height = 1, border = "bottom" },
-    { win = "list", border = "none", height = list },
-    { win = "preview", title = "{preview}", height = preview, border = "top" },
-  })
-  return { layout = box }
-end
-
----Open the prompt picker. snacks hides the preview of `vim.ui.select` in its `select` preset
----(`snacks/picker/config/layouts.lua`, `M.select`), so `layout.layout` is given in full: a layout with children is
----used as is, without a preset (`snacks/picker/config/init.lua`, `M.layout`). `win.preview.wo.wrap = false` reaches the
----preview window (`snacks/picker/core/preview.lua`, `M.new` and `M:reset`) and nothing else turns it back on for these
----items, so `fit_layout` counts one row per line. Other pickers ignore `snacks`.
----@param items table[]
----@param on_choice fun(item?: table)
-local function select_prompt(items, on_choice)
-  vim.ui.select(items, {
-    prompt = "sidekick-ultra prompt",
-    format_item = label,
-    snacks = { preview = "preview", layout = fit_layout(items), win = { preview = { wo = { wrap = false } } } },
-  }, on_choice)
+    if deliver(session, segments, opts.submit) and always then
+      call(session, "focus")
+    end
+  end)
 end
 
 ---Pick the target session first, then a prompt from the library, and send it to that session. The picker previews
 ---the exact text for that session's tool. Prompts that cannot render in this context are not listed. A tool this
----starts is focused once the picker closes (not before, which would take the keys from it) unless `focus = false`.
+---starts is focused once the picker closes (not before, which would take the keys from it), and `focus = true` focuses
+---the session after a delivery; either way it is focused once.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.prompt(opts)
   opts = opts or {}
-  local snap = snapshot.capture()
+  local snap = capture()
   if opts.msg then
     local _, err = compose({ msg = opts.msg }, snap)
     if err then
@@ -251,19 +165,21 @@ function M.prompt(opts)
     end
   end
   if #listed == 0 then
-    select_prompt({}, function() end)
+    picker.select({}, function() end)
     return
   end
-  target.with_target({ filter = filter_of(opts), attach = true, focus = false }, function(sessions, started)
+  target.with_target({ filter = filter_of(opts), attach = true }, function(sessions, started)
     local session = sessions[1]
     local tool = tools.get(session.tool)
     local items = vim.tbl_map(function(name)
       return { name = name, preview = { text = tools.format(renders[name], tool and tool.location) } }
     end, listed)
-    select_prompt(items, function(item)
-      local focused = item ~= nil and has_text(renders[item.name]) and write({ session }, renders[item.name], opts)
-      -- A delivery that reached its own focus (`focus = true`) has focused the session already.
-      if started and opts.focus ~= false and not focused then
+    picker.select(items, function(item)
+      local delivered = item ~= nil
+        and has_text(renders[item.name])
+        and deliver(session, renders[item.name], opts.submit)
+      local always, on_start = focus_of(opts)
+      if (delivered and always) or (started and on_start) then
         call(session, "focus")
       end
     end)
@@ -276,18 +192,19 @@ end
 function M.select(opts)
   opts = opts or {}
   target.pick(target.states(filter_of(opts)), {}, function(state)
-    local session, started = target.attach_state(state, { focus = opts.focus })
-    if session and opts.focus and not started then
+    local session, started = target.attach_state(state)
+    local always, on_start = focus_of(opts)
+    if session and (always or (started and on_start)) then
       call(session, "focus")
     end
   end)
 end
 
----Focus the pane or block of the target session. The focus at start is skipped: this focuses every session itself.
+---Focus the pane or block of the target session. It always focuses, whatever `opts.focus` is.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.focus(opts)
   opts = opts or {}
-  target.with_target({ filter = filter_of(opts), attach = true, focus = false }, function(sessions)
+  target.with_target({ filter = filter_of(opts), attach = true }, function(sessions)
     for _, session in ipairs(sessions) do
       call(session, "focus")
     end
@@ -312,7 +229,7 @@ end
 ---@return string? text
 ---@return sidekick_ultra.Error? err
 function M.render(opts)
-  local segments, err = compose(opts or {}, snapshot.capture())
+  local segments, err = compose(opts or {}, capture())
   if not segments then
     errors.notify(err)
     return nil, err

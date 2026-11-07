@@ -57,6 +57,17 @@ describe("status", function()
     expect.equality(status.cli(), {})
   end)
 
+  it("checks nothing when an event refreshes it", function()
+    local b = fake.backend("herdr")
+    registry.register(b)
+    local s = fake.session("herdr", "claude")
+    s.proc_name = "gone"
+    registry.attach(s)
+    settle()
+    expect.equality(#status.cli(), 1)
+    expect.equality(b.of("list"), {})
+  end)
+
   it("serves the cache for 5 s, then refreshes and auto-detaches dead sessions", function()
     local s = fake.session("herdr", "claude")
     registry.attach(s)
