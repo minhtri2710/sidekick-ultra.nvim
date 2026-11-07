@@ -3,11 +3,6 @@
 local check = require("sidekick-ultra.check")
 local location = require("sidekick-ultra.location")
 
----What `is_proc` is asked about; proc.lua builds it and defines `cmd`.
----@class sidekick_ultra.ProcInfo
----@field pid? integer absent only for zellij, which reports none
----@field cmd string one program name
-
 ---@class sidekick_ultra.ToolConfig
 ---@field cmd? string[] non-empty; required for a tool that is not built in
 ---@field env? table<string, string>

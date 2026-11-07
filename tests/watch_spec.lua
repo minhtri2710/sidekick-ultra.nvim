@@ -172,7 +172,11 @@ describe("watch", function()
     expect.equality(fs_event_handles(), base + 1)
     vim.api.nvim_del_augroup_by_name("sidekick-ultra-watch")
     registry.detach("herdr:claude1")
-    flush()
+    -- stop() closes the handles, then fails to delete the group that is already gone. The test owns that error: it is
+    -- caught and read from v:errmsg, so it does not reach the log.
+    vim.v.errmsg = ""
+    vim.cmd("silent! lua require('tests.helpers.fake').flush()")
+    expect.equality(vim.v.errmsg:find("E367", 1, true) ~= nil, true)
     expect.equality(fs_event_handles(), base)
   end)
 

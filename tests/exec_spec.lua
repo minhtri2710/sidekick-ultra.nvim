@@ -13,13 +13,10 @@ describe("exec", function()
     expect.equality(res.stdout, "hello")
   end)
 
-  it("maps a non-zero exit to backend_error with backend, cmd, code and the first stderr line", function()
-    local res, err = exec.check(
-      { "/bin/sh", "-c", "echo first >&2; echo second >&2; exit 4" },
-      { backend = "herdr", cmd = "pane list" }
-    )
+  it("maps a non-zero exit to backend_error with its code and the first stderr line", function()
+    local res, err = exec.check({ "/bin/sh", "-c", "echo first >&2; echo second >&2; exit 4" })
     expect.equality(res, nil)
-    expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "herdr", "pane list", 4 })
+    expect.equality({ err.id, err.code }, { "backend_error", 4 })
     expect.equality(err.msg:find("first", 1, true) ~= nil, true)
     expect.equality(err.msg:find("second", 1, true), nil)
   end)
@@ -35,11 +32,8 @@ describe("exec", function()
 
   it("words a failed result under the head a caller gives it", function()
     local res = { code = 3, stdout = "x", stderr = "boom\nmore\n" }
-    local err = exec.result_error({ "tool" }, res, { cmd = "sub" }, "tool broke")
-    expect.equality(
-      { err.id, err.cmd, err.code, err.stderr, err.msg },
-      { "backend_error", "sub", 3, "boom", "tool broke: boom" }
-    )
+    local err = exec.result_error({ "tool" }, res, "tool broke")
+    expect.equality({ err.id, err.code, err.stderr, err.msg }, { "backend_error", 3, "boom", "tool broke: boom" })
   end)
 
   it("decodes JSON text, turning null into nil, and says when the text is not JSON", function()
@@ -49,8 +43,11 @@ describe("exec", function()
     expect.equality((exec.decode("")), false)
   end)
 
-  it("puts an environment in front of a command as /usr/bin/env K=V with the keys sorted, or nothing", function()
-    expect.equality(exec.env_prefix({ SKU_B = "2", SKU_A = "a=1" }), { "/usr/bin/env", "SKU_A=a=1", "SKU_B=2" })
+  it("words variables as K=V with the keys sorted, and puts them in front of a command after /usr/bin/env", function()
+    local vars = { SKU_B = "2", SKU_A = "a=1" }
+    expect.equality(exec.env_pairs(vars), { "SKU_A=a=1", "SKU_B=2" })
+    expect.equality(exec.env_pairs({}), {})
+    expect.equality(exec.env_prefix(vars), { "/usr/bin/env", "SKU_A=a=1", "SKU_B=2" })
     expect.equality(exec.env_prefix({}), {})
   end)
 
@@ -75,7 +72,7 @@ describe("exec", function()
         return false
       end,
     }
-    require("sidekick-ultra.proc").tool_of("tmux", { pi = pi }, 1, { "node" })
+    require("sidekick-ultra.proc").tool_of({ pi = pi }, 1, { "node" })
     for name, mod in pairs(package.loaded) do
       if type(name) == "string" and name:find("^sidekick%-ultra") then
         expect.equality({ name, vim.inspect(mod):find(secret, 1, true) }, { name, nil })
@@ -85,19 +82,15 @@ describe("exec", function()
   end)
 
   it("maps a timeout to backend_error", function()
-    local res, err = exec.run({ "/bin/sleep", "5" }, { timeout_ms = 100, backend = "rex", cmd = "ls" })
+    local res, err = exec.run({ "/bin/sleep", "5" }, { timeout_ms = 100 })
     expect.equality(res, nil)
-    expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "rex", "ls" })
+    expect.equality({ err.id, err.msg }, { "backend_error", "/bin/sleep timed out after 100 ms" })
   end)
 
   it("maps a timeout to backend_error when the child ignores SIGTERM and is killed with SIGKILL", function()
-    local res, err = exec.run({ "/bin/sh", "-c", "trap '' TERM; exec /bin/sleep 5" }, {
-      timeout_ms = 100,
-      backend = "rex",
-      cmd = "ls",
-    })
+    local res, err = exec.run({ "/bin/sh", "-c", "trap '' TERM; exec /bin/sleep 5" }, { timeout_ms = 100 })
     expect.equality(res, nil)
-    expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "rex", "ls" })
+    expect.equality(err.id, "backend_error")
   end)
 
   it("maps a missing executable to backend_error", function()
@@ -111,11 +104,13 @@ describe("exec", function()
     expect.equality(data, { a = { 1, 2 } })
   end)
 
-  it("maps invalid JSON and empty output to backend_error", function()
-    local _, err = exec.json({ "/bin/sh", "-c", "echo not-json" }, { backend = "rex", cmd = "ls" })
-    expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "rex", "ls" })
+  it("maps invalid JSON and empty output to backend_error, and marks empty output", function()
+    local _, err = exec.json({ "/bin/sh", "-c", "echo not-json" })
+    expect.equality({ err.id, err.msg, err.empty }, { "backend_error", "/bin/sh printed invalid JSON", nil })
     _, err = exec.json({ "/bin/sh", "-c", "true" })
-    expect.equality(err.id, "backend_error")
+    expect.equality({ err.id, err.msg, err.empty }, { "backend_error", "/bin/sh printed invalid JSON", true })
+    _, err = exec.json({ "/bin/sh", "-c", "echo '  '" })
+    expect.equality(err.empty, true)
   end)
 
   it("maps a failing command to backend_error before decoding", function()

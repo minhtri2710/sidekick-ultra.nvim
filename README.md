@@ -86,7 +86,7 @@ What they do not have is an agent status. herdr and rex tell the plugin when an 
 
 **zellij** (checked against zellij 0.45.1)
 
-- Neovim counts as inside zellij when `ZELLIJ` and `ZELLIJ_PANE_ID` are set. Calls inside zellij go to the current session (`ZELLIJ_SESSION_NAME`). Outside zellij, discovery asks every session in turn. There is no zellij option besides `enabled`.
+- Neovim counts as inside zellij when `ZELLIJ`, `ZELLIJ_PANE_ID` and `ZELLIJ_SESSION_NAME` are set. Calls inside zellij go to that session. Outside zellij, discovery asks every session in turn. There is no zellij option besides `enabled`.
 - zellij gives the plugin no process id. Discovery therefore goes by program name: a terminal pane counts when the first word of its running command (`pane_command`) is a configured tool, or, when that word is a node or python interpreter, when the script's name is (see below). Plugin panes and exited panes are skipped. The rest of the command line is never kept.
 - A session id is `zellij:<session>:terminal_<N>`.
 - With no process id there is no in-process liveness check: whether an attached zellij session still runs takes one `list-panes` call (see Statusline for when it runs).

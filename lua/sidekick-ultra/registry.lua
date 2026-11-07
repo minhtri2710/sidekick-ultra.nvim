@@ -49,7 +49,7 @@ end
 function M.is_running(session)
   local is_running = M.backend(session.backend).is_running
   if is_running then
-    return is_running(session)
+    return is_running(session, tools.get(session.tool))
   end
   return proc.name(session.pid) == session.proc_name
 end
@@ -112,10 +112,7 @@ end
 function M.discover()
   local listed, by_id, failed = {}, {}, {}
   for _, backend in ipairs(backends) do
-    local ok, list, err = pcall(backend.list, tools.all())
-    if not ok then
-      list, err = nil, errors.new("backend_error", tostring(list), { backend = backend.name, cmd = "list" })
-    end
+    local list, err = backend.list(tools.all())
     if list then
       for _, session in ipairs(list) do
         if by_id[session.id] then

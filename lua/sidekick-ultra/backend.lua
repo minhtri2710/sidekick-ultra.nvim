@@ -6,24 +6,24 @@
 ---reports are in the backend table, `sidekick-ultra.backends` (`backends/init.lua`). `setup()` requires the module when
 ---`<name>.enabled` is true (the default), calls its `setup(opts)` with the validated options, and registers the module
 ---only when `available()` returns true.
----Run commands with `exec.run` / `exec.check` / `exec.json` (`opts.backend` and `opts.cmd` name the backend and the
----subcommand in the resulting `backend_error`); build errors with `errors.new(id, msg, extra)`.
+---Run commands with `exec.run` / `exec.check` / `exec.json`; build errors with `errors.new(id, msg, extra)`.
 ---A backend gets its options once, through `setup(opts)`, and keeps them in module state until the next `setup()`
 ---replaces them. It never reads `sidekick-ultra.config`.
+local errors = require("sidekick-ultra.errors")
 
 ---A running instance of a tool. A plain record: the core never calls methods on it; it passes it back to the
 ---backend that produced it. Backends may add their own fields (pane or block ids, session ids).
 ---@class sidekick_ultra.Session
----@field id string `<backend>:<native id>`, unique across backends (`herdr:<pane_id>`, `rex:<block_id>`, `tmux:%N`,
----   `zellij:<session>:terminal_<N>`)
+---@field id string `<backend name>:<native id>`, unique across backends
 ---@field backend string backend `name`
 ---@field tool string configured tool name
----@field cwd string absolute working directory of the pane or block
+---@field cwd string absolute working directory of the pane or block. A listed pane that runs a tool and reports none
+---   fails the listing.
 ---@field pid? integer foreground process id recorded at discovery. Required unless the backend defines
 ---   `is_running`, which is then the only liveness check and may work without a pid.
----@field proc_name string foreground process name. Without a backend `is_running`, it must equal
----   `vim.api.nvim_get_proc(pid).name` as nvim reads it, because the liveness rule below compares exactly that. Never
----   copy the mux's own process name (it can differ: truncated on macOS, or retitled by the tool); read it in nvim.
+---@field proc_name string foreground process name. Without a backend `is_running`, it must equal `proc.name(pid)`
+---   (`sidekick-ultra.proc`), because the liveness rule below compares exactly that. Never copy the mux's own process
+---   name (it can differ: truncated on macOS, or retitled by the tool); read it in nvim.
 ---@field state? sidekick_ultra.AgentState last agent state the backend reported
 
 ---@alias sidekick_ultra.AgentState "idle"|"working"|"blocked"|"done"|"unknown"
@@ -43,39 +43,58 @@
 ---Whether the backend can run at all (binary found). Returns the binary path and, when it knows, where the path
 ---came from (for example "option", "PATH", "bundle"). Used by `setup()` and `:checkhealth`.
 ---@field available fun(): boolean, string?, string?
----Whether nvim itself runs inside this mux. Pure environment check; no external command.
+---Whether nvim itself runs inside this mux and `start` can create a pane there. Pure environment check; no external
+---command.
 ---@field inside fun(): boolean
 ---List the sessions of the given tools. Keep only sessions whose foreground program is one of `tools`
 ---(`proc.tool_of` / `proc.find`, or the backend's own detection). `{}` is a valid answer.
 ---@field list fun(tools: table<string, sidekick_ultra.Tool>): sidekick_ultra.Session[]?, sidekick_ultra.Error?
 ---Create a pane or block beside nvim's own, without taking focus, running `tool.cmd`. Only called when `inside()`
 ---is true. Returns the new session. Its `pid` and `proc_name` are those of the new pane or block's current
----foreground (or shell) process, with the name read through `vim.api.nvim_get_proc(pid)`, so the session counts as
----running at once and is not auto-detached before the tool has started. The next discovery replaces the record by id.
+---foreground (or shell) process, with the name read through `proc.name(pid)`, so the session counts as running at
+---once and is not auto-detached before the tool has started. The next discovery replaces the record by id.
 ---@field start fun(tool: sidekick_ultra.Tool, opts: sidekick_ultra.StartOpts): sidekick_ultra.Session?, sidekick_ultra.Error?
----Deliver `text` as literal input, with no implicit Enter. A backend that reads an agent state (herdr, rex) guards
----here: re-read the session's state first, and refuse with `session_blocked` when it is blocked or
----`status_unreadable` when the state cannot be read. A refusal must send nothing. tmux and zellij read no state, so
----they have no such guard.
----@field send fun(session: sidekick_ultra.Session, text: string): true?, sidekick_ultra.Error?
----Send Enter.
----@field submit fun(session: sidekick_ultra.Session): true?, sidekick_ultra.Error?
----Bring the session's pane or block to the front of the mux.
----@field focus fun(session: sidekick_ultra.Session): true?, sidekick_ultra.Error?
----Optional. Whether the session still runs; when defined, it alone decides and the pid and name check is not done. It
----may call the mux through `sidekick-ultra.exec`, so keep it to one cheap call: it runs for every attached session each
----time liveness is checked.
+---Deliver `text` as literal input, with no implicit Enter. `tool` is the session's tool. A backend that reads an agent
+---state guards here with `guard_send`; a refusal sends nothing. Returns a truthy value, or nil and the error.
+---@field send fun(session: sidekick_ultra.Session, text: string, tool: sidekick_ultra.Tool): any, sidekick_ultra.Error?
+---Send Enter. Returns a truthy value, or nil and the error.
+---@field submit fun(session: sidekick_ultra.Session): any, sidekick_ultra.Error?
+---Bring the session's pane or block to the front of the mux. Returns a truthy value, or nil and the error.
+---@field focus fun(session: sidekick_ultra.Session): any, sidekick_ultra.Error?
+---Optional. Whether the session still runs, given the session's tool; when defined, it alone decides and the pid and
+---name check is not done. It may call the mux through `sidekick-ultra.exec`, so keep it to one cheap call: it runs for
+---every attached session each time liveness is checked.
 ---
 ---The liveness rule: a session runs when its backend's `is_running` says so, or, without one, when a process with the
 ---recorded `pid` exists and has the recorded `proc_name`. `registry.check()` applies it to every attached session and
 ---lists no backend while all pass. When one fails, one discovery replaces the attached records by id (a record taken
 ---at `start` may be a launcher that has since become the tool), then detaches the sessions that a listing backend no
 ---longer lists or that still fail the rule. The statusline runs the check when its cache is stale.
----@field is_running? fun(session: sidekick_ultra.Session): boolean
+---@field is_running? fun(session: sidekick_ultra.Session, tool: sidekick_ultra.Tool): boolean
 
 local M = {}
 
 local FUNCTIONS = { "available", "inside", "list", "start", "send", "submit", "focus" }
+
+---The `send` guard of a backend that reads an agent state. `is_blocked` reads the state fresh and answers whether the
+---session waits on a prompt, or nil and the error that kept it from knowing.
+---@param session sidekick_ultra.Session
+---@param is_blocked fun(session: sidekick_ultra.Session): boolean?, sidekick_ultra.Error?
+---@return true? ok nil when `send` must refuse
+---@return sidekick_ultra.Error? err `status_unreadable` or `session_blocked`
+function M.guard_send(session, is_blocked)
+  local blocked, err = is_blocked(session)
+  if blocked == nil then
+    return nil,
+      errors.new("status_unreadable", ("cannot read the state of %s: %s"):format(session.id, err.msg), {
+        code = err.code,
+      })
+  end
+  if blocked then
+    return nil, errors.new("session_blocked", ("%s (%s) is blocked; nothing was sent"):format(session.tool, session.id))
+  end
+  return true
+end
 
 ---Check that `backend` has the shape of `sidekick_ultra.Backend`.
 ---@param backend any

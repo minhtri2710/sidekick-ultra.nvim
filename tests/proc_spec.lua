@@ -63,6 +63,18 @@ describe("proc", function()
       expect.equality(seen, { { pid = 7, cmd = "claude" }, { cmd = "codex" } })
     end)
 
+    it("turns a throwing is_proc into a backend_error naming the tool, not an answer", function()
+      local throwing = {
+        name = "mine",
+        is_proc = function()
+          error("boom")
+        end,
+      }
+      local matched, err = proc.matches(throwing, 7, "mine")
+      expect.equality({ matched, err.id }, { nil, "backend_error" })
+      expect.equality(err.msg:find("mine", 1, true) ~= nil and err.msg:find("boom", 1, true) ~= nil, true)
+    end)
+
     it("never tests an empty name", function()
       local seen = {}
       local always = {
@@ -87,13 +99,29 @@ describe("proc", function()
     it("is nil when nothing matches", function()
       expect.equality(proc.find({ a = tool({}, "x") }, 1, { "y" }), nil)
     end)
+
+    it("stops at a throwing is_proc with its error, in find and in tool_of", function()
+      local throwing = {
+        name = "mine",
+        is_proc = function()
+          error("boom")
+        end,
+      }
+      local name, err = proc.find({ a = throwing }, 1, { "x" })
+      expect.equality({ name, err.id }, { nil, "backend_error" })
+      name, err = proc.tool_of({ a = throwing }, 1, { "x" })
+      expect.equality({ name, err.id }, { nil, "backend_error" })
+      ps("node /x/bin/pi\n")
+      name, err = proc.tool_of({ a = throwing }, 1, { "node" })
+      expect.equality({ name, err.id }, { nil, "backend_error" })
+    end)
   end)
 
   describe("tool_of", function()
     it("tries the words in the order given and returns the first tool they satisfy", function()
       local seen = {}
       local tools = { claude = tool(seen, "claude") }
-      expect.equality({ proc.tool_of("rex", tools, 7, { "2.1.308", "claude" }) }, { "claude" })
+      expect.equality({ proc.tool_of(tools, 7, { "2.1.308", "claude" }) }, { "claude" })
       expect.equality(cmds(seen), { "2.1.308", "claude" })
       expect.equality(ps_calls, {})
     end)
@@ -102,7 +130,7 @@ describe("proc", function()
       local seen = {}
       local tools = { pi = tool(seen, "pi") }
       ps("unused")
-      expect.equality({ proc.tool_of("rex", tools, 7, { "node", "pi" }) }, { "pi" })
+      expect.equality({ proc.tool_of(tools, 7, { "node", "pi" }) }, { "pi" })
       expect.equality(seen, { { pid = 7, cmd = "pi" } })
       expect.equality(ps_calls, {})
     end)
@@ -111,30 +139,29 @@ describe("proc", function()
       local seen = {}
       local tools = { pi = tool(seen, "pi") }
       ps("/opt/bin/node /x/bin/pi --flag\n")
-      expect.equality({ proc.tool_of("tmux", tools, 7, { "node", "22.1.0", "node" }) }, { "pi" })
+      expect.equality({ proc.tool_of(tools, 7, { "node", "22.1.0", "node" }) }, { "pi" })
       expect.equality(#ps_calls, 1)
       expect.equality(ps_calls[1].argv, { "ps", "-ww", "-o", "args=", "-p", "7" })
-      expect.equality({ ps_calls[1].opts.backend, ps_calls[1].opts.cmd }, { "tmux", "ps" })
       expect.equality(seen, { { pid = 7, cmd = "22.1.0" }, { pid = 7, cmd = "pi" } })
     end)
 
     it("reads nothing, and finds nothing, when no tool is configured", function()
       ps("node /x/bin/pi\n")
-      expect.equality({ proc.tool_of("tmux", {}, 7, { "node" }) }, {})
+      expect.equality({ proc.tool_of({}, 7, { "node" }) }, {})
       expect.equality(ps_calls, {})
     end)
 
     it("finds no tool for an interpreter that runs no script, or one that is not a tool", function()
       local tools = { pi = tool({}, "pi") }
       ps("node -e pi\n")
-      expect.equality({ proc.tool_of("tmux", tools, 7, { "node" }) }, {})
+      expect.equality({ proc.tool_of(tools, 7, { "node" }) }, {})
       ps("node /x/bin/other pi\n")
-      expect.equality({ proc.tool_of("tmux", tools, 7, { "node" }) }, {})
+      expect.equality({ proc.tool_of(tools, 7, { "node" }) }, {})
     end)
 
     it("skips a process that ended before ps ran", function()
       ps({ code = 1, stdout = "", stderr = "" })
-      expect.equality({ proc.tool_of("tmux", { pi = tool({}, "pi") }, 7, { "node" }) }, {})
+      expect.equality({ proc.tool_of({ pi = tool({}, "pi") }, 7, { "node" }) }, {})
     end)
 
     it(
@@ -142,20 +169,20 @@ describe("proc", function()
       function()
         local tools = { pi = tool({}, "pi") }
         ps({ code = 3, stdout = "node /x/bin/pi --key SECRET\n", stderr = "ps: boom\nsecond\n" })
-        local name, err = proc.tool_of("rex", tools, 7, { "node" })
+        local name, err = proc.tool_of(tools, 7, { "node" })
         expect.equality(name, nil)
-        expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "rex", "ps", 3 })
+        expect.equality({ err.id, err.code }, { "backend_error", 3 })
         expect.equality(err.msg, "ps exited with 3 for pid 7: ps: boom")
         expect.equality(vim.inspect(err):find("SECRET", 1, true), nil)
         ps({ code = 1, stdout = "x\n", stderr = "" })
-        _, err = proc.tool_of("rex", tools, 7, { "node" })
+        _, err = proc.tool_of(tools, 7, { "node" })
         expect.equality(err.msg, "ps exited with 1 for pid 7")
         -- Exit 1 means "gone" only when both streams are empty.
         ps({ code = 1, stdout = "", stderr = "ps: illegal option\n" })
-        _, err = proc.tool_of("rex", tools, 7, { "node" })
+        _, err = proc.tool_of(tools, 7, { "node" })
         expect.equality({ err.code, err.msg }, { 1, "ps exited with 1 for pid 7: ps: illegal option" })
         ps({ code = 0, stdout = "\n", stderr = "" })
-        _, err = proc.tool_of("rex", tools, 7, { "node" })
+        _, err = proc.tool_of(tools, 7, { "node" })
         expect.equality({ err.code, err.msg }, { 0, "ps printed nothing for pid 7" })
       end
     )
@@ -164,7 +191,7 @@ describe("proc", function()
       exec.run = function()
         return nil, { id = "backend_error", msg = "cannot run ps: boom" }
       end
-      local _, err = proc.tool_of("tmux", { pi = tool({}, "pi") }, 7, { "node" })
+      local _, err = proc.tool_of({ pi = tool({}, "pi") }, 7, { "node" })
       expect.equality(err.msg, "cannot run ps: boom")
     end)
   end)

@@ -194,36 +194,33 @@ describe("tmux backend", function()
       })
       local s = { pane = "%1" }
       expect.equality(type(tmux.list(tools.all())), "table")
-      expect.equality({ tmux.send(s, "x") }, { true })
-      expect.equality({ tmux.submit(s) }, { true })
-      expect.equality({ tmux.focus(s) }, { true })
+      expect.equality(tmux.send(s, "x") ~= nil, true)
+      expect.equality(tmux.submit(s) ~= nil, true)
+      expect.equality(tmux.focus(s) ~= nil, true)
       for _, argv in ipairs(rec.argvs()) do
         expect.equality(vim.list_slice(argv, 1, 3), { "tmux", "-S", "/tmp/sku.sock" })
       end
     end)
 
-    it("reports a failed command as backend_error naming the subcommand and the exit code", function()
+    it("reports a failed command as backend_error with the exit code and the first stderr line", function()
       rec = record({
         ["display-message"] = "0\n",
         ["send-keys"] = bad(fixture("stderr_missing_pane")),
       })
       local res, err = tmux.submit({ pane = "%99" })
       expect.equality(res, nil)
-      expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "tmux", "send-keys", 1 })
+      expect.equality({ err.id, err.code }, { "backend_error", 1 })
       expect.equality(err.msg, "tmux exited with 1: can't find pane: %99")
     end)
 
     it("returns the error of a command that could not be spawned", function()
       rec = record({
         ["list-panes"] = {
-          run_error = errors.new("backend_error", "cannot run tmux: boom", { backend = "tmux", cmd = "list-panes" }),
+          run_error = errors.new("backend_error", "cannot run tmux: boom"),
         },
       })
       local list, err = tmux.list(tools.all())
-      expect.equality(
-        { list, err.id, err.cmd, err.msg },
-        { nil, "backend_error", "list-panes", "cannot run tmux: boom" }
-      )
+      expect.equality({ list, err.id, err.msg }, { nil, "backend_error", "cannot run tmux: boom" })
     end)
   end)
 
@@ -364,7 +361,7 @@ describe("tmux backend", function()
       rec = record({ ["list-panes"] = bad("error connecting to /x/t.sock (Permission denied)\n") })
       local list, err = tmux.list(tools.all())
       expect.equality(list, nil)
-      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 1 })
+      expect.equality({ err.id, err.code }, { "backend_error", 1 })
       expect.equality(err.msg:find("Permission denied", 1, true) ~= nil, true)
     end)
 
@@ -590,7 +587,7 @@ describe("tmux backend", function()
           stdout = "node /x/bin/gemini --api-key " .. SECRET .. "\n",
           stderr = "ps: boom\nsecond\n",
         })
-        expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "tmux", "ps", 3 })
+        expect.equality({ err.id, err.code }, { "backend_error", 3 })
         expect.equality(err.msg, "ps exited with 3 for pid 58100: ps: boom")
       end)
 
@@ -612,7 +609,7 @@ describe("tmux backend", function()
         use_procs({ [58500] = { name = "node" } })
         local session, err = tmux.start(tools.get("gemini"), { cwd = "/w", env = {} })
         expect.equality(session, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "split-window" })
+        expect.equality(err.id, "backend_error")
         expect.equality(err.msg, "ps exited with 2 for pid 58500: boom; pane %5 was left open")
         expect.equality(vim.inspect(err):find(SECRET, 1, true), nil)
       end)
@@ -768,7 +765,7 @@ describe("tmux backend", function()
     it("returns the tmux error and creates nothing else when split-window fails", function()
       rec = record({ ["split-window"] = bad("no space for new pane\n") })
       local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = {} })
-      expect.equality({ session, err.id, err.cmd }, { nil, "backend_error", "split-window" })
+      expect.equality({ session, err.id }, { nil, "backend_error" })
       expect.equality(#rec.calls, 1)
     end)
 
@@ -803,7 +800,7 @@ describe("tmux backend", function()
       function()
         rec = record({ ["display-message"] = "0\n", ["load-buffer"] = "", ["paste-buffer"] = "" })
         local text = "line one\nline two\n  indented"
-        expect.equality(tmux.send({ pane = "%2" }, text), true)
+        expect.equality(tmux.send({ pane = "%2" }, text) ~= nil, true)
         local mode, load, paste = rec.argvs()[1], rec.argvs()[2], rec.argvs()[3]
         local buffer = load[4]
         expect.equality(buffer:match("^sku%-%d+%-%d+$") ~= nil, true)
@@ -824,7 +821,7 @@ describe("tmux backend", function()
           ["load-buffer"] = "",
           ["paste-buffer"] = "",
         })
-        expect.equality(tmux.send({ pane = "%2" }, "x"), true)
+        expect.equality(tmux.send({ pane = "%2" }, "x") ~= nil, true)
         local subs = vim.tbl_map(function(argv)
           return argv[2]
         end, rec.argvs())
@@ -861,10 +858,7 @@ describe("tmux backend", function()
       -- tmux 3.8 answers display-message -p -t <missing pane> with exit 0 and no output, not an error.
       rec = record({ ["display-message"] = fixture("display_pane_gone") })
       local res, err = tmux.send({ pane = "%999" }, "x")
-      expect.equality(
-        { res, err.id, err.cmd, err.msg },
-        { nil, "backend_error", "display-message", "tmux pane %999 not found" }
-      )
+      expect.equality({ res, err.id, err.msg }, { nil, "backend_error", "tmux pane %999 not found" })
       expect.equality(#rec.calls, 1)
     end)
 
@@ -885,7 +879,7 @@ describe("tmux backend", function()
     it("stops when the buffer cannot be loaded, without pasting", function()
       rec = record({ ["display-message"] = "0\n", ["load-buffer"] = bad("no server running\n") })
       local res, err = tmux.send({ pane = "%2" }, "x")
-      expect.equality({ res, err.id, err.cmd }, { nil, "backend_error", "load-buffer" })
+      expect.equality({ res, err.id }, { nil, "backend_error" })
       expect.equality(#rec.calls, 2)
     end)
 
@@ -897,7 +891,7 @@ describe("tmux backend", function()
         ["delete-buffer"] = "",
       })
       local res, err = tmux.send({ pane = "%99" }, "x")
-      expect.equality({ res, err.id, err.cmd }, { nil, "backend_error", "paste-buffer" })
+      expect.equality({ res, err.id }, { nil, "backend_error" })
       local buffer = rec.argvs()[2][4]
       expect.equality(rec.argvs()[4], { "tmux", "delete-buffer", "-b", buffer })
     end)
@@ -906,7 +900,7 @@ describe("tmux backend", function()
   describe("submit", function()
     it("checks the pane's mode, then sends Enter to the pane", function()
       rec = record({ ["display-message"] = "0\n", ["send-keys"] = "" })
-      expect.equality(tmux.submit({ pane = "%2" }), true)
+      expect.equality(tmux.submit({ pane = "%2" }) ~= nil, true)
       expect.equality(rec.argvs(), {
         { "tmux", "display-message", "-p", "-t", "%2", "#{pane_in_mode}" },
         { "tmux", "send-keys", "-t", "%2", "Enter" },
@@ -915,7 +909,7 @@ describe("tmux backend", function()
 
     it("leaves copy mode before Enter, because in a mode Enter would go to the mode", function()
       rec = record({ ["display-message"] = "1\n", ["copy-mode"] = "", ["send-keys"] = "" })
-      expect.equality(tmux.submit({ pane = "%2" }), true)
+      expect.equality(tmux.submit({ pane = "%2" }) ~= nil, true)
       expect.equality(rec.argvs(), {
         { "tmux", "display-message", "-p", "-t", "%2", "#{pane_in_mode}" },
         { "tmux", "copy-mode", "-q", "-t", "%2" },
@@ -926,10 +920,7 @@ describe("tmux backend", function()
     it("reports a pane tmux no longer knows (exit 0, empty output) as not found, and presses no Enter", function()
       rec = record({ ["display-message"] = fixture("display_pane_gone") })
       local res, err = tmux.submit({ pane = "%999" })
-      expect.equality(
-        { res, err.id, err.cmd, err.msg },
-        { nil, "backend_error", "display-message", "tmux pane %999 not found" }
-      )
+      expect.equality({ res, err.id, err.msg }, { nil, "backend_error", "tmux pane %999 not found" })
       expect.equality(#rec.calls, 1)
     end)
 
@@ -963,14 +954,14 @@ describe("tmux backend", function()
     it("selects the window and the pane in one invocation, with ; as its own argument", function()
       vim.env.TMUX, vim.env.TMUX_PANE = nil, nil
       rec = record({ ["select-window"] = "" })
-      expect.equality(tmux.focus({ pane = "%2", tmux_session = "other" }), true)
+      expect.equality(tmux.focus({ pane = "%2", tmux_session = "other" }) ~= nil, true)
       expect.equality(rec.argvs(), { SELECT })
     end)
 
     it("adds switch-client when nvim is inside tmux and the pane is in another session", function()
       vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
       rec = record({ ["display-message"] = fixture("display_session"), ["select-window"] = "" })
-      expect.equality(tmux.focus({ pane = "%2", tmux_session = "other" }), true)
+      expect.equality(tmux.focus({ pane = "%2", tmux_session = "other" }) ~= nil, true)
       expect.equality(rec.argvs(), {
         { "tmux", "display-message", "-p", "-t", "%0", "#{session_name}" },
         vim.list_extend(vim.deepcopy(SELECT), { ";", "switch-client", "-t", "%2" }),
@@ -980,14 +971,14 @@ describe("tmux backend", function()
     it("leaves switch-client out when the pane is in nvim's own session", function()
       vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
       rec = record({ ["display-message"] = fixture("display_session"), ["select-window"] = "" })
-      expect.equality(tmux.focus({ pane = "%2", tmux_session = "main" }), true)
+      expect.equality(tmux.focus({ pane = "%2", tmux_session = "main" }) ~= nil, true)
       expect.equality(rec.argvs()[2], SELECT)
     end)
 
     it("skips the session lookup for a pane tmux started in nvim's own session", function()
       vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
       rec = record({ ["select-window"] = "" })
-      expect.equality(tmux.focus({ pane = "%2" }), true)
+      expect.equality(tmux.focus({ pane = "%2" }) ~= nil, true)
       expect.equality(rec.argvs(), { SELECT })
     end)
 
@@ -995,7 +986,7 @@ describe("tmux backend", function()
       vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
       rec = record({ ["display-message"] = bad("can't find pane: %0\n") })
       local res, err = tmux.focus({ pane = "%2", tmux_session = "other" })
-      expect.equality({ res, err.id, err.cmd }, { nil, "backend_error", "display-message" })
+      expect.equality({ res, err.id }, { nil, "backend_error" })
       expect.equality(#rec.calls, 1)
     end)
 
@@ -1003,7 +994,7 @@ describe("tmux backend", function()
       vim.env.TMUX, vim.env.TMUX_PANE = nil, nil
       rec = record({ ["select-window"] = bad(fixture("stderr_missing_pane")) })
       local res, err = tmux.focus({ pane = "%99" })
-      expect.equality({ res, err.id, err.cmd }, { nil, "backend_error", "select-window" })
+      expect.equality({ res, err.id }, { nil, "backend_error" })
     end)
   end)
 end)
