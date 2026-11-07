@@ -262,9 +262,11 @@ describe("target", function()
     end)
 
     it("decides installed and the url from the tool's current spec, not the one listed", function()
-      local b = fake.backend("herdr", { is_inside = true })
+      local b = fake.backend("herdr", { is_inside = true, sessions = { fake.session("herdr", "claude") } })
       registry.register(b)
-      local was_installed, was_missing = target.states({ name = "claude" })[1], target.states({ name = "ghost" })[1]
+      local was_installed = target.states({ name = "claude", started = false })[1]
+      local was_missing = target.states({ name = "ghost" })[1]
+      local was_running = target.states({ name = "claude", started = true })[1]
       fake.reset({
         claude = { cmd = { "/nonexistent/sku-gone" }, url = "https://example.invalid/claude" },
         ghost = { cmd = fake.INSTALLED, env = { SKU_SPEC_ENV = "new" } },
@@ -277,6 +279,9 @@ describe("target", function()
       )
       expect.equality(target.attach_state(was_missing).id, "herdr:ghostnew1")
       expect.equality(b.of("start")[1][3].env, { SKU_SPEC_ENV = "new" })
+      -- A session that is already running needs no binary here, so a missing one does not refuse it.
+      expect.equality(target.attach_state(was_running).id, "herdr:claude1")
+      expect.equality(cap.ids(), { "not_installed" })
     end)
 
     it("reports a failing start", function()
