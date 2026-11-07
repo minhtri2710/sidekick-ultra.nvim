@@ -31,10 +31,20 @@ local function matcher(re)
   end
 end
 
+---The program as one whole word. An edge that is a keyword character keeps `\<` or `\>`; a non-word edge (`c++`) has
+---no word boundary to anchor on, so it asks only that no keyword character touches it. The edge is read with `\k`,
+---the character class `\<` and `\>` use, so the two always agree.
 ---@param program string
 ---@return fun(proc: sidekick_ultra.ProcInfo): boolean
 local function word(program)
-  return matcher("\\<" .. vim.fn.escape(program, "\\.*~[]^$/") .. "\\>")
+  if program == "" then
+    return function()
+      return false
+    end
+  end
+  local first = vim.regex("^\\k"):match_str(program) and "\\<" or "\\k\\@<!"
+  local last = vim.regex("\\k$"):match_str(program) and "\\>" or "\\k\\@!"
+  return matcher(first .. vim.fn.escape(program, "\\.*~[]^$/") .. last)
 end
 
 local copilot = word("copilot")
