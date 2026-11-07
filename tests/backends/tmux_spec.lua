@@ -15,7 +15,7 @@ local SECRET = "SECRET-TOKEN-xyz"
 
 local FIXTURES = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/fixtures/tmux/"
 -- The working directory is the last field, and falls back to the start path when tmux has no current path.
-local LIST_FORMAT = "#{pane_id}\t#{pane_pid}\t#{session_name}\t#{window_id}\t#{pane_dead}\t"
+local LIST_FORMAT = "#{pane_id}\t#{pane_pid}\t#{session_name}\t#{pane_dead}\t"
   .. "#{?pane_current_path,#{pane_current_path},#{pane_start_path}}"
 local WORK = "/private/tmp/sku-live-tmux/work"
 
@@ -301,7 +301,6 @@ describe("tmux backend", function()
           proc_name = "claude",
           pane = "%1",
           tmux_session = "main",
-          window_id = "@0",
         },
         {
           id = "tmux:%2",
@@ -312,7 +311,6 @@ describe("tmux backend", function()
           proc_name = "codex",
           pane = "%2",
           tmux_session = "other",
-          window_id = "@1",
         },
       })
       expect.equality(#rec.calls, 1)
@@ -417,6 +415,12 @@ describe("tmux backend", function()
       expect.equality(err.msg:find("Permission denied", 1, true) ~= nil, true)
     end)
 
+    it("words a failure that printed nothing on stderr without a trailing colon", function()
+      rec = record({ ["list-panes"] = { code = 1, stdout = "", stderr = "" } })
+      local _, err = tmux.list(tools.all())
+      expect.equality(err.msg, "tmux exited with 1")
+    end)
+
     it("fails closed on a row with the wrong shape", function()
       for _, name in ipairs({ "list_panes_bad_fields", "list_panes_bad_id", "list_panes_bad_pid" }) do
         rec = record({ ["list-panes"] = fixture(name) })
@@ -491,7 +495,6 @@ describe("tmux backend", function()
           proc_name = "node",
           pane = "%1",
           tmux_session = "main",
-          window_id = "@0",
         },
       })
     end)
@@ -555,6 +558,27 @@ describe("tmux backend", function()
       rec = record({ ["list-panes"] = fixture(PANES), ps = "node /x/bin/other\n" })
       use_procs({ [58100] = { name = "node" } })
       expect.equality({ tmux.list(tools.all()) }, { {} })
+    end)
+
+    it("reads no command line when no tool is configured", function()
+      rec = record({ ["list-panes"] = fixture(PANES) })
+      use_procs({ [58100] = { name = "node" } })
+      expect.equality({ tmux.list({}) }, { {} })
+      expect.equality(#rec.calls, 1)
+    end)
+
+    it("never tests the empty name of an interpreter that runs code", function()
+      local always = {
+        name = "always",
+        cmd = { "x" },
+        env = {},
+        is_proc = function()
+          return true
+        end,
+      }
+      rec = record({ ["list-panes"] = fixture(PANES), ps = "node -e code\n" })
+      use_procs({ [58100] = { name = "node" } })
+      expect.equality({ tmux.list({ always = always }) }, { {} })
     end)
 
     it("reads no command line for a process that is not an interpreter", function()
@@ -1063,12 +1087,6 @@ describe("tmux backend", function()
       tmux.send({ pane = "%2" }, "a")
       tmux.send({ pane = "%2" }, "b")
       expect.no_equality(rec.argvs()[2][4], rec.argvs()[5][4])
-    end)
-
-    it("sends nothing for an empty text, not even the mode check", function()
-      rec = record({})
-      expect.equality(tmux.send({ pane = "%2" }, ""), true)
-      expect.equality(rec.calls, {})
     end)
 
     it("stops when the buffer cannot be loaded, without pasting", function()

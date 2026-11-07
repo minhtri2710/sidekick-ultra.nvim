@@ -442,6 +442,64 @@ describe("rex backend", function()
       expect.equality(list[1].tool, "pi")
     end)
 
+    it("finds a node tool whose process name is the interpreter and whose argv0 is its launcher", function()
+      rec = record(node_routes({ name = "node", argv0 = "/x/launcher" }, "node /x/bin/pi\n"))
+      local list, err = rex.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(
+        vim.tbl_map(function(s)
+          return s.tool
+        end, list),
+        { "pi" }
+      )
+    end)
+
+    it("does not match the interpreter's own name, so a tool needs its script name", function()
+      fake.reset({ nodetool = { cmd = fake.INSTALLED, is_proc = "^node$" } }, { rex = { enabled = false, bin = bin } })
+      rec = record(node_routes({ name = "node", argv0 = "node" }, "node /x/bin/other\n"))
+      expect.equality(rex.list(tools.all()), {})
+    end)
+
+    it("tests the basename of argv0, never a directory of its path", function()
+      rec = record(node_routes({ name = "zsh", argv0 = "/x/pi-tools/launcher" }, "unused"))
+      expect.equality(rex.list(tools.all()), {})
+    end)
+
+    it("tests the name when rex reports no argv0", function()
+      rec = record(node_routes({ name = "pi" }, "unused"))
+      local list, err = rex.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(
+        vim.tbl_map(function(s)
+          return s.tool
+        end, list),
+        { "pi" }
+      )
+    end)
+
+    it("calls is_proc with { pid, cmd } for each block: argv0's basename first, then the name", function()
+      local seen = {}
+      fake.reset({
+        spy = {
+          cmd = fake.INSTALLED,
+          is_proc = function(info)
+            table.insert(seen, info)
+            return false
+          end,
+        },
+      }, { rex = { enabled = false, bin = bin } })
+      rec = record(node_routes({ name = "2.1.308", argv0 = "/usr/local/bin/claude" }, "unused"))
+      local pid = fake.self_proc()
+      rex.list(tools.all())
+      -- Block a1 is the shell (process_shell), block a2 the process above.
+      expect.equality(seen, {
+        { pid = pid, cmd = "-zsh" },
+        { pid = pid, cmd = "zsh" },
+        { pid = pid, cmd = "claude" },
+        { pid = pid, cmd = "2.1.308" },
+      })
+    end)
+
     it("skips a process that ended before ps ran", function()
       rec = record(node_routes({ name = "node", argv0 = "node" }, { code = 1, stdout = "", stderr = "" }))
       expect.equality(rex.list(tools.all()), {})
@@ -623,12 +681,6 @@ describe("rex backend", function()
     it("treats an absent or empty record list as not blocked", function()
       rec = record(routes("{}"))
       expect.equality(rex.send(a2(), "hello\n"), true)
-    end)
-
-    it("sends nothing and returns true for empty text", function()
-      rec = record({})
-      expect.equality(rex.send(a2(), ""), true)
-      expect.equality(rec.calls, {})
     end)
 
     it("refuses with session_blocked when a blocked record is owned by the session's pid, and sends nothing", function()

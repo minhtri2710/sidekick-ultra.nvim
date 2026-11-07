@@ -4,8 +4,7 @@
 local config = require("sidekick-ultra.config")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
-local procname = require("sidekick-ultra.procname")
-local tools = require("sidekick-ultra.tools")
+local proc = require("sidekick-ultra.proc")
 
 ---@type sidekick_ultra.Backend
 local M = { name = "rex" }
@@ -42,10 +41,9 @@ end
 
 ---@param label string
 ---@param msg string
----@param extra? table
 ---@return sidekick_ultra.Error
-local function failure(label, msg, extra)
-  return errors.new("backend_error", msg, vim.tbl_extend("force", extra or {}, { backend = M.name, cmd = label }))
+local function failure(label, msg)
+  return errors.new("backend_error", msg, { backend = M.name, cmd = label })
 end
 
 ---The full argv for a subcommand. Never relies on REX_SERVER (rex ignored it in firstmate's runs).
@@ -157,7 +155,7 @@ end
 ---(argv0 is read for the tool match and never stored).
 ---@param sid string
 ---@param bid string
----@return table? proc
+---@return table? fg
 ---@return sidekick_ultra.Error? err
 local function foreground(sid, bid)
   local data, err = json("process", "block", "call", "-s", sid, "-b", bid, "process")
@@ -178,39 +176,21 @@ local function foreground(sid, bid)
 end
 
 ---The configured tool a foreground process runs. argv0 first, then name: Claude Code's `name` is its version while its
----`argv0` is "claude". A node or python script tool runs as its interpreter until it sets its own title, so when
----neither word matches and one is an interpreter, the script it runs is tested instead (one `ps` call, see procname).
+---`argv0` is "claude". A node or python script tool runs as its interpreter until it sets its own title, so then the
+---script it runs is tested (see proc).
 ---@param configured table<string, sidekick_ultra.Tool>
----@param names string[] sorted tool names
----@param proc table
+---@param fg table
 ---@return string? tool_name
 ---@return sidekick_ultra.Error? err a failing ps
-local function tool_of(configured, names, proc)
+local function tool_of(configured, fg)
   local words = {}
-  for _, cmd in ipairs({ proc.argv0, proc.name }) do
-    if type(cmd) == "string" and cmd ~= "" then
-      table.insert(words, cmd)
-    end
+  if type(fg.argv0) == "string" then
+    table.insert(words, vim.fs.basename(fg.argv0))
   end
-  for _, name in ipairs(names) do
-    for _, cmd in ipairs(words) do
-      if tools.matches(configured[name], { pid = proc.pid, cmd = cmd }) then
-        return name
-      end
-    end
+  if type(fg.name) == "string" then
+    table.insert(words, fg.name)
   end
-  for _, cmd in ipairs(#names > 0 and words or {}) do
-    local interpreter = vim.fs.basename(cmd)
-    if procname.is_interpreter(interpreter) then
-      local program, err = procname.of(proc.pid, interpreter, M.name)
-      for _, name in ipairs(program and program ~= "" and names or {}) do
-        if tools.matches(configured[name], { pid = proc.pid, cmd = program }) then
-          return name
-        end
-      end
-      return nil, err
-    end
-  end
+  return proc.tool_of(M.name, configured, fg.pid, words)
 end
 
 ---Session record for a block whose foreground process runs `tool_name`. Nil (not running here) when the pid is not
@@ -218,24 +198,24 @@ end
 ---@param tool_name string
 ---@param sid string
 ---@param bid string
----@param proc table
+---@param fg table
 ---@return sidekick_ultra.Session? session
 ---@return sidekick_ultra.Error? err
-local function session_of(tool_name, sid, bid, proc)
-  local ok, info = pcall(vim.api.nvim_get_proc, proc.pid)
-  if not ok or type(info) ~= "table" or type(info.name) ~= "string" then
+local function session_of(tool_name, sid, bid, fg)
+  local name = proc.name(fg.pid)
+  if not name then
     return nil
   end
-  if type(proc.cwd) ~= "string" or proc.cwd == "" then
+  if type(fg.cwd) ~= "string" or fg.cwd == "" then
     return nil, failure("process", "rex printed no working directory for block " .. bid)
   end
   return {
     id = "rex:" .. bid,
     backend = M.name,
     tool = tool_name,
-    cwd = proc.cwd,
-    pid = proc.pid,
-    proc_name = info.name,
+    cwd = fg.cwd,
+    pid = fg.pid,
+    proc_name = name,
     session_id = sid,
     block_id = bid,
   }
@@ -245,8 +225,6 @@ end
 ---through `rex do` (one Lua script, one call) when listing gets slow.
 ---@param configured table<string, sidekick_ultra.Tool>
 function M.list(configured)
-  local names = vim.tbl_keys(configured)
-  table.sort(names)
   local listing, err = json("ls", "ls", "--json")
   if not listing then
     -- Exit 4 is "server unreachable": no server means no sessions, not a failure worth a toast on every discovery.
@@ -269,19 +247,19 @@ function M.list(configured)
       return nil, ids_err
     end
     for _, bid in ipairs(ids) do
-      local proc, proc_err = foreground(entry.session_id, bid)
-      if proc_err then
-        return nil, proc_err
+      local fg, fg_err = foreground(entry.session_id, bid)
+      if fg_err then
+        return nil, fg_err
       end
       local name, match_err
-      if proc then
-        name, match_err = tool_of(configured, names, proc)
+      if fg then
+        name, match_err = tool_of(configured, fg)
       end
       if match_err then
         return nil, match_err
       end
       if name then
-        local session, session_err = session_of(name, entry.session_id, bid, proc)
+        local session, session_err = session_of(name, entry.session_id, bid, fg)
         if session_err then
           return nil, session_err
         end
@@ -300,14 +278,7 @@ end
 function M.start(tool, opts)
   local sid, anchor = vim.env.REX_SESSION, vim.env.REX_BLOCK
   local args = { "split", "-s", sid, "-b", anchor, "--split=right", "-c", opts.cwd, "--focus=false", "--json", "--" }
-  if next(opts.env) then
-    table.insert(args, "/usr/bin/env")
-    local keys = vim.tbl_keys(opts.env)
-    table.sort(keys)
-    for _, key in ipairs(keys) do
-      table.insert(args, key .. "=" .. opts.env[key])
-    end
-  end
+  vim.list_extend(args, exec.env_prefix(opts.env))
   vim.list_extend(args, tool.cmd)
   local created, err = json("split", unpack(args))
   if not created then
@@ -321,14 +292,14 @@ function M.start(tool, opts)
 
   -- The block is "running" at once: record whatever its foreground is now (the login shell or the command). The next
   -- discovery replaces this record with the tool's own pid, matched by id.
-  local proc, proc_err = foreground(sid, bid)
-  if proc_err then
-    return nil, proc_err
+  local fg, fg_err = foreground(sid, bid)
+  if fg_err then
+    return nil, fg_err
   end
-  if not proc then
+  if not fg then
     return nil, failure("split", ("block %s has no foreground process; it was left open"):format(bid))
   end
-  local session, session_err = session_of(tool.name, sid, bid, proc)
+  local session, session_err = session_of(tool.name, sid, bid, fg)
   if not session and not session_err then
     return nil, failure("split", ("block %s is not visible to this nvim; it was left open"):format(bid))
   end
@@ -378,9 +349,6 @@ end
 ---@param session sidekick_ultra.Session
 ---@param text string
 function M.send(session, text)
-  if text == "" then
-    return true
-  end
   local ok, err = guard(session)
   if not ok then
     return nil, err
