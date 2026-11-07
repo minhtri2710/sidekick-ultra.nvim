@@ -144,7 +144,19 @@ describe("health", function()
     expect.equality(has("error", "rex.bin"), true)
     expect.equality(has("error", "/nonexistent/sku-rex"), true)
     expect.equality(has("error", "binary not found"), false)
-    expect.equality(advice("error", "rex.bin"):find("Fix or remove `rex.bin`", 1, true) ~= nil, true)
+    expect.equality(advice("error", "rex.bin"), "Fix or remove `rex.bin`: a configured binary has no fallback to PATH")
+  end)
+
+  it("reports whether nvim runs inside a backend whose binary is missing", function()
+    local herdr = fake.backend("herdr", { is_inside = true })
+    herdr.available = function()
+      return false
+    end
+    package.loaded["sidekick-ultra.backends.herdr"] = herdr
+    fake.reset(nil, { herdr = { enabled = true } })
+    check()
+    expect.equality(has("error", "herdr: binary not found"), true)
+    expect.equality(has("info", "herdr: nvim runs inside herdr"), true)
   end)
 
   ---Fake tmux and zellij modules with a binary path and an inside state.
@@ -350,6 +362,6 @@ describe("health", function()
   it("warns that treesitter textobjects are missing", function()
     fake.reset()
     check()
-    expect.equality(has("warn", "nvim-treesitter-textobjects"), true)
+    expect.equality(has("warn", "nvim-treesitter-textobjects is missing; {function} and {class} fail to render"), true)
   end)
 end)

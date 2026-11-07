@@ -4,6 +4,7 @@
 return {
   "minhtri2710/sidekick-ultra.nvim",
   keys = function(plugin, keys)
+    -- `lazy.core.plugin` is lazy.nvim's internal API (not documented); `values` merges `opts` over every spec.
     local opts = require("lazy.core.plugin").values(plugin, "opts", false)
     -- The plugin is not on the runtimepath yet, so keys.lua is loaded by path; it has no top-level `require`.
     local keymaps = dofile(plugin.dir .. "/lua/sidekick-ultra/keys.lua")

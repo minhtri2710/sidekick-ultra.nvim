@@ -4,21 +4,18 @@
 ---@field context table<string, sidekick_ultra.Source>
 ---@field watch boolean reload files the agent edits while a session is attached
 ---@field keys { prefix: string }|false default keymaps under `prefix`, or false for none
----@field herdr { enabled: boolean }
----@field rex { enabled: boolean, bin?: string, server?: string } `bin` and `server` are passed to the rex backend as is
----@field tmux { enabled: boolean, socket?: string } `socket` becomes `-S <socket>` on every tmux call
----@field zellij { enabled: boolean }
+---@field [string] any a backend's section (`backends/init.lua` lists the backends and their options)
 
----A validation failure: `path` is the full key path, `expected` the type or values wanted.
+---A validation failure: `path` is the full key path.
 ---@class sidekick_ultra.ConfigError
 ---@field path string
----@field expected string
 ---@field msg string
 
 local backends = require("sidekick-ultra.backends")
 local check = require("sidekick-ultra.check")
 local keys = require("sidekick-ultra.keys")
 local render = require("sidekick-ultra.context.render")
+local sources = require("sidekick-ultra.context.sources")
 local tools = require("sidekick-ultra.tools")
 
 local M = {}
@@ -44,15 +41,7 @@ end
 ---@return sidekick_ultra.ConfigError
 local function fail(path, expected, value)
   local got = value == nil and "nil" or type(value)
-  return { path = path, expected = expected, msg = ("%s: expected %s, got %s"):format(path, expected, got) }
-end
-
-local function set(...)
-  local ret = {}
-  for _, key in ipairs({ ... }) do
-    ret[key] = true
-  end
-  return ret
+  return { path = path, msg = ("%s: expected %s, got %s"):format(path, expected, got) }
 end
 
 ---@return sidekick_ultra.ConfigError?
@@ -67,11 +56,7 @@ end
 local function from_problem(problem)
   if problem.allowed then
     local names = table.concat(problem.allowed, ", ")
-    return {
-      path = problem.path,
-      expected = "one of: " .. names,
-      msg = ("%s: unknown key (allowed: %s)"):format(problem.path, names),
-    }
+    return { path = problem.path, msg = ("%s: unknown key (allowed: %s)"):format(problem.path, names) }
   end
   return fail(problem.path, problem.expected, problem.got)
 end
@@ -83,9 +68,9 @@ end
 function M.validate(opts)
   opts = opts or {}
   local cfg = defaults()
-  local top = set("tools", "prompts", "context", "watch", "keys")
-  for _, backend in ipairs(backends.all) do
-    top[backend.name] = true
+  local top = {}
+  for section in pairs(cfg) do
+    top[section] = true
   end
   local problem = check.table("", opts, top)
   if problem then
@@ -130,6 +115,10 @@ function M.validate(opts)
     end
   end
   for _, name in ipairs(check.sorted_keys(cfg.context)) do
+    if not sources.can_define(name) then
+      local path = "context." .. name
+      return nil, { path = path, msg = ("%s: not a placeholder name (%s)"):format(path, sources.NAME_RULE) }
+    end
     err = check_type("context." .. name, cfg.context[name], "function")
     if err then
       return nil, err
@@ -139,7 +128,10 @@ function M.validate(opts)
   for _, backend in ipairs(backends.all) do
     local name, value = backend.name, opts[backend.name]
     if value ~= nil then
-      local allowed = set("enabled")
+      local allowed = {}
+      for key in pairs(backends.common) do
+        allowed[key] = true
+      end
       for key in pairs(backend.options) do
         allowed[key] = true
       end
@@ -148,13 +140,13 @@ function M.validate(opts)
         return nil, from_problem(problem)
       end
       for key, field in pairs(value) do
-        local option = backend.options[key]
-        err = check_type(name .. "." .. key, field, option and option.type or "boolean")
+        local option = backend.options[key] or backends.common[key]
+        err = check_type(name .. "." .. key, field, option.type)
         if err then
           return nil, err
         end
-        if option and option.non_empty and field == "" then
-          return nil, fail(name .. "." .. key, "non-empty " .. option.type, field)
+        if option.type == "string" and field == "" then
+          return nil, fail(name .. "." .. key, "non-empty string", field)
         end
         cfg[name][key] = field
       end

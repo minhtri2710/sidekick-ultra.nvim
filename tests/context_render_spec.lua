@@ -293,6 +293,21 @@ describe("context.render", function()
       expect.equality(err.names, { "function" })
     end)
 
+    it("keeps the cause when a textobjects query has no parser", function()
+      vim.treesitter.query.set("zzz", "textobjects", "(x) @function.outer")
+      MiniTest.finally(function()
+        vim.treesitter.query.set("zzz", "textobjects", "")
+      end)
+      open("a.zzz", { "x" })
+      vim.bo.filetype = "zzz"
+      local text, err = run({ msg = "{function}" })
+      expect.equality(text, nil)
+      expect.equality(err.id, "render_failed")
+      expect.equality(err.names, { "function" })
+      expect.equality(err.detail:find("function: ", 1, true), 1)
+      expect.equality(err.detail:find("zzz", 1, true) ~= nil, true)
+    end)
+
     it("counts a throwing source as empty and keeps the detail", function()
       render.setup(nil, {
         boom = function()

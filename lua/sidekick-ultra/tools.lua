@@ -92,8 +92,10 @@ function M.check(name, spec)
     return { path = path .. ".cmd", expected = "non-empty list of strings", got = spec.cmd }
   else
     for i, arg in ipairs(spec.cmd) do
-      if type(arg) ~= "string" or (i == 1 and arg == "") then
+      if type(arg) ~= "string" then
         return { path = ("%s.cmd[%d]"):format(path, i), expected = "string", got = arg }
+      elseif i == 1 and arg == "" then
+        return { path = ("%s.cmd[%d]"):format(path, i), expected = "non-empty string", got = arg }
       end
     end
   end
