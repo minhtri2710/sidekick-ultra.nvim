@@ -183,7 +183,7 @@ One entry per attached session, with `state` set when the backend reports one. T
 
 ```sh
 make check        # stylua --check, selene, and the test suite
-make test-floor   # the suite under Neovim 0.11.2 (NVIM=/tmp/sku-nvim-0.11/nvim-macos-arm64/bin/nvim)
+make test-floor   # the suite under Neovim 0.11.2 (NVIM=.tests/nvim-0.11/nvim-macos-arm64/bin/nvim)
 ```
 
 `scripts/test` clones mini.test at a pinned commit into `.tests/deps`, runs the specs in an isolated HOME with stub `herdr`, `rex`, `tmux` and `zellij` binaries first on `PATH` (a stub that is reached prints `stub reached` and exits 97), and bounds the run at 300 s. The backend contract is documented in `lua/sidekick-ultra/backend.lua`.
