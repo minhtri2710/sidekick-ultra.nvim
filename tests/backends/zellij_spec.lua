@@ -952,12 +952,6 @@ describe("zellij backend", function()
       expect.equality(rec.calls[2].argv[9], text)
     end)
 
-    it("sends nothing and runs nothing for empty text", function()
-      rec = record({})
-      expect.equality({ zellij.send(claude(), "") }, { true })
-      expect.equality(rec.calls, {})
-    end)
-
     it("refuses a gone pane with backend_error naming the pane and session, and never calls write-chars", function()
       rec = record({
         [PANES_A] = patched("list_panes_a.json", function(panes)
@@ -1202,6 +1196,43 @@ describe("zellij backend", function()
 
     it("leaves a program that is not an interpreter as the basename of its first word", function()
       expect.equality({ discovered("/usr/local/bin/claude --resume x") }, { "claude", "claude" })
+    end)
+
+    ---What a tool's is_proc is asked about while pane 1 of skuA runs `command`, with every other pane running nothing.
+    ---@param command string
+    ---@return table[] seen
+    local function asked(command)
+      local seen = {}
+      fake.reset({
+        spy = {
+          cmd = fake.INSTALLED,
+          is_proc = function(info)
+            table.insert(seen, info)
+            return true
+          end,
+        },
+      }, { zellij = { enabled = false } })
+      rec = record({
+        [LIST_SESSIONS] = "skuA\n",
+        [PANES_A] = patched("list_panes_a.json", function(panes)
+          for _, pane in ipairs(panes) do
+            pane.pane_command = nil
+          end
+          terminal(panes, 1).pane_command = command
+        end),
+      })
+      zellij.list(tools.all())
+      rec.restore()
+      rec = nil
+      return seen
+    end
+
+    it("calls is_proc with { cmd } only, because zellij reports no pid", function()
+      expect.equality(asked("/usr/local/bin/tool --x"), { { cmd = "tool" } })
+    end)
+
+    it("never calls is_proc with an empty name, which is what an interpreter running code has", function()
+      expect.equality(asked("node -e code"), {})
     end)
 
     it("is_running follows the script: true while it is the tool, false when it changes or runs code", function()

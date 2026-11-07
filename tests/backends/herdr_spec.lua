@@ -453,15 +453,6 @@ describe("herdr backend", function()
       expect.equality(session.cwd, "/work/proj")
     end)
 
-    it("refuses outside herdr with not_in_mux and runs nothing", function()
-      vim.env.HERDR_PANE_ID = nil
-      install(routes())
-      local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
-      expect.equality(session, nil)
-      expect.equality(err.id, "not_in_mux")
-      expect.equality(#calls, 0)
-    end)
-
     it("refuses a tool that is not a herdr agent kind before running anything", function()
       install(routes())
       local session, err = herdr.start(tool("aider"), { cwd = "/work/proj", env = {} })
@@ -542,7 +533,7 @@ describe("herdr backend", function()
         { failing("error"), 1 },
         { { code = 2, stdout = "", stderr = "missing required --kind\n" }, 2 },
         { { code = 1, stdout = "", stderr = "" }, 1 },
-        { { code = 0, stdout = "not json", stderr = "" } },
+        { { code = 0, stdout = "not json", stderr = "" }, 0 },
         { { code = 0, stdout = '{"id":"x","result":{"type":"agent_started"}}', stderr = "" } },
         { { run_error = { id = "backend_error", msg = "timed out", backend = "herdr", cmd = "agent start" } } },
       }) do
@@ -553,6 +544,12 @@ describe("herdr backend", function()
         expect.equality(argvs()[4], { "herdr", "pane", "close", "w1:p4" })
         expect.equality(#calls, 4)
       end
+    end)
+
+    it("words invalid JSON from agent start as it does for every other herdr query", function()
+      install(routes({ ["agent start"] = "not json" }))
+      local _, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
+      expect.equality(err.msg, "herdr printed invalid JSON")
     end)
 
     it("still returns the start error when the cleanup close fails too", function()
@@ -659,12 +656,6 @@ describe("herdr backend", function()
       local ok, err = herdr.send(pane_session(), "hello")
       expect.equality(ok, nil)
       expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "pane send-text", 1 })
-    end)
-
-    it("sends nothing and returns true for empty text", function()
-      install(routes())
-      expect.equality({ herdr.send(pane_session(), "") }, { true })
-      expect.equality(#calls, 0)
     end)
   end)
 

@@ -24,9 +24,34 @@ describe("exec", function()
     expect.equality(err.msg:find("second", 1, true), nil)
   end)
 
-  it("defaults the subcommand label to argv[2]", function()
-    local _, err = exec.check({ "/bin/sh", "-c", "exit 1" })
-    expect.equality(err.cmd, "-c")
+  it("hands a caller the first stderr line of a failed check as data, and none for a run that failed to run", function()
+    local _, err = exec.check({ "/bin/sh", "-c", "echo first >&2; echo second >&2; exit 4" })
+    expect.equality({ err.code, err.stderr }, { 4, "first" })
+    _, err = exec.check({ "/bin/sh", "-c", "exit 4" })
+    expect.equality({ err.code, err.stderr, err.msg }, { 4, "", "/bin/sh exited with 4" })
+    _, err = exec.check({ "/nonexistent/sku-binary" })
+    expect.equality({ err.code, err.stderr }, { nil, nil })
+  end)
+
+  it("words a failed result under the head a caller gives it", function()
+    local res = { code = 3, stdout = "x", stderr = "boom\nmore\n" }
+    local err = exec.result_error({ "tool" }, res, { cmd = "sub" }, "tool broke")
+    expect.equality(
+      { err.id, err.cmd, err.code, err.stderr, err.msg },
+      { "backend_error", "sub", 3, "boom", "tool broke: boom" }
+    )
+  end)
+
+  it("decodes JSON text, turning null into nil, and says when the text is not JSON", function()
+    expect.equality({ exec.decode('{"a":null,"b":[1]}') }, { true, { b = { 1 } } })
+    expect.equality((exec.decode("null")), true)
+    expect.equality((exec.decode("not json")), false)
+    expect.equality((exec.decode("")), false)
+  end)
+
+  it("puts an environment in front of a command as /usr/bin/env K=V with the keys sorted, or nothing", function()
+    expect.equality(exec.env_prefix({ SKU_B = "2", SKU_A = "a=1" }), { "/usr/bin/env", "SKU_A=a=1", "SKU_B=2" })
+    expect.equality(exec.env_prefix({}), {})
   end)
 
   it("maps a timeout to backend_error", function()

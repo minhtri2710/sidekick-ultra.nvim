@@ -1,10 +1,11 @@
 ---The zellij backend: sessions are terminal panes. zellij 0.45.1 gives no pid for a pane, only `pane_command` (the
 ---running command line), so a pane is matched to a tool by the basename of that command's first word (argv0), or by
----the script's name when that word is a node or python interpreter, and liveness is a CLI call instead of the in-process pid check. The rest of `pane_command` is never kept, logged, or
----put into an error or a notify. The shapes were probed in D8; what is still unverified is listed in
----tests/fixtures/zellij/UNVERIFIED.txt.
+---the script's name when that word is a node or python interpreter, and liveness is a CLI call instead of the
+---in-process pid check. The rest of `pane_command` is never kept, logged, or put into an error or a notify. The shapes
+---were probed in D8; what is still unverified is listed in tests/fixtures/zellij/UNVERIFIED.txt.
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
+local proc = require("sidekick-ultra.proc")
 local procname = require("sidekick-ultra.procname")
 local tools = require("sidekick-ultra.tools")
 
@@ -31,11 +32,7 @@ end
 ---@return string? path
 ---@return string? source
 function M.available()
-  local path = vim.fn.exepath("zellij")
-  if path == "" then
-    return false
-  end
-  return true, path, "PATH"
+  return exec.on_path("zellij")
 end
 
 function M.inside()
@@ -44,13 +41,11 @@ end
 
 ---@param label string
 ---@param msg string
----@param extra? table
 ---@return sidekick_ultra.Error
-local function failure(label, msg, extra)
-  return errors.new("backend_error", msg, vim.tbl_extend("force", extra or {}, { backend = M.name, cmd = label }))
+local function failure(label, msg)
+  return errors.new("backend_error", msg, { backend = M.name, cmd = label })
 end
 
----The full argv for a subcommand. `session` becomes `--session S` before the subcommand.
 ---@param label string subcommand label for errors
 ---@param session? string
 ---@param ... string
@@ -86,7 +81,7 @@ end
 ---python interpreter (see procname). The rest of the line is dropped here and never seen again.
 ---@param pane table
 ---@return string? program
-local function argv0_of(pane)
+local function program_of(pane)
   local line = pane.pane_command
   return type(line) == "string" and procname.program(line) or nil
 end
@@ -111,7 +106,7 @@ local function panes_of(session)
   if vim.trim(res.stdout) == "" then
     return nil, failure("list-panes", "zellij did not answer: list-panes printed nothing"), true
   end
-  local ok, decoded = pcall(vim.json.decode, res.stdout, { luanil = { object = true, array = true } })
+  local ok, decoded = exec.decode(res.stdout)
   if not ok then
     return nil, failure("list-panes", "zellij printed invalid JSON")
   end
@@ -130,20 +125,20 @@ local function panes_of(session)
   return ret
 end
 
----@param err sidekick_ultra.Error
+---@param err sidekick_ultra.ExecError
 ---@return boolean
 local function session_gone(err)
-  return err.code == 1 and err.msg:find("Session '", 1, true) ~= nil and err.msg:find("not found", 1, true) ~= nil
+  return err.code == 1 and err.stderr:find("Session '", 1, true) ~= nil and err.stderr:find("not found", 1, true) ~= nil
 end
 
----Session record for a pane. `argv0` is informational: `is_running` asks the tool's `is_proc`.
+---Session record for a pane. `program` is informational: `is_running` asks the tool's `is_proc`.
 ---@param tool_name string
 ---@param session string zellij session name
 ---@param pane table
----@param argv0 string
+---@param program string
 ---@return sidekick_ultra.Session? session
 ---@return sidekick_ultra.Error? err
-local function session_of(tool_name, session, pane, argv0)
+local function session_of(tool_name, session, pane, program)
   local name = "terminal_" .. pane.id
   if type(pane.pane_cwd) ~= "string" or pane.pane_cwd == "" then
     return nil,
@@ -154,7 +149,7 @@ local function session_of(tool_name, session, pane, argv0)
     backend = M.name,
     tool = tool_name,
     cwd = pane.pane_cwd,
-    proc_name = argv0,
+    proc_name = program,
     zellij_session = session,
     pane = name,
   }
@@ -172,17 +167,10 @@ local function session_names()
     return nil, err
   end
   if res.code ~= 0 then
-    -- No zellij session at all is not a failure worth a toast on every discovery.
     if res.stdout == "" and res.stderr:find("No active zellij sessions", 1, true) then
       return {}
     end
-    local first = vim.split(res.stderr, "\n", { plain = true })[1]
-    return nil,
-      failure(
-        "list-sessions",
-        "zellij exited with " .. res.code .. (first ~= "" and (": " .. first) or ""),
-        { code = res.code }
-      )
+    return nil, exec.result_error(argv, res, opts)
   end
   -- A successful list-sessions with nothing printed is no answer either: "no session" is exit 1 with a message.
   local names = vim.split(vim.trim(res.stdout), "\n", { plain = true, trimempty = true })
@@ -196,8 +184,6 @@ end
 ---sessions; batch them when listing gets slow.
 ---@param configured table<string, sidekick_ultra.Tool>
 function M.list(configured)
-  local names = vim.tbl_keys(configured)
-  table.sort(names)
   local own = M.inside() and vim.env.ZELLIJ_SESSION_NAME or ""
   local sessions, err
   if own ~= "" then
@@ -219,16 +205,14 @@ function M.list(configured)
       panes = {}
     end
     for _, pane in ipairs(panes) do
-      local argv0 = argv0_of(pane)
-      for _, name in ipairs(argv0 and names or {}) do
-        if tools.matches(configured[name], { cmd = argv0 }) then
-          local record, record_err = session_of(name, session, pane, argv0)
-          if not record then
-            return nil, record_err
-          end
-          table.insert(ret, record)
-          break
+      local program = program_of(pane)
+      local name = program and proc.find(configured, nil, { program })
+      if name then
+        local record, record_err = session_of(name, session, pane, program)
+        if not record then
+          return nil, record_err
         end
+        table.insert(ret, record)
       end
     end
   end
@@ -254,8 +238,8 @@ local function alive(session)
   end
   for _, pane in ipairs(panes) do
     if "terminal_" .. pane.id == session.pane then
-      local argv0 = argv0_of(pane)
-      return argv0 ~= nil and tools.matches(tool, { cmd = argv0 })
+      local program = program_of(pane)
+      return program ~= nil and proc.matches(tool, nil, program)
     end
   end
   return false
@@ -295,14 +279,7 @@ function M.start(tool, opts)
     "sku-" .. tool.name,
     "--",
   }
-  if next(opts.env) then
-    table.insert(args, "/usr/bin/env")
-    local keys = vim.tbl_keys(opts.env)
-    table.sort(keys)
-    for _, key in ipairs(keys) do
-      table.insert(args, key .. "=" .. opts.env[key])
-    end
-  end
+  vim.list_extend(args, exec.env_prefix(opts.env))
   vim.list_extend(args, tool.cmd)
   local res, err = run("new-pane", session, unpack(args))
   if not res then
@@ -346,13 +323,13 @@ function M.start(tool, opts)
           break
         end
       end
-      local argv0 = seen and argv0_of(seen)
-      if not argv0 then
+      local program = seen and program_of(seen)
+      if not program then
         return nil,
           failure("new-pane", ("pane %s of session %s is not running; it was left open"):format(name, session))
       end
-      if tools.matches(tool, { cmd = argv0 }) then
-        return session_of(tool.name, session, seen, argv0)
+      if proc.matches(tool, nil, program) then
+        return session_of(tool.name, session, seen, program)
       end
     end
     if M.now() >= deadline then
@@ -375,9 +352,6 @@ end
 ---@param session sidekick_ultra.Session
 ---@param text string
 function M.send(session, text)
-  if text == "" then
-    return true
-  end
   local running, err = alive(session)
   if err then
     return nil, err
