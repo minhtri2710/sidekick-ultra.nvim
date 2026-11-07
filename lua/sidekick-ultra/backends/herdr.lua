@@ -4,6 +4,7 @@
 ---answers, never argv, cmdline or environment.
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
+local proc = require("sidekick-ultra.proc")
 
 local M = { name = "herdr" }
 
@@ -51,57 +52,27 @@ local function failure(cmd, msg)
   return errors.new("backend_error", msg, { backend = M.name, cmd = cmd })
 end
 
----The first stderr line of a failed herdr command and the error code in it. herdr prints an error envelope
----`{id, error = {code, message}}` there and exits 1 (`print_response`, src/cli.rs:745-749). The code is nil when the
----line is not such an envelope.
----@param stderr string
----@return string first
+---The `error.code` of the error envelope `{id, error = {code, message}}` that a failed herdr command prints on
+---stderr and exits 1 (`print_response`, src/cli.rs:745-749). nil when `err` has no stderr line or it is no envelope.
+---@param err sidekick_ultra.ExecError
 ---@return string? code
-local function stderr_error(stderr)
-  local first = vim.split(stderr, "\n", { plain = true })[1]
-  local ok, decoded = pcall(vim.json.decode, first, { luanil = { object = true, array = true } })
+local function envelope_code(err)
+  local ok, decoded = exec.decode(err.stderr or "")
   local code = ok and type(decoded) == "table" and type(decoded.error) == "table" and decoded.error.code
-  return first, type(code) == "string" and code or nil
+  return type(code) == "string" and code or nil
 end
 
----The `backend_error` for a herdr command that exited non-zero, as `exec.check` words it.
----@param cmd string
----@param code integer exit code
----@param first string first stderr line
----@return sidekick_ultra.Error
-local function exit_failure(cmd, code, first)
-  local msg = ("herdr exited with %d"):format(code)
-  return errors.new("backend_error", first ~= "" and (msg .. ": " .. first) or msg, {
-    backend = M.name,
-    cmd = cmd,
-    code = code,
-  })
-end
-
----Run `argv`, decode herdr's `{id, result = {type, ...}}` envelope and return `result[field]`, a table. A failure
----whose error code is `empty_code` returns `{}` and no error.
+---Run `argv`, decode herdr's `{id, result = {type, ...}}` envelope and return `result[field]`, a table.
 ---@param argv string[]
 ---@param cmd string
 ---@param field string
----@param empty_code? string
+---@param timeout_ms? integer
 ---@return table? payload
 ---@return sidekick_ultra.Error? err
-local function query(argv, cmd, field, empty_code)
-  local res, err = exec.run(argv, { backend = M.name, cmd = cmd })
-  if not res then
+local function query(argv, cmd, field, timeout_ms)
+  local decoded, err = exec.json(argv, { backend = M.name, cmd = cmd, timeout_ms = timeout_ms })
+  if err then
     return nil, err
-  end
-  if res.code ~= 0 then
-    local first, code = stderr_error(res.stderr)
-    if empty_code and code == empty_code then
-      return {}
-    end
-    return nil, exit_failure(cmd, res.code, first)
-  end
-  local ok, decoded = pcall(vim.json.decode, res.stdout, { luanil = { object = true, array = true } })
-  if not ok then
-    return nil,
-      errors.new("backend_error", "herdr printed invalid JSON", { backend = M.name, cmd = cmd, code = res.code })
   end
   local payload = type(decoded) == "table" and type(decoded.result) == "table" and decoded.result[field]
   if type(payload) ~= "table" then
@@ -139,13 +110,6 @@ local function foreground_pid(info)
   return type(chosen) == "table" and chosen.pid or nil
 end
 
----The pid of the pane's shell, which lives as long as the pane.
----@param info table a `PaneProcessInfo`
----@return integer? pid
-local function shell_pid(info)
-  return info.shell_pid
-end
-
 ---A pane's process chosen by `pick`, with the name this machine's process table gives that pid: the value
 ---`is_running` compares against later. Returns nothing when `pick` finds no pid or the pid is not visible here.
 ---@param pane_id string
@@ -162,11 +126,11 @@ local function recorded_process(pane_id, pick)
   if type(pid) ~= "number" then
     return nil
   end
-  local ok, proc = pcall(vim.api.nvim_get_proc, pid)
-  if not ok or type(proc) ~= "table" or type(proc.name) ~= "string" then
+  local name = proc.name(pid)
+  if not name then
     return nil
   end
-  return pid, proc.name
+  return pid, name
 end
 
 ---Build a session from a `PaneInfo` or `AgentInfo`. Returns nothing (no session, no error) when the pane has no
@@ -174,7 +138,7 @@ end
 ---@param pane_id string
 ---@param info table
 ---@param tool sidekick_ultra.Tool
----@param pick fun(info: table): integer? foreground_pid for discovery, shell_pid for a pane just started
+---@param pick fun(info: table): integer? the foreground pid for discovery, the shell pid for a pane just started
 ---@param fallback_cwd? string used when herdr reports no cwd
 ---@return sidekick_ultra.Session? session
 ---@return sidekick_ultra.Error? err
@@ -203,11 +167,7 @@ end
 ---@return string? path
 ---@return string? source
 function M.available()
-  local path = vim.fn.exepath("herdr")
-  if path == "" then
-    return false
-  end
-  return true, path, "PATH"
+  return exec.on_path("herdr")
 end
 
 ---@return boolean
@@ -222,8 +182,11 @@ end
 function M.list(tools)
   -- Without --workspace herdr lists the panes of every workspace. With no herdr server running (`server_not_running`,
   -- src/cli/server_not_running.rs) there are no panes, so that is an empty list, not an error.
-  local panes, err = query({ "herdr", "pane", "list" }, "pane list", "panes", "server_not_running")
+  local panes, err = query({ "herdr", "pane", "list" }, "pane list", "panes")
   if not panes then
+    if envelope_code(err) == "server_not_running" then
+      return {}
+    end
     return nil, err
   end
   local sessions = {}
@@ -266,33 +229,18 @@ local function agent_name(tool_name)
   return ("sku-%s-%d"):format(tool_name, n)
 end
 
----Run `herdr agent start`. It prints an error envelope on stderr and exits 1 when the agent does not become ready
----(`print_response`, src/cli.rs:745-749). `agent_not_ready` (src/cli/agent.rs:608-611) means the agent started but is
----blocked during startup, for example on a trust prompt: it is running, so it counts as started with state
----blocked. Any other failure is a `backend_error`.
+---Run `herdr agent start`. It prints an error envelope on stderr and exits 1 when the agent does not become ready.
+---`agent_not_ready` (src/cli/agent.rs:608-611) means the agent started but is blocked during startup, for example on a
+---trust prompt: it is running, so it counts as started with state blocked. Any other failure is a `backend_error`.
 ---@param argv string[]
 ---@return table? agent the started agent's `AgentInfo`, or `{agent_status = "blocked"}` for `agent_not_ready`
 ---@return sidekick_ultra.Error? err
 local function start_agent(argv)
-  local cmd = "agent start"
-  local res, err =
-    exec.run(argv, { backend = M.name, cmd = cmd, timeout_ms = START_TIMEOUT_MS + exec.DEFAULT_TIMEOUT_MS })
-  if not res then
-    return nil, err
-  end
-  if res.code == 0 then
-    local ok, decoded = pcall(vim.json.decode, res.stdout, { luanil = { object = true, array = true } })
-    local agent = ok and type(decoded) == "table" and type(decoded.result) == "table" and decoded.result.agent
-    if type(agent) ~= "table" then
-      return nil, failure(cmd, "herdr agent start: response has no result.agent")
-    end
-    return agent
-  end
-  local first, code = stderr_error(res.stderr)
-  if code == "agent_not_ready" then
+  local agent, err = query(argv, "agent start", "agent", START_TIMEOUT_MS + exec.DEFAULT_TIMEOUT_MS)
+  if not agent and envelope_code(err) == "agent_not_ready" then
     return { agent_status = "blocked" }
   end
-  return nil, exit_failure(cmd, res.code, first)
+  return agent, err
 end
 
 ---@param tool sidekick_ultra.Tool
@@ -300,10 +248,6 @@ end
 ---@return sidekick_ultra.Session? session
 ---@return sidekick_ultra.Error? err
 function M.start(tool, opts)
-  local own = vim.env.HERDR_PANE_ID
-  if own == nil or own == "" then
-    return nil, errors.new("not_in_mux", "nvim does not run inside herdr; cannot start a tool")
-  end
   local executable = vim.tbl_contains(KINDS, tool.name) and (EXECUTABLE[tool.name] or tool.name) or nil
   if not executable then
     return nil, failure("agent start", ("herdr has no agent kind named %s"):format(tool.name))
@@ -321,7 +265,7 @@ function M.start(tool, opts)
     return nil, err
   end
 
-  local split = { "herdr", "pane", "split", "--pane", own, "--direction", "right", "--cwd", opts.cwd }
+  local split = { "herdr", "pane", "split", "--pane", vim.env.HERDR_PANE_ID, "--direction", "right", "--cwd", opts.cwd }
   local keys = vim.tbl_keys(opts.env)
   table.sort(keys)
   for _, key in ipairs(keys) do
@@ -345,7 +289,6 @@ function M.start(tool, opts)
   end
   local agent, start_err = start_agent(start)
   if not agent then
-    -- The only cleanup, for every failure except agent_not_ready: close the pane this call just created.
     local closed, close_err = run({ "herdr", "pane", "close", new_id }, "pane close")
     if not closed then
       start_err.msg = ("%s (closing the new pane %s also failed: %s)"):format(start_err.msg, new_id, close_err.msg)
@@ -355,7 +298,9 @@ function M.start(tool, opts)
 
   -- The agent may not own the foreground yet, so record the pane's shell: it is running at once and as long as the
   -- pane. The next discovery replaces the record with the agent's foreground process.
-  local session, session_err = session_of(new_id, agent, tool, shell_pid, opts.cwd)
+  local session, session_err = session_of(new_id, agent, tool, function(info)
+    return info.shell_pid
+  end, opts.cwd)
   if not session then
     return nil,
       session_err or failure("agent start", ("herdr pane %s has no shell process visible to nvim"):format(new_id))
@@ -394,9 +339,6 @@ end
 ---@return true? ok
 ---@return sidekick_ultra.Error? err
 function M.send(session, text)
-  if text == "" then
-    return true
-  end
   local state, err = read_state(session)
   if not state then
     return nil, err

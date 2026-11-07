@@ -4,13 +4,12 @@
 ---
 ---tmux reports a pane's root process (`pane_pid`), not an agent, so a tool is found by walking that process's tree in
 ---nvim (`nvim_get_proc_children`, `nvim_get_proc`). Only a process whose name is a node or python interpreter costs a
----`ps` call, to read the script it runs (see procname); no other argv and no environment is read. tmux has no agent
+---`ps` call, to read the script it runs (see proc); no other argv and no environment is read. tmux has no agent
 ---status, so `send` has no blocked guard.
 local config = require("sidekick-ultra.config")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
-local procname = require("sidekick-ultra.procname")
-local tools = require("sidekick-ultra.tools")
+local proc = require("sidekick-ultra.proc")
 
 ---@type sidekick_ultra.Backend
 local M = { name = "tmux" }
@@ -25,7 +24,6 @@ local LIST_FORMAT = table.concat({
   "#{pane_id}",
   "#{pane_pid}",
   "#{session_name}",
-  "#{window_id}",
   "#{pane_dead}",
   "#{?pane_current_path,#{pane_current_path},#{pane_start_path}}",
 }, "\t")
@@ -34,20 +32,26 @@ local START_FORMAT = "#{pane_id}\t#{pane_pid}"
 ---Stderr first lines tmux prints when no server answers: ECONNREFUSED and a missing socket.
 local NO_SERVER = { "^no server running", "^error connecting to .* %(No such file or directory%)$" }
 
+---@param err sidekick_ultra.ExecError
+---@return boolean
+local function no_server(err)
+  for _, pattern in ipairs(NO_SERVER) do
+    if (err.stderr or ""):find(pattern) then
+      return true
+    end
+  end
+  return false
+end
+
 local buffer_count = 0
 
 ---@return boolean ok
 ---@return string? path
 ---@return string? source
 function M.available()
-  local path = vim.fn.exepath("tmux")
-  if path == "" then
-    return false
-  end
-  return true, path, "PATH"
+  return exec.on_path("tmux")
 end
 
----True when `a` and `b` name the same file: equal after normalizing, or equal real paths when both resolve.
 ---@param a string
 ---@param b string
 ---@return boolean
@@ -90,12 +94,11 @@ local function argv_of(args)
   return vim.list_extend(argv, args)
 end
 
----Run a tmux command; a failure is a `backend_error` with the first stderr line.
 ---@param label string subcommand label for errors
 ---@param args string[]
 ---@param opts? sidekick_ultra.ExecOpts
 ---@return sidekick_ultra.ExecResult? result
----@return sidekick_ultra.Error? err
+---@return sidekick_ultra.ExecError? err
 local function run(label, args, opts)
   return exec.check(argv_of(args), vim.tbl_extend("force", opts or {}, { backend = M.name, cmd = label }))
 end
@@ -109,22 +112,18 @@ end
 ---@return string? proc_name the process name nvim reads (the interpreter's, for a script)
 ---@return sidekick_ultra.Error? err a failing ps
 local function find_tool(root, configured)
-  local names = vim.tbl_keys(configured)
-  table.sort(names)
   local queue, seen, i = { root }, { [root] = true }, 1
   while queue[i] do
     local pid = queue[i]
     i = i + 1
-    local ok, info = pcall(vim.api.nvim_get_proc, pid)
-    if ok and type(info) == "table" and type(info.name) == "string" then
-      local program, err = procname.of(pid, info.name, M.name)
+    local proc_name = proc.name(pid)
+    if proc_name then
+      local name, err = proc.tool_of(M.name, configured, pid, { proc_name })
       if err then
         return nil, nil, nil, err
       end
-      for _, name in ipairs(program and names or {}) do
-        if tools.matches(configured[name], { pid = pid, cmd = program }) then
-          return name, pid, info.name
-        end
+      if name then
+        return name, pid, proc_name
       end
     end
     local has_kids, kids = pcall(vim.api.nvim_get_proc_children, pid)
@@ -139,31 +138,22 @@ end
 
 ---@param configured table<string, sidekick_ultra.Tool>
 function M.list(configured)
-  local res, err =
-    exec.run(argv_of({ "list-panes", "-a", "-F", LIST_FORMAT }), { backend = M.name, cmd = "list-panes" })
+  local res, err = run("list-panes", { "list-panes", "-a", "-F", LIST_FORMAT })
   if not res then
-    return nil, err
-  end
-  if res.code ~= 0 then
-    local first = vim.split(res.stderr, "\n", { plain = true })[1]
-    -- No server is no sessions, not a failure worth a toast on every discovery.
-    for _, pattern in ipairs(NO_SERVER) do
-      if first:find(pattern) then
-        return {}
-      end
+    if no_server(err) then
+      return {}
     end
-    local msg = ("tmux exited with %d: %s"):format(res.code, first)
-    return nil, errors.new("backend_error", msg, { backend = M.name, cmd = "list-panes", code = res.code })
+    return nil, err
   end
   local ret = {}
   for _, row in ipairs(vim.split(res.stdout, "\n", { plain = true, trimempty = true })) do
     local f = vim.split(row, "\t", { plain = true })
     local root = tonumber(f[2])
-    if #f < 6 or not f[1]:match("^%%%d+$") or not root then
+    if #f < 5 or not f[1]:match("^%%%d+$") or not root then
       return nil, failure("list-panes", "tmux printed an unexpected pane list")
     end
-    local cwd = table.concat(f, "\t", 6)
-    if f[5] ~= "1" then
+    local cwd = table.concat(f, "\t", 5)
+    if f[4] ~= "1" then
       local name, pid, proc_name, find_err = find_tool(root, configured)
       if find_err then
         return nil, find_err
@@ -181,7 +171,6 @@ function M.list(configured)
           proc_name = proc_name,
           pane = f[1],
           tmux_session = f[3],
-          window_id = f[4],
         })
       end
     end
@@ -198,7 +187,7 @@ end
 
 ---Split a new pane to the right of nvim's own pane, without focus, running the tool.
 ---With several command words tmux runs them directly as argv; with one it goes through `sh -c`, so that word is
----shell-escaped. The tool's `env` goes in as `-e K=V`.
+---shell-escaped.
 ---@param tool sidekick_ultra.Tool
 ---@param opts sidekick_ultra.StartOpts
 function M.start(tool, opts)
@@ -231,11 +220,11 @@ function M.start(tool, opts)
     return nil, failure("split-window", ("%s; pane %s was left open"):format(find_err.msg, pane))
   end
   if not pid then
-    local ok, info = pcall(vim.api.nvim_get_proc, root)
-    if not ok or type(info) ~= "table" or type(info.name) ~= "string" then
+    proc_name = proc.name(root)
+    if not proc_name then
       return nil, failure("split-window", ("pane %s is not visible to this nvim; it was left open"):format(pane))
     end
-    pid, proc_name = root, info.name
+    pid = root
   end
   -- No tmux_session: the pane is in nvim's own session, so `focus` never needs switch-client for it.
   return {
@@ -285,9 +274,6 @@ end
 ---@param session sidekick_ultra.Session
 ---@param text string
 function M.send(session, text)
-  if text == "" then
-    return true
-  end
   local left, mode_err = leave_mode(session.pane)
   if not left then
     return nil, mode_err
