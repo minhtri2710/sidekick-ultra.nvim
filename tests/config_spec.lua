@@ -4,11 +4,11 @@ local config = require("sidekick-ultra.config")
 local expect = MiniTest.expect
 
 ---@param opts table
----@return string path
+---@return string path the key path the message starts with
 local function path_of(opts)
   local cfg, err = config.validate(opts)
   expect.equality(cfg, nil)
-  return err.path
+  return err.msg:match("^(.-): ")
 end
 
 describe("config", function()
@@ -141,6 +141,8 @@ describe("config", function()
     expect.equality(path_of(bad), "prompts.x")
     bad.prompts = nil
     expect.equality(path_of(bad), "context.x")
+    expect.equality(path_of({ tools = { claude = true }, prompts = 1 }), "tools.claude")
+    expect.equality(path_of({ prompts = { x = 1 }, context = 1 }), "prompts.x")
   end)
 
   it("rejects a key that is not a string, with its text", function()

@@ -87,7 +87,7 @@ local function start()
 end
 
 ---Stop watching. Safe to call when not watching.
-function M.stop()
+local function stop()
   if not state.active then
     return
   end
@@ -106,7 +106,7 @@ end
 ---watch while a session is attached.
 ---@param enabled boolean
 function M.setup(enabled)
-  M.stop()
+  stop()
   local group = vim.api.nvim_create_augroup(SUBSCRIPTION, { clear = true })
   if not enabled then
     return
@@ -118,7 +118,7 @@ function M.setup(enabled)
       if #registry.attached() > 0 then
         start()
       else
-        M.stop()
+        stop()
       end
     end,
   })

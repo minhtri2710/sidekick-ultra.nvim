@@ -95,7 +95,7 @@ describe("watch", function()
   end)
   after_each(function()
     registry.reset()
-    watch.stop()
+    watch.setup(false)
     vim.cmd("silent! %bwipeout!")
   end)
 

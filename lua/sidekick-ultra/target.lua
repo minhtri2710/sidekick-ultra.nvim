@@ -143,13 +143,13 @@ end
 
 ---@param state sidekick_ultra.State
 ---@return string
-function M.label(state)
+local function label(state)
   local icon = state.attached and "◉" or state.started and "●" or state.installed and "○" or "✗"
-  local label = icon .. " " .. state.name
+  local text = icon .. " " .. state.name
   if state.session then
-    label = ("%s [%s] %s"):format(label, state.session.backend, vim.fn.fnamemodify(state.session.cwd, ":~"))
+    text = ("%s [%s] %s"):format(text, state.session.backend, vim.fn.fnamemodify(state.session.cwd, ":~"))
   end
-  return label
+  return text
 end
 
 ---Pick one of `states` with `vim.ui.select`. With `opts.auto` and exactly one state it is chosen directly; with none
@@ -166,7 +166,7 @@ function M.pick(states, opts, cb)
     cb(states[1])
     return
   end
-  vim.ui.select(states, { prompt = "sidekick-ultra", format_item = M.label }, function(choice)
+  vim.ui.select(states, { prompt = "sidekick-ultra", format_item = label }, function(choice)
     if choice then
       cb(choice)
     end
@@ -205,17 +205,17 @@ local function refreshed(state)
     errors.notify(errors.new("no_match", "tool no longer configured: " .. state.name))
     return nil
   end
-  return vim.tbl_extend("force", state, { tool = tool })
+  return vim.tbl_extend("force", state, { tool = tool, installed = session ~= nil or tools.installed(tool) })
 end
 
----The check every callback runs that acts on a picked attached session without attaching it: `refreshed`, and a
----session that was attached must still be attached, as a `setup` that ran while the picker was open detaches them.
----Reports the reason when it fails.
----@param state sidekick_ultra.State
+---The check every callback runs that acts on a picked attached session without attaching it: `refreshed`, and the
+---session must still be attached, as a `setup` that ran while the picker was open detaches them. Reports the reason
+---when it fails.
+---@param state sidekick_ultra.State an attached session's state
 ---@return sidekick_ultra.State? current nil when `state` is no longer current
 function M.current(state)
   local fresh = refreshed(state)
-  if fresh and state.attached and not is_attached(state.session.id) then
+  if fresh and not is_attached(state.session.id) then
     no_match()
     return nil
   end

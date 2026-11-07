@@ -9,6 +9,9 @@ local sources = require("sidekick-ultra.context.sources")
 
 local M = {}
 
+---A `{...}` placeholder in a text; the capture is the expression between the braces.
+local PLACEHOLDER = "{([^{}]*)}"
+
 ---@type table<string, sidekick_ultra.Prompt>
 M.default_prompts = {
   changes = "Can you review my changes?",
@@ -71,6 +74,13 @@ function M.prompts()
   return prompts
 end
 
+---The first line of a raised error, for a message.
+---@param cause any
+---@return string
+local function first_line(cause)
+  return vim.split(tostring(cause), "\n", { plain = true })[1]
+end
+
 ---The prompt's template text, resolved against the snapshot.
 ---@param name string
 ---@param snap sidekick_ultra.Snapshot
@@ -79,7 +89,7 @@ end
 local function template(name, snap)
   local prompt = prompts[name]
   if prompt == nil then
-    return nil, errors.new("unknown_prompt", ("unknown prompt: %s"):format(name), { names = { name } })
+    return nil, errors.new("unknown_prompt", ("unknown prompt: %s"):format(name))
   elseif type(prompt) == "string" then
     return prompt
   elseif type(prompt) == "table" then
@@ -87,11 +97,8 @@ local function template(name, snap)
   end
   local ok, text = pcall(prompt, snap)
   if not ok or type(text) ~= "string" then
-    return nil,
-      errors.new("render_failed", ("prompt %s did not produce text"):format(name), {
-        names = { name },
-        detail = not ok and tostring(text) or nil,
-      })
+    local msg = ("prompt %s did not produce text"):format(name)
+    return nil, errors.new("render_failed", ok and msg or ("%s: %s"):format(msg, first_line(text)))
   end
   return text
 end
@@ -197,7 +204,7 @@ function M.build(opts, snap)
   end
 
   local exprs, unknown, seen = {}, {}, {}
-  for expr in text:gmatch("{([^{}]*)}") do
+  for expr in text:gmatch(PLACEHOLDER) do
     local names = alternatives(expr)
     if names and not seen[expr] then
       seen[expr] = true
@@ -210,17 +217,17 @@ function M.build(opts, snap)
     end
   end
   if #unknown > 0 then
-    return nil, errors.new("unknown_context", "unknown context: " .. table.concat(unknown, ", "), { names = unknown })
+    return nil, errors.new("unknown_context", "unknown context: " .. table.concat(unknown, ", "))
   end
 
-  local memo, details = {}, {}
+  local memo, causes = {}, {}
   local function value(name)
     if memo[name] == nil then
       local ok, ret = pcall(function()
         return as_segments(active[name](snap))
       end)
       if not ok then
-        table.insert(details, ("%s: %s"):format(name, tostring(ret)))
+        table.insert(causes, ("%s: %s"):format(name, first_line(ret)))
       end
       memo[name] = ok and ret or false
     end
@@ -240,16 +247,16 @@ function M.build(opts, snap)
     end
   end
   if #failed > 0 then
-    return nil,
-      errors.new("render_failed", "nothing to render for: " .. table.concat(failed, ", "), {
-        names = failed,
-        detail = #details > 0 and table.concat(details, "; ") or nil,
-      })
+    local head = "nothing to render for: " .. table.concat(failed, ", ")
+    if #causes > 0 then
+      head = ("%s (%s)"):format(head, table.concat(causes, "; "))
+    end
+    return nil, errors.new("render_failed", head)
   end
 
   local out, pos = {}, 1
   while true do
-    local first, last, expr = text:find("{([^{}]*)}", pos)
+    local first, last, expr = text:find(PLACEHOLDER, pos)
     if not first then
       break
     end

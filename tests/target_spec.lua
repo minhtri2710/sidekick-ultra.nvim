@@ -163,12 +163,16 @@ describe("target", function()
 
     it("labels sessions with tool, backend and shortened cwd, and tools with just the name", function()
       registry.register(fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } }))
-      local started = target.label(target.states({ started = true })[1])
+      local started_state = target.states({ started = true })[1]
+      local tool_state = target.states({ started = false, name = "claude" })[1]
+      target.pick({ started_state, tool_state }, {}, function() end)
+      local format_item = pick.selects[1].opts.format_item
+      local started = format_item(started_state)
       expect.equality(
         started:find("claude [herdr] " .. vim.fn.fnamemodify(vim.fn.getcwd(), ":~"), 1, true) ~= nil,
         true
       )
-      local tool = target.label(target.states({ started = false, name = "claude" })[1])
+      local tool = format_item(tool_state)
       expect.equality(tool:find("claude", 1, true) ~= nil and tool:find("[", 1, true) == nil, true)
     end)
   end)
@@ -255,6 +259,24 @@ describe("target", function()
       registry.register(b)
       expect.equality(target.attach_state(state).id, "herdr:claude1")
       expect.equality({ cap.ids(), #registry.attached() }, { {}, 1 })
+    end)
+
+    it("decides installed and the url from the tool's current spec, not the one listed", function()
+      local b = fake.backend("herdr", { is_inside = true })
+      registry.register(b)
+      local was_installed, was_missing = target.states({ name = "claude" })[1], target.states({ name = "ghost" })[1]
+      fake.reset({
+        claude = { cmd = { "/nonexistent/sku-gone" }, url = "https://example.invalid/claude" },
+        ghost = { cmd = fake.INSTALLED, env = { SKU_SPEC_ENV = "new" } },
+      })
+      registry.register(b)
+      expect.equality(target.attach_state(was_installed), nil)
+      expect.equality(
+        { cap.ids(), pick.opened, #b.of("start") },
+        { { "not_installed" }, { "https://example.invalid/claude" }, 0 }
+      )
+      expect.equality(target.attach_state(was_missing).id, "herdr:ghostnew1")
+      expect.equality(b.of("start")[1][3].env, { SKU_SPEC_ENV = "new" })
     end)
 
     it("reports a failing start", function()
@@ -397,29 +419,6 @@ describe("target", function()
       end
       expect.equality(run({}, { one = true }), {})
       expect.equality({ cap.ids(), registry.attached() }, { { "no_match" }, {} })
-    end)
-  end)
-
-  describe("current", function()
-    it("returns the state with the tool's current spec, not the one listed", function()
-      local state = target.states({ name = "claude", started = false })[1]
-      fake.reset({ claude = { cmd = fake.INSTALLED, location = "escaped" } })
-      expect.equality({ state.tool.location, target.current(state).tool.location }, { "claude", "escaped" })
-    end)
-
-    it("accepts a started session that was not attached", function()
-      registry.register(fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } }))
-      local state = target.states({ started = true })[1]
-      expect.equality({ target.current(state).session.id, cap.ids() }, { "herdr:claude1", {} })
-    end)
-
-    it("refuses a session that was attached and that a setup detached", function()
-      two_attached()
-      local state = target.states({ name = "claude", started = true })[1]
-      local b = registry.backend("herdr")
-      registry.reset()
-      registry.register(b)
-      expect.equality({ target.current(state), cap.ids() }, { nil, { "no_match" } })
     end)
   end)
 end)

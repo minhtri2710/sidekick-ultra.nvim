@@ -55,7 +55,8 @@ local function capture(range)
   return snap
 end
 
----Call a backend method on a session that `target` has just vetted (`target.current`), so its backend is registered.
+---Call a backend method on a session that `target` has just handed to the action (`current` or `attach_state`), so its
+---backend is registered.
 ---@param session sidekick_ultra.Session
 ---@param method "send"|"submit"|"focus"
 ---@return boolean

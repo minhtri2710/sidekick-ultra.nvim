@@ -33,7 +33,7 @@ local errors = require("sidekick-ultra.errors")
 
 ---@class sidekick_ultra.Backend
 ---@field name string unique backend name, also the id prefix. When several backends are inside, `start` picks the one
----   whose `name` equals `TERM_PROGRAM`: herdr, rex and tmux set it to their name, zellij does not set it.
+---   whose `name` equals `TERM_PROGRAM`.
 ---Optional. Called by `setup()` before `available()` with the backend's validated options table (`enabled` and the
 ---options the backend table lists). A backend that resolves its binary does it here, once, and runs that path
 ---afterwards.

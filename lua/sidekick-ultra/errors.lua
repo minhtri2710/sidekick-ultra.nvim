@@ -14,11 +14,10 @@
 ---| "incomplete_command"
 ---| "invalid_args"
 
----A structured refusal or failure. Extra fields carry data for the caller: `names` and `detail` (render errors) and
----`code`.
+---A structured refusal or failure. Extra fields carry data for the caller, as `code` does.
 ---@class sidekick_ultra.Error
 ---@field id sidekick_ultra.ErrorId
----@field msg string human message; tests and callers match on `id`, never on this
+---@field msg string human message; code classifies on `id` and the error's data, never on this
 ---@field code? integer exit code, for `backend_error` and `status_unreadable`
 
 local M = {}
