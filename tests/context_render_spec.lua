@@ -1,7 +1,7 @@
 local expect = MiniTest.expect
+local location = require("sidekick-ultra.location")
 local render = require("sidekick-ultra.context.render")
 local snapshot = require("sidekick-ultra.context.snapshot")
-local tools = require("sidekick-ultra.tools")
 
 describe("context.render", function()
   local dir, orig_cwd
@@ -25,7 +25,7 @@ describe("context.render", function()
     if not segments then
       return nil, err
     end
-    return tools.format(segments, style)
+    return location.format(segments, style)
   end
 
   before_each(function()
@@ -45,6 +45,14 @@ describe("context.render", function()
   end)
 
   describe("prompt library", function()
+    it("has a prompt named after every built-in placeholder", function()
+      for name in pairs(require("sidekick-ultra.context.sources").builtin) do
+        expect.equality(render.prompts()[name] ~= nil, true)
+      end
+      expect.equality(render.prompts().file, "{file}")
+      expect.equality(render.prompts().diagnostics_all ~= "{diagnostics_all}", true)
+    end)
+
     it("has the default prompts", function()
       local names = vim.tbl_keys(render.prompts())
       table.sort(names)
@@ -135,12 +143,29 @@ describe("context.render", function()
   end)
 
   describe("render", function()
-    it("returns an empty string without msg or prompt", function()
-      expect.equality(run({}), "")
+    it("returns nothing, and no error, when the text is empty", function()
+      local snap = snapshot.capture()
+      expect.equality({ render.build({}, snap) }, {})
+      expect.equality({ render.build({ msg = "" }, snap) }, {})
+      render.setup({ blank = "" })
+      expect.equality({ render.build({ prompt = "blank" }, snap) }, {})
     end)
 
     it("keeps a lone newline", function()
       expect.equality(run({ msg = "\n" }), "\n")
+    end)
+
+    it("makes the message {selection} when there is a selection and neither msg nor prompt", function()
+      scratch({ "alpha", "beta" })
+      vim.cmd("normal! ggVj")
+      expect.equality(run({}), "alpha\nbeta")
+    end)
+
+    it("does not default to the selection when there is a msg or a prompt", function()
+      scratch({ "alpha", "beta" })
+      vim.cmd("normal! ggVj")
+      expect.equality(run({ msg = "hi" }), "hi")
+      expect.equality(run({ prompt = "changes" }), "Can you review my changes?")
     end)
 
     it("puts msg lines first, then the prompt", function()
@@ -223,8 +248,8 @@ describe("context.render", function()
       local segments = render.build({ msg = "see {file}" }, snapshot.capture())
       expect.equality(segments[1], "see ")
       expect.equality(type(segments[2]), "table")
-      expect.equality(tools.format(segments, "plain"), "see @" .. snapshot.path(0, snapshot.capture().cwd))
-      expect.equality(tools.format(segments, "claude"):find('@"', 1, true) ~= nil, true)
+      expect.equality(location.format(segments, "plain"), "see @" .. location.path(0, snapshot.capture().cwd))
+      expect.equality(location.format(segments, "claude"):find('@"', 1, true) ~= nil, true)
     end)
 
     it("a user source overrides a built-in one", function()
@@ -367,6 +392,13 @@ describe("context.render", function()
       scratch({ "t = {file}" })
       vim.cmd("normal! ggV")
       expect.equality(run({ msg = "{this}" }), "this\n\nt = {file}")
+    end)
+
+    it("is not a source: it cannot be an alternative", function()
+      open("a.lua", { "one" })
+      local text, err = run({ msg = "{this|file}" })
+      expect.equality(text, nil)
+      expect.equality({ err.id, err.names }, { "unknown_context", { "this" } })
     end)
 
     it("fails naming selection outside a file buffer without a selection", function()

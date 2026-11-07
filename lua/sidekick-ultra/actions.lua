@@ -1,5 +1,6 @@
 ---The user-facing actions: send, prompt, select, focus, close, render. They own every focus decision.
 local errors = require("sidekick-ultra.errors")
+local location = require("sidekick-ultra.location")
 local picker = require("sidekick-ultra.picker")
 local registry = require("sidekick-ultra.registry")
 local render = require("sidekick-ultra.context.render")
@@ -69,29 +70,16 @@ local function call(session, method, ...)
   return true
 end
 
----Render once into segments; each target's location style is applied when the text is written out.
----@param opts sidekick_ultra.ActionOpts
----@param snap sidekick_ultra.Snapshot
----@return (string|sidekick_ultra.Location)[]? segments
----@return sidekick_ultra.Error? err
-local function compose(opts, snap)
-  local msg = opts.msg
-  if not msg and not opts.prompt and snap.selection then
-    msg = "{selection}"
-  end
-  return render.build({ msg = msg, prompt = opts.prompt }, snap)
-end
-
 ---Write the segments to the session in its tool's location style: [focus-in, wait], text and LF, [Enter]. Stops at
 ---the first refusal, which is notified.
 ---@param session sidekick_ultra.Session
+---@param tool sidekick_ultra.Tool the session's tool
 ---@param segments (string|sidekick_ultra.Location)[]
 ---@param submit? boolean
 ---@return boolean delivered every step was accepted
-local function deliver(session, segments, submit)
-  local tool = tools.get(session.tool)
-  local text = tools.format(segments, tool and tool.location)
-  if tool and tool.mux_focus then
+local function deliver(session, tool, segments, submit)
+  local text = location.format(segments, tool.location)
+  if tool.mux_focus then
     if not call(session, "send", FOCUS_IN) then
       return false
     end
@@ -103,28 +91,14 @@ local function deliver(session, segments, submit)
   return not submit or call(session, "submit")
 end
 
----Warn and return false when the render has no text to send.
----@param segments (string|sidekick_ultra.Location)[]
----@return boolean
-local function has_text(segments)
-  if tools.format(segments) == "" then
-    errors.notify(errors.new("nothing_to_send", "nothing to send"))
-    return false
-  end
-  return true
-end
-
 ---Render a message or prompt against the current context and send it to the target session. A tool this starts is
 ---focused before the text, and `focus = true` focuses the session again after a delivery.
 ---@param opts? sidekick_ultra.ActionOpts
 function M.send(opts)
   opts = opts or {}
-  local segments, err = compose(opts, capture())
+  local segments, err = render.build(opts, capture())
   if not segments then
-    errors.notify(err)
-    return
-  end
-  if not has_text(segments) then
+    errors.notify(err or errors.new("nothing_to_send", "nothing to send"))
     return
   end
   target.with_target({ filter = filter_of(opts), attach = true }, function(sessions, started)
@@ -133,7 +107,7 @@ function M.send(opts)
     if started and on_start then
       call(session, "focus")
     end
-    if deliver(session, segments, opts.submit) and always then
+    if deliver(session, tools.get(session.tool), segments, opts.submit) and always then
       call(session, "focus")
     end
   end)
@@ -148,7 +122,7 @@ function M.prompt(opts)
   opts = opts or {}
   local snap = capture()
   if opts.msg then
-    local _, err = compose({ msg = opts.msg }, snap)
+    local _, err = render.build({ msg = opts.msg }, snap)
     if err then
       errors.notify(err)
       return
@@ -158,7 +132,7 @@ function M.prompt(opts)
   table.sort(names)
   local renders, listed = {}, {}
   for _, name in ipairs(names) do
-    local segments = compose(vim.tbl_extend("force", opts, { prompt = name }), snap)
+    local segments = render.build({ msg = opts.msg, prompt = name }, snap)
     if segments then
       renders[name] = segments
       table.insert(listed, name)
@@ -172,12 +146,10 @@ function M.prompt(opts)
     local session = sessions[1]
     local tool = tools.get(session.tool)
     local items = vim.tbl_map(function(name)
-      return { name = name, preview = { text = tools.format(renders[name], tool and tool.location) } }
+      return { name = name, preview = { text = location.format(renders[name], tool.location) } }
     end, listed)
     picker.select(items, function(item)
-      local delivered = item ~= nil
-        and has_text(renders[item.name])
-        and deliver(session, renders[item.name], opts.submit)
+      local delivered = item ~= nil and deliver(session, tool, renders[item.name], opts.submit)
       local always, on_start = focus_of(opts)
       if (delivered and always) or (started and on_start) then
         call(session, "focus")
@@ -229,12 +201,12 @@ end
 ---@return string? text
 ---@return sidekick_ultra.Error? err
 function M.render(opts)
-  local segments, err = compose(opts or {}, capture())
-  if not segments then
+  local segments, err = render.build(opts or {}, capture())
+  if err then
     errors.notify(err)
     return nil, err
   end
-  return tools.format(segments), nil
+  return location.format(segments or {}), nil
 end
 
 return M

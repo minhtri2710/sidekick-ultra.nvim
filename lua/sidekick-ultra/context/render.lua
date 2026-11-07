@@ -1,6 +1,7 @@
----Template rendering: messages and prompts with `{name}` / `{a|b|c}` placeholders. Pure over a snapshot.
+---Decides what is sent: renders messages and prompts with `{name}` / `{a|b|c}` placeholders against a snapshot,
+---using the sources in `context/sources.lua`. The prompts are checked, stored and shown here too.
 local errors = require("sidekick-ultra.errors")
-local snapshot = require("sidekick-ultra.context.snapshot")
+local location = require("sidekick-ultra.location")
 local sources = require("sidekick-ultra.context.sources")
 
 ---@alias sidekick_ultra.Prompt string|{msg: string}|fun(snap: sidekick_ultra.Snapshot): string
@@ -19,8 +20,32 @@ M.default_prompts = {
   review = "Can you review {file} for any issues or improvements?",
   tests = "Can you write tests for {this}?",
 }
-for _, name in ipairs({ "buffers", "file", "line", "position", "quickfix", "selection", "function", "class" }) do
-  M.default_prompts[name] = "{" .. name .. "}"
+for name in pairs(sources.builtin) do
+  M.default_prompts[name] = M.default_prompts[name] or "{" .. name .. "}"
+end
+
+---The first problem in a `prompts` entry, or nil: `path` is the full key path, `expected` what was wanted, `got` the
+---offending value.
+---@param name string
+---@param prompt any
+---@return sidekick_ultra.Problem?
+function M.check(name, prompt)
+  local path = "prompts." .. name
+  if prompt == false or type(prompt) == "string" or type(prompt) == "function" then
+    return
+  end
+  local expected = "string, function, false or table with `msg`"
+  if type(prompt) ~= "table" then
+    return { path = path, expected = expected, got = prompt }
+  end
+  for key in pairs(prompt) do
+    if key ~= "msg" then
+      return { path = path, expected = expected, got = prompt }
+    end
+  end
+  if type(prompt.msg) ~= "string" then
+    return { path = path .. ".msg", expected = "string", got = prompt.msg }
+  end
 end
 
 ---@type table<string, sidekick_ultra.Prompt>
@@ -96,25 +121,16 @@ local function alternatives(expr)
   return names
 end
 
----Whether `segment` is a location record `tools.location` can write: a string path, a known kind, and the integer
----rows and columns that kind needs (`r1` for line, `r1` and `c1` for position); `r2` and `c2` are optional.
----@param segment table
+---Whether segments write no text: no location record, and strings that join to "". Two empty lines are "\n", a value.
+---@param segments (string|sidekick_ultra.Location)[]
 ---@return boolean
-local function is_location(segment)
-  local function int(v)
-    return type(v) == "number" and v % 1 == 0
-  end
-  local kind = segment.kind
-  if type(segment.path) ~= "string" or (kind ~= "file" and kind ~= "line" and kind ~= "position") then
-    return false
-  end
-  for _, field in ipairs({ "r1", "c1", "r2", "c2" }) do
-    local needed = (field == "r1" and kind ~= "file") or (field == "c1" and kind == "position")
-    if segment[field] == nil and needed or segment[field] ~= nil and not int(segment[field]) then
+local function is_empty(segments)
+  for _, segment in ipairs(segments) do
+    if type(segment) == "table" then
       return false
     end
   end
-  return true
+  return table.concat(segments) == ""
 end
 
 ---A source's value as flat output segments (lines joined by "\n"), or nil when it yields nothing. Raises when a
@@ -138,7 +154,7 @@ local function as_segments(value)
     elseif type(line) == "table" and vim.islist(line) then
       for _, segment in ipairs(line) do
         assert(
-          type(segment) == "string" or (type(segment) == "table" and is_location(segment)),
+          type(segment) == "string" or (type(segment) == "table" and location.is_location(segment)),
           "line segment must be a string or a location record"
         )
         table.insert(segments, segment)
@@ -147,27 +163,26 @@ local function as_segments(value)
       error("line must be a string or a list of strings and location records")
     end
   end
-  for _, segment in ipairs(segments) do
-    if type(segment) == "table" then
-      return segments
-    end
-  end
-  -- Text only: empty when the lines join to "" (two empty lines are "\n", a value).
-  return table.concat(segments) ~= "" and segments or nil
+  return not is_empty(segments) and segments or nil
 end
 
 ---Render a message and/or a named prompt against a snapshot into output segments: strings and location
----records, written out by `tools.format` in the target tool's style. Every placeholder is evaluated once, whatever
----the style. Empty when there is nothing to render. Placeholder values are inserted as-is: braces inside them are
----not expanded again.
+---records, written out by `location.format` in the target tool's style. With neither and a selection, the message
+---is `{selection}`. Every placeholder is evaluated once, whatever the style. Placeholder values are inserted as-is:
+---braces inside them are not expanded again.
+---Returns nothing, with no error, when the text is empty: there is nothing to send.
 ---@param opts {msg?: string, prompt?: string}
 ---@param snap sidekick_ultra.Snapshot
 ---@return (string|sidekick_ultra.Location)[]? segments
 ---@return sidekick_ultra.Error? err
 function M.build(opts, snap)
   local parts = {}
-  if opts.msg then
-    table.insert(parts, opts.msg)
+  local msg = opts.msg
+  if not msg and not opts.prompt and snap.selection then
+    msg = "{selection}"
+  end
+  if msg then
+    table.insert(parts, msg)
   end
   if opts.prompt then
     local text, err = M.template(opts.prompt, snap)
@@ -179,11 +194,8 @@ function M.build(opts, snap)
   local text = table.concat(parts, "\n")
 
   if text:find("{this}", 1, true) then
-    if snapshot.is_file(snap.buf) then
-      text = text:gsub("{this}", "{position}")
-    else
-      text = text:gsub("{this}", "this") .. "\n\n{selection}"
-    end
+    local replacement, tail = sources.this(snap)
+    text = text:gsub("{this}", replacement) .. (tail or "")
   end
 
   local exprs, unknown, seen = {}, {}, {}
@@ -191,7 +203,7 @@ function M.build(opts, snap)
     local names = alternatives(expr)
     if names and not seen[expr] then
       seen[expr] = true
-      table.insert(exprs, expr)
+      table.insert(exprs, { expr = expr, names = names })
       for _, name in ipairs(names) do
         if not active[name] and not vim.tbl_contains(unknown, name) then
           table.insert(unknown, name)
@@ -218,15 +230,15 @@ function M.build(opts, snap)
   end
 
   local resolved, failed = {}, {}
-  for _, expr in ipairs(exprs) do
-    for _, name in ipairs(alternatives(expr) or {}) do
-      resolved[expr] = value(name)
-      if resolved[expr] then
+  for _, e in ipairs(exprs) do
+    for _, name in ipairs(e.names) do
+      resolved[e.expr] = value(name)
+      if resolved[e.expr] then
         break
       end
     end
-    if not resolved[expr] then
-      table.insert(failed, expr)
+    if not resolved[e.expr] then
+      table.insert(failed, e.expr)
     end
   end
   if #failed > 0 then
@@ -252,7 +264,7 @@ function M.build(opts, snap)
     pos = last + 1
   end
   table.insert(out, text:sub(pos))
-  return out
+  return not is_empty(out) and out or nil
 end
 
 return M

@@ -112,7 +112,9 @@ function M.reset(tools, extra)
   for _, name in ipairs(require("sidekick-ultra.backends").names()) do
     cfg[name] = { enabled = false }
   end
-  for _, name in ipairs(require("sidekick-ultra.tools").builtin_names()) do
+  local registered = require("sidekick-ultra.tools")
+  registered.setup()
+  for name in pairs(registered.all()) do
     cfg.tools[name] = false
   end
   for name, spec in pairs(tools or {}) do

@@ -1,17 +1,7 @@
----@class sidekick_ultra.ToolConfig
----@field cmd? string[] non-empty; required for a tool that is not built in
----@field env? table<string, string>
----@field url? string
----@field is_proc? string|fun(proc: sidekick_ultra.ProcInfo): boolean Vim regex or predicate
----@field mux_focus? boolean
----@field location? sidekick_ultra.LocationStyle
-
----@alias sidekick_ultra.PromptConfig string|{ msg: string }|fun(snap: sidekick_ultra.Snapshot): string
-
 ---@class sidekick_ultra.Config
 ---@field tools table<string, sidekick_ultra.ToolConfig|false>
----@field prompts table<string, sidekick_ultra.PromptConfig|false>
----@field context table<string, fun(snap: sidekick_ultra.Snapshot): string|string[]|nil>
+---@field prompts table<string, sidekick_ultra.Prompt|false>
+---@field context table<string, sidekick_ultra.Source>
 ---@field watch boolean reload files the agent edits while a session is attached
 ---@field keys { prefix: string }|false default keymaps under `prefix`, or false for none
 ---@field herdr { enabled: boolean }
@@ -25,8 +15,19 @@
 ---@field expected string
 ---@field msg string
 
+---A problem found by a module that owns part of the schema (`keys`, `tools`, `render`): `path` is the full key
+---path. A key that is not allowed has `allowed` (the allowed keys); any other problem has `expected` and the
+---offending `got`.
+---@class sidekick_ultra.Problem
+---@field path string
+---@field expected? string
+---@field got? any
+---@field allowed? string[]
+
 local backends = require("sidekick-ultra.backends")
 local keys = require("sidekick-ultra.keys")
+local render = require("sidekick-ultra.context.render")
+local tools = require("sidekick-ultra.tools")
 
 local M = {}
 
@@ -44,8 +45,6 @@ local function defaults()
   end
   return cfg
 end
-
-local LOCATIONS = { "plain", "claude", "escaped" }
 
 ---@param path string
 ---@param expected string
@@ -105,70 +104,13 @@ local function check_type(path, value, kind)
   end
 end
 
----@return sidekick_ultra.ConfigError?
-local function check_tool(name, tool, is_builtin)
-  local path = "tools." .. name
-  if tool == false then
-    return
+---@param problem sidekick_ultra.Problem
+---@return sidekick_ultra.ConfigError
+local function from_problem(problem)
+  if problem.allowed then
+    return unknown_key(problem.path, problem.allowed)
   end
-  local err = check_table(path, tool, set("cmd", "env", "url", "is_proc", "mux_focus", "location"))
-  if err then
-    return err
-  end
-  if tool.cmd == nil then
-    if not is_builtin then
-      return fail(path .. ".cmd", "non-empty list of strings (required for a new tool)", nil)
-    end
-  elseif not vim.islist(tool.cmd) or #tool.cmd == 0 then
-    return fail(path .. ".cmd", "non-empty list of strings", tool.cmd)
-  else
-    for i, arg in ipairs(tool.cmd) do
-      if type(arg) ~= "string" or (i == 1 and arg == "") then
-        return fail(("%s.cmd[%d]"):format(path, i), "string", arg)
-      end
-    end
-  end
-  if tool.env ~= nil then
-    err = check_table(path .. ".env", tool.env)
-    if err then
-      return err
-    end
-    for key, value in pairs(tool.env) do
-      if type(value) ~= "string" then
-        return fail(path .. ".env." .. key, "string", value)
-      end
-    end
-  end
-  if tool.url ~= nil and type(tool.url) ~= "string" then
-    return fail(path .. ".url", "string", tool.url)
-  end
-  if tool.mux_focus ~= nil and type(tool.mux_focus) ~= "boolean" then
-    return fail(path .. ".mux_focus", "boolean", tool.mux_focus)
-  end
-  if tool.location ~= nil and not vim.tbl_contains(LOCATIONS, tool.location) then
-    return fail(path .. ".location", "one of: " .. table.concat(LOCATIONS, ", "), tool.location)
-  end
-  local is_proc = tool.is_proc
-  if type(is_proc) == "string" then
-    if not pcall(vim.regex, is_proc) then
-      return fail(path .. ".is_proc", "valid Vim regex", is_proc)
-    end
-  elseif is_proc ~= nil and type(is_proc) ~= "function" then
-    return fail(path .. ".is_proc", "Vim regex string or function", is_proc)
-  end
-end
-
----@return sidekick_ultra.ConfigError?
-local function check_prompt(name, prompt)
-  local path = "prompts." .. name
-  if prompt == false or type(prompt) == "string" or type(prompt) == "function" then
-    return
-  end
-  local err = check_table(path, prompt, set("msg"))
-  if err then
-    return fail(path, "string, function, false or table with `msg`", prompt)
-  end
-  return check_type(path .. ".msg", prompt.msg, "string")
+  return fail(problem.path, problem.expected, problem.got)
 end
 
 ---Validate user options against the schema and merge them over the defaults.
@@ -197,10 +139,7 @@ function M.validate(opts)
 
   local resolved, problem = keys.resolve(opts.keys)
   if not resolved and problem then
-    if problem.allowed then
-      return nil, unknown_key(problem.path, problem.allowed)
-    end
-    return nil, fail(problem.path, problem.expected, problem.got)
+    return nil, from_problem(problem)
   end
   cfg.keys = resolved
 
@@ -214,17 +153,16 @@ function M.validate(opts)
       cfg[section] = vim.deepcopy(value)
     end
   end
-  local builtin = set(unpack(require("sidekick-ultra.tools").builtin_names()))
   for _, name in ipairs(sorted_keys(cfg.tools)) do
-    err = check_tool(name, cfg.tools[name], builtin[name])
-    if err then
-      return nil, err
+    problem = tools.check(name, cfg.tools[name])
+    if problem then
+      return nil, from_problem(problem)
     end
   end
   for _, name in ipairs(sorted_keys(cfg.prompts)) do
-    err = check_prompt(name, cfg.prompts[name])
-    if err then
-      return nil, err
+    problem = render.check(name, cfg.prompts[name])
+    if problem then
+      return nil, from_problem(problem)
     end
   end
   for _, name in ipairs(sorted_keys(cfg.context)) do
