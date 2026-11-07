@@ -34,8 +34,8 @@ or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the 
   herdr = { enabled = true },
   rex = {
     enabled = true,
-    bin = nil,    -- path to the rex binary; default: rex on PATH, then the Rex Beta app bundle
-    server = nil, -- passed to rex as -S <server>
+    bin = nil,    -- non-empty path to the rex binary; default: rex on PATH, then the Rex Beta app bundle
+    server = nil, -- non-empty; passed to rex as -S <server>
   },
   tmux = {
     enabled = true,
@@ -53,7 +53,8 @@ or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the 
   prompts = {
     refactor = "Refactor {this} for readability",
   },
-  -- Extra `{placeholders}`: a function of the snapshot returning a string, a list of strings, or nil.
+  -- Extra `{placeholders}`, named with letters, digits and underscores (not `this`): a function of the snapshot
+  -- returning a string, a list of strings, or nil.
   context = {
     branch = function(snap)
       return vim.trim(vim.fn.system({ "git", "-C", snap.cwd, "branch", "--show-current" }))
@@ -177,7 +178,7 @@ One entry per attached session, with `state` set when the backend reports one. T
 
 ## Health
 
-`:checkhealth sidekick-ultra` reports the Neovim version, each backend (enabled, binary path and where it came from, server settings by variable name only), whether Neovim runs inside it, for tmux and zellij also their version (`tmux -V`, `zellij --version`), whether `rex.server` and `tmux.socket` are set, whether start is available (the backend `start` would use, or why there is none), whether the textobjects queries are available, and which tools are installed.
+`:checkhealth sidekick-ultra` checks the Neovim version against 0.11.2, and reports each backend (enabled, binary path and where it came from, server settings by variable name only), whether Neovim runs inside it, for tmux and zellij also their version (`tmux -V`, `zellij --version`), whether `rex.server` and `tmux.socket` are set, whether start is available (the backend `start` would use, or why there is none), whether the textobjects queries are available, and which tools are installed.
 
 ## Development
 

@@ -13,6 +13,23 @@ local M = {}
 ---@type table<string, sidekick_ultra.Source>
 M.builtin = {}
 
+M.NAME_RULE = "letters, digits and underscores, and not `this`"
+
+---Whether `name` can be written in a placeholder: letters, digits and underscores.
+---@param name string
+---@return boolean
+function M.is_name(name)
+  return name:match("^[%w_]+$") ~= nil
+end
+
+---Whether a `context` source can be called `name`: a placeholder name other than `this`, which render rewrites
+---before it looks any source up.
+---@param name string
+---@return boolean
+function M.can_define(name)
+  return M.is_name(name) and name ~= "this"
+end
+
 ---@param buf integer
 ---@param row integer
 ---@param col integer
@@ -29,18 +46,20 @@ local function located(snap, kind)
   if not location.is_file(snap.buf) then
     return
   end
-  local loc = { path = location.path(snap.buf, snap.cwd), kind = kind }
+  local path = location.path(snap.buf, snap.cwd)
   local sel = snap.selection
-  if sel then
-    loc.r1, loc.r2 = sel.from[1], sel.to[1]
-    if kind == "position" and sel.kind == "line" then
-      loc.kind = "line"
-    elseif kind == "position" then
-      loc.c1, loc.c2 = clamp_col(snap.buf, sel.from[1], sel.from[2]), clamp_col(snap.buf, sel.to[1], sel.to[2])
-    end
+  local from = sel and sel.from or snap.cursor
+  local to = sel and sel.to or snap.cursor
+  local loc
+  if kind == "file" then
+    loc = location.file(path)
+  elseif kind == "line" or (sel and sel.kind == "line") then
+    loc = location.line(path, from[1], to[1])
+  elseif sel then
+    local c1, c2 = clamp_col(snap.buf, from[1], from[2]), clamp_col(snap.buf, to[1], to[2])
+    loc = location.position(path, from[1], c1, to[1], c2)
   else
-    loc.r1 = snap.cursor[1]
-    loc.c1 = snap.cursor[2]
+    loc = location.position(path, from[1], from[2])
   end
   return { { loc } }
 end
@@ -73,8 +92,7 @@ function M.builtin.buffers(snap)
   local ret = {}
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if location.is_file(buf) then
-      local loc = { path = location.path(buf, snap.cwd), kind = "file" }
-      table.insert(ret, { "- ", loc })
+      table.insert(ret, { "- ", location.file(location.path(buf, snap.cwd)) })
     end
   end
   return #ret > 0 and ret or nil
@@ -224,7 +242,7 @@ function M.builtin.quickfix(snap)
   end
   for _, item in ipairs(qf.items) do
     local path = item.bufnr > 0 and location.path(item.bufnr, snap.cwd) or location.NO_NAME
-    local loc = { path = path, kind = "file" }
+    local loc = location.file(path)
     if item.lnum > 0 then
       local has_end = item.end_lnum > 0
       loc = location.position(
@@ -273,43 +291,44 @@ local function describe(word, name, loc)
   return { name and (word .. " " .. name .. " ") or (word .. " "), loc }
 end
 
----The smallest `<word>.outer` textobject around the cursor (or selection start). Needs a "textobjects" query for
----the buffer's language, which comes from nvim-treesitter-textobjects; without one this yields nothing.
+---The sources that need a treesitter query of this name for the buffer's language, which comes from
+---nvim-treesitter-textobjects; without one they yield nothing.
+M.textobjects = { query = "textobjects", sources = { "function", "class" } }
+
+---The smallest `<word>.outer` textobject around the cursor (or selection start). A query without its parser raises.
 ---@param word "function"|"class"
 ---@return sidekick_ultra.Source
 local function textobject(word)
   return function(snap)
-    local ok, node = pcall(function()
-      local lang = vim.treesitter.language.get_lang(vim.bo[snap.buf].filetype)
-      local query = lang and vim.treesitter.query.get(lang, "textobjects")
-      if not query then
-        return
+    local lang = vim.treesitter.language.get_lang(vim.bo[snap.buf].filetype)
+    local query = lang and vim.treesitter.query.get(lang, M.textobjects.query)
+    if not query then
+      return
+    end
+    local pos = snap.selection and snap.selection.from or snap.cursor
+    local row, col = pos[1] - 1, pos[2] - 1
+    local root = vim.treesitter.get_parser(snap.buf, lang):parse()[1]:root()
+    local node
+    for id, found in query:iter_captures(root, snap.buf, row, row + 1) do
+      if query.captures[id] == word .. ".outer" and vim.treesitter.is_in_node_range(found, row, col) then
+        -- Captures arrive outer first, so a later containing node is the inner one.
+        node = found
       end
-      local pos = snap.selection and snap.selection.from or snap.cursor
-      local row, col = pos[1] - 1, pos[2] - 1
-      local root = vim.treesitter.get_parser(snap.buf, lang):parse()[1]:root()
-      local best
-      for id, found in query:iter_captures(root, snap.buf, row, row + 1) do
-        if query.captures[id] == word .. ".outer" and vim.treesitter.is_in_node_range(found, row, col) then
-          -- Captures arrive outer first, so a later containing node is the inner one.
-          best = found
-        end
-      end
-      return best
-    end)
-    if not ok or not node then
+    end
+    if not node then
       return
     end
     local srow, scol = node:range()
     local name = node_name(node, function(n)
       return vim.treesitter.get_node_text(n, snap.buf)
     end)
-    local loc = { path = location.path(snap.buf, snap.cwd), kind = "position", r1 = srow + 1, c1 = scol + 1 }
+    local loc = location.position(location.path(snap.buf, snap.cwd), srow + 1, scol + 1)
     return { describe(word, name, loc) }
   end
 end
 
-M.builtin["function"] = textobject("function")
-M.builtin.class = textobject("class")
+for _, word in ipairs(M.textobjects.sources) do
+  M.builtin[word] = textobject(word)
+end
 
 return M

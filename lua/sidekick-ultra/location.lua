@@ -42,6 +42,22 @@ function M.is_location(segment)
   return true
 end
 
+---A file record: the path alone.
+---@param path string
+---@return sidekick_ultra.Location
+function M.file(path)
+  return { path = path, kind = "file" }
+end
+
+---A line record from a 1-based first row and an optional last row, which defaults to the first.
+---@param path string
+---@param r1 integer
+---@param r2? integer
+---@return sidekick_ultra.Location
+function M.line(path, r1, r2)
+  return { path = path, kind = "line", r1 = r1, r2 = r2 or r1 }
+end
+
 ---A position record from 1-based start and optional end. The end defaults to the start; on one row it is never
 ---before the start column, and on a later row it is at least column 1.
 ---@param path string

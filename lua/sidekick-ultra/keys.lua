@@ -3,7 +3,7 @@
 ---top-level `require`, so `lazy.lua` can `dofile` it before the plugin is on the runtimepath.
 local M = {}
 
-M.DEFAULT_PREFIX = "<leader>a"
+local DEFAULT_PREFIX = "<leader>a"
 
 ---Check a `keys` option and resolve it: nil is the default prefix, false is no keymaps, `{ prefix? = string }` is a
 ---prefix. A key besides `prefix` is the first problem found, in key order, then a `prefix` that is not a non-empty
@@ -13,7 +13,7 @@ M.DEFAULT_PREFIX = "<leader>a"
 ---@return sidekick_ultra.Problem? problem
 function M.resolve(value)
   if value == nil then
-    return { prefix = M.DEFAULT_PREFIX }
+    return { prefix = DEFAULT_PREFIX }
   elseif value == false then
     return false
   elseif type(value) ~= "table" then
@@ -35,7 +35,7 @@ function M.resolve(value)
   if prefix ~= nil and (type(prefix) ~= "string" or prefix == "") then
     return nil, { path = "keys.prefix", expected = "non-empty string", got = prefix }
   end
-  return { prefix = prefix or M.DEFAULT_PREFIX }
+  return { prefix = prefix or DEFAULT_PREFIX }
 end
 
 local function api()
