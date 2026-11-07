@@ -72,7 +72,6 @@ function M.position(path, r1, c1, r2, c2)
   return { path = path, kind = "position", r1 = r1, c1 = c1, r2 = r2, c2 = c2 }
 end
 
----A file buffer is listed, has an empty or help buftype, and is named after a readable file.
 ---@param buf integer
 ---@return boolean
 function M.is_file(buf)

@@ -55,16 +55,12 @@ local function capture(range)
   return snap
 end
 
+---Call a backend method on a session that `target` has just vetted (`target.current`), so its backend is registered.
 ---@param session sidekick_ultra.Session
 ---@param method "send"|"submit"|"focus"
 ---@return boolean
 local function call(session, method, ...)
-  local backend = registry.backend(session.backend)
-  if not backend then
-    errors.notify(errors.new("backend_error", "backend not registered: " .. session.backend))
-    return false
-  end
-  local ok, err = backend[method](session, ...)
+  local ok, err = registry.backend(session.backend)[method](session, ...)
   if not ok then
     errors.notify(err)
     return false
@@ -102,7 +98,7 @@ function M.send(opts, range)
     errors.notify(err or errors.new("nothing_to_send", "nothing to send"))
     return
   end
-  target.with_target({ filter = filter_of(opts), attach = true }, function(state, started)
+  target.with_target(filter_of(opts), function(state, started)
     local always, on_start = focus_of(opts)
     if started and on_start then
       call(state.session, "focus")
@@ -143,7 +139,7 @@ function M.prompt(opts, range)
     picker.select({}, function() end)
     return
   end
-  target.with_target({ filter = filter_of(opts), attach = true }, function(state, started)
+  target.with_target(filter_of(opts), function(state, started)
     local items = vim.tbl_map(function(name)
       return {
         name = name,
@@ -152,10 +148,14 @@ function M.prompt(opts, range)
       }
     end, listed)
     picker.select(items, function(item)
-      local delivered = item ~= nil and deliver(state, renders[item.name], opts.submit)
+      local current = target.current(state)
+      if not current then
+        return
+      end
+      local delivered = item ~= nil and deliver(current, renders[item.name], opts.submit)
       local always, on_start = focus_of(opts)
       if (delivered and always) or (started and on_start) then
-        call(state.session, "focus")
+        call(current.session, "focus")
       end
     end)
   end)
@@ -179,7 +179,7 @@ end
 ---@param opts? sidekick_ultra.ActionOpts
 function M.focus(opts)
   opts = opts or {}
-  target.with_target({ filter = filter_of(opts), attach = true }, function(state)
+  target.with_target(filter_of(opts), function(state)
     call(state.session, "focus")
   end)
 end
@@ -188,16 +188,11 @@ end
 ---@param opts? sidekick_ultra.ActionOpts
 function M.close(opts)
   opts = opts or {}
-  local function detach(state)
+  target.with_attached(filter_of(opts), { one = not opts.all }, function(state)
     if registry.detach(state.session.id) then
       errors.info("Detached from " .. state.session.tool)
     end
-  end
-  if opts.all then
-    target.with_attached(filter_of(opts), detach)
-  else
-    target.with_target({ filter = filter_of(opts) }, detach)
-  end
+  end)
 end
 
 ---Render without sending.

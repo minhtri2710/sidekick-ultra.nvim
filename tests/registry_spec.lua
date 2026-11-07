@@ -276,7 +276,7 @@ describe("registry", function()
       local started = target.attach_state(target.states({ name = "codex" })[1])
       local count = #pick.selects
       local found
-      target.with_target({ attach = true }, function(state)
+      target.with_target({}, function(state)
         found = state.session.id
       end)
       expect.equality({ found, #pick.selects - count }, { started.id, 0 })

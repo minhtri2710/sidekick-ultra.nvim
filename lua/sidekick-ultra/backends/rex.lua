@@ -238,9 +238,30 @@ function M.list(configured)
   return ret
 end
 
+---The session record of the block `start` just split.
+---@param tool sidekick_ultra.Tool
+---@param sid string
+---@param bid string
+---@return sidekick_ultra.Session? session
+---@return sidekick_ultra.Error? err
+local function started_session(tool, sid, bid)
+  local fg, fg_err = foreground(sid, bid)
+  if fg_err then
+    return nil, fg_err
+  end
+  if not fg then
+    return nil, errors.new("backend_error", "the new block has no foreground process")
+  end
+  local session, session_err = session_of(tool.name, sid, bid, fg)
+  if not session and not session_err then
+    return nil, errors.new("backend_error", "the new block is not visible to this nvim")
+  end
+  return session, session_err
+end
+
 ---Split a new block to the right of nvim's own block, without focus, running the tool.
 ---Chosen from the installed binary's help text (`rex split -b BLOCK --split=right -c DIR --focus=false --json -- CMD`).
----`split` shows no environment flag, so a non-empty `opts.env` goes in front of the command as `/usr/bin/env K=V`.
+---`split` shows no environment flag.
 ---@param tool sidekick_ultra.Tool
 ---@param opts sidekick_ultra.StartOpts
 function M.start(tool, opts)
@@ -258,16 +279,9 @@ function M.start(tool, opts)
     return nil, errors.new("backend_error", "rex printed no id for the new block")
   end
 
-  local fg, fg_err = foreground(sid, bid)
-  if fg_err then
-    return nil, fg_err
-  end
-  if not fg then
-    return nil, errors.new("backend_error", ("block %s has no foreground process; it was left open"):format(bid))
-  end
-  local session, session_err = session_of(tool.name, sid, bid, fg)
-  if not session and not session_err then
-    return nil, errors.new("backend_error", ("block %s is not visible to this nvim; it was left open"):format(bid))
+  local session, session_err = started_session(tool, sid, bid)
+  if session_err then
+    session_err.msg = ("%s; block %s was left open"):format(session_err.msg, bid)
   end
   return session, session_err
 end

@@ -4,9 +4,7 @@
 ---
 ---Backend modules live at `sidekick-ultra.backends.<name>`. The names, the options each takes and the facts health
 ---reports are in the backend table, `sidekick-ultra.backends` (`backends/init.lua`). `setup()` requires the module when
----`<name>.enabled` is true (the default), calls its `setup(opts)` with the validated options, and registers the module
----only when `available()` returns true.
----Run commands with `exec.run` / `exec.check` / `exec.json`; build errors with `errors.new(id, msg, extra)`.
+---`<name>.enabled` is true (the default) and registers it only when `available()` returns true.
 ---A backend gets its options once, through `setup(opts)`, and keeps them in module state until the next `setup()`
 ---replaces them. It never reads `sidekick-ultra.config`.
 local errors = require("sidekick-ultra.errors")
@@ -37,8 +35,8 @@ local errors = require("sidekick-ultra.errors")
 ---@field name string unique backend name, also the id prefix. When several backends are inside, `start` picks the one
 ---   whose `name` equals `TERM_PROGRAM`: herdr, rex and tmux set it to their name, zellij does not set it.
 ---Optional. Called by `setup()` before `available()` with the backend's validated options table (`enabled` and the
----options the backend table lists). Replaces the options of an earlier call. A backend that resolves its binary does it
----here, once, and runs that path afterwards.
+---options the backend table lists). A backend that resolves its binary does it here, once, and runs that path
+---afterwards.
 ---@field setup? fun(opts: table)
 ---Whether the backend can run at all (binary found). Returns the binary path and, when it knows, where the path
 ---came from (for example "option", "PATH", "bundle"). Used by `setup()` and `:checkhealth`.
@@ -50,9 +48,12 @@ local errors = require("sidekick-ultra.errors")
 ---(`proc.tool_of` / `proc.find`, or the backend's own detection). `{}` is a valid answer.
 ---@field list fun(tools: table<string, sidekick_ultra.Tool>): sidekick_ultra.Session[]?, sidekick_ultra.Error?
 ---Create a pane or block beside nvim's own, without taking focus, running `tool.cmd`. Only called when `inside()`
----is true. Returns the new session. Its `pid` and `proc_name` are those of the new pane or block's current
----foreground (or shell) process, with the name read through `proc.name(pid)`, so the session counts as running at
----once and is not auto-detached before the tool has started. The next discovery replaces the record by id.
+---is true. Returns the new session, which passes the liveness rule below at once, so it is not auto-detached before
+---the tool has started. A backend that defines `is_running` answers true for the new session, and its record may have
+---no `pid` (zellij records the program it parsed as `proc_name`); otherwise the record's `pid` and `proc_name` are
+---those of the new pane or block's current foreground (or shell) process, with the name read through
+---`proc.name(pid)`. The next discovery replaces the record by id. A start that fails after the pane or block
+---exists either closes it or says in its error that it was left open.
 ---@field start fun(tool: sidekick_ultra.Tool, opts: sidekick_ultra.StartOpts): sidekick_ultra.Session?, sidekick_ultra.Error?
 ---Deliver `text` as literal input, with no implicit Enter. `tool` is the session's tool. A backend that reads an agent
 ---state guards here with `guard_send`; a refusal sends nothing. Returns a truthy value, or nil and the error.
@@ -66,10 +67,7 @@ local errors = require("sidekick-ultra.errors")
 ---every attached session each time liveness is checked.
 ---
 ---The liveness rule: a session runs when its backend's `is_running` says so, or, without one, when a process with the
----recorded `pid` exists and has the recorded `proc_name`. `registry.check()` applies it to every attached session and
----lists no backend while all pass. When one fails, one discovery replaces the attached records by id (a record taken
----at `start` may be a launcher that has since become the tool), then detaches the sessions that a listing backend no
----longer lists or that still fail the rule. The statusline runs the check when its cache is stale.
+---recorded `pid` exists and has the recorded `proc_name`.
 ---@field is_running? fun(session: sidekick_ultra.Session, tool: sidekick_ultra.Tool): boolean
 
 local M = {}

@@ -20,15 +20,24 @@ local tools = require("sidekick-ultra.tools")
 
 local M = {}
 
+---The sections that are tables of entries, in the order their errors are reported, each with its owner's check of one
+---entry.
+---@type { name: string, check: fun(name: string, entry: any): sidekick_ultra.Problem? }[]
+local SECTIONS = {
+  { name = "tools", check = tools.check },
+  { name = "prompts", check = render.check },
+  { name = "context", check = sources.check },
+}
+
 ---@return sidekick_ultra.Config
 local function defaults()
   local cfg = {
-    tools = {},
-    prompts = {},
-    context = {},
     watch = true,
     keys = keys.resolve(nil),
   }
+  for _, section in ipairs(SECTIONS) do
+    cfg[section.name] = {}
+  end
   for _, backend in ipairs(backends.all) do
     cfg[backend.name] = { enabled = true }
   end
@@ -87,41 +96,27 @@ function M.validate(opts)
   end
 
   local resolved, key_problem = keys.resolve(opts.keys)
-  if not resolved and key_problem then
+  if key_problem then
     return nil, from_problem(key_problem)
   end
   cfg.keys = resolved
 
-  for _, section in ipairs({ "tools", "prompts", "context" }) do
-    local value = opts[section]
+  for _, section in ipairs(SECTIONS) do
+    local value = opts[section.name]
     if value ~= nil then
-      problem = check.table(section, value)
+      problem = check.table(section.name, value)
       if problem then
         return nil, from_problem(problem)
       end
-      cfg[section] = vim.deepcopy(value)
+      cfg[section.name] = vim.deepcopy(value)
     end
   end
-  for _, name in ipairs(check.sorted_keys(cfg.tools)) do
-    problem = tools.check(name, cfg.tools[name])
-    if problem then
-      return nil, from_problem(problem)
-    end
-  end
-  for _, name in ipairs(check.sorted_keys(cfg.prompts)) do
-    problem = render.check(name, cfg.prompts[name])
-    if problem then
-      return nil, from_problem(problem)
-    end
-  end
-  for _, name in ipairs(check.sorted_keys(cfg.context)) do
-    if not sources.can_define(name) then
-      local path = "context." .. name
-      return nil, { path = path, msg = ("%s: not a placeholder name (%s)"):format(path, sources.NAME_RULE) }
-    end
-    err = check_type("context." .. name, cfg.context[name], "function")
-    if err then
-      return nil, err
+  for _, section in ipairs(SECTIONS) do
+    for _, name in ipairs(check.sorted_keys(cfg[section.name])) do
+      problem = section.check(name, cfg[section.name][name])
+      if problem then
+        return nil, from_problem(problem)
+      end
     end
   end
 

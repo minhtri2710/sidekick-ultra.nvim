@@ -574,6 +574,18 @@ describe("rex backend", function()
       expect.equality(err.id, "backend_error")
     end)
 
+    it("says the block was left open when its foreground reports no working directory", function()
+      rec = record({
+        [split_key] = fixture("split"),
+        [new_process] = live("process_shell", function(fg)
+          fg.cwd = nil
+        end),
+      })
+      local session, err = rex.start(claude, opts)
+      expect.equality(session, nil)
+      expect.equality(err.msg, "rex printed no working directory for block block:new1; block block:new1 was left open")
+    end)
+
     it("maps a failing split to backend_error and reads nothing else", function()
       rec = record({ [split_key] = { code = 3, stdout = "", stderr = "target not found" } })
       local session, err = rex.start(claude, opts)

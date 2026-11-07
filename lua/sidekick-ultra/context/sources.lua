@@ -13,8 +13,6 @@ local M = {}
 ---@type table<string, sidekick_ultra.Source>
 M.builtin = {}
 
-M.NAME_RULE = "letters, digits and underscores, and not `this`"
-
 ---Whether `name` can be written in a placeholder: letters, digits and underscores.
 ---@param name string
 ---@return boolean
@@ -22,12 +20,19 @@ function M.is_name(name)
   return name:match("^[%w_]+$") ~= nil
 end
 
----Whether a `context` source can be called `name`: a placeholder name other than `this`, which render rewrites
----before it looks any source up.
+---The problem with a `context` entry, or nil: `name` must be a placeholder name other than `this` (render rewrites
+---`this` before it looks any source up), and the source a function.
 ---@param name string
----@return boolean
-function M.can_define(name)
-  return M.is_name(name) and name ~= "this"
+---@param source any
+---@return sidekick_ultra.Problem?
+function M.check(name, source)
+  local path = "context." .. name
+  if not M.is_name(name) or name == "this" then
+    return { path = path, expected = "a placeholder name (letters, digits and underscores, and not `this`)", got = name }
+  end
+  if type(source) ~= "function" then
+    return { path = path, expected = "function", got = source }
+  end
 end
 
 ---@param buf integer

@@ -74,15 +74,14 @@ end
 ---exited panes are dropped.
 ---@param session string
 ---@return table[]? panes
----@return sidekick_ultra.Error? err
----@return boolean? silent true when zellij exited 0 and printed nothing
+---@return sidekick_ultra.ExecError? err `empty` when zellij exited 0 and printed nothing
 local function panes_of(session)
   local decoded, err = exec.json(command(session, "action", "list-panes", "--all", "--json", "--command", "--state"))
   if err then
     -- zellij can exit 0 with nothing printed (the server gives up after 1 s). That is no answer, not "no panes": an
     -- empty list is the text `[]`.
     if err.empty then
-      return nil, errors.new("backend_error", "zellij did not answer: list-panes printed nothing"), true
+      err.msg = "zellij did not answer: list-panes printed nothing"
     end
     return nil, err
   end
@@ -196,7 +195,6 @@ function M.list(configured)
 end
 
 ---Whether the session's pane exists, has not exited, and its current program still satisfies the tool's `is_proc`.
----Not an equality with `proc_name`: the tool's `is_proc` decides.
 ---@param session sidekick_ultra.Session
 ---@param tool sidekick_ultra.Tool
 ---@return boolean? alive nil when it could not be told
@@ -233,10 +231,57 @@ function M.is_running(session, tool)
   return alive(session, tool) ~= false
 end
 
+---Wait until the new pane `id` shows the tool as its program. An empty answer is asked again within the bound.
+---@param tool sidekick_ultra.Tool
+---@param session string zellij session name
+---@param id integer
+---@return sidekick_ultra.Session? session
+---@return sidekick_ultra.Error? err
+local function started_session(tool, session, id)
+  local deadline = now() + START_WAIT_MS
+  local last_err
+  while true do
+    local panes, panes_err = panes_of(session)
+    if not panes then
+      if not panes_err.empty then
+        return nil, panes_err
+      end
+      last_err = panes_err
+    else
+      last_err = nil
+      local seen
+      for _, pane in ipairs(panes) do
+        if pane.id == id then
+          seen = pane
+          break
+        end
+      end
+      local program = seen and program_of(seen)
+      if not program then
+        return nil, errors.new("backend_error", "the new pane is not running")
+      end
+      local matched, match_err = proc.matches(tool, nil, program)
+      if match_err then
+        return nil, match_err
+      end
+      if matched then
+        return session_of(tool.name, session, seen, program)
+      end
+    end
+    if now() >= deadline then
+      break
+    end
+    vim.wait(START_STEP_MS)
+    if now() >= deadline then
+      break
+    end
+  end
+  return nil, last_err or errors.new("backend_error", ("the new pane's program never showed as %s"):format(tool.name))
+end
+
 ---Split a new pane to the right of nvim's own, without focus, running the tool. `new-pane` is placed relative to the
----pane that issued it (`ZELLIJ_PANE_ID`, nvim's). It has no env flag, so a non-empty `opts.env` goes in front of the
----command as `/usr/bin/env K=V`. It returns once the pane's program matches the tool (see the wait below), so the
----session is running at once.
+---pane that issued it (`ZELLIJ_PANE_ID`, nvim's). It returns once the pane's program matches the tool, so the session
+---is running at once.
 ---@param tool sidekick_ultra.Tool
 ---@param opts sidekick_ultra.StartOpts
 function M.start(tool, opts)
@@ -277,52 +322,11 @@ function M.start(tool, opts)
       )
   end
 
-  -- The env wrapper, a shell or a script's interpreter show first. An empty answer is asked again within the bound.
-  local deadline = now() + START_WAIT_MS
-  local last_err
-  while true do
-    local panes, panes_err, silent = panes_of(session)
-    if not panes then
-      if not silent then
-        return nil, panes_err
-      end
-      last_err = panes_err
-    else
-      last_err = nil
-      local seen
-      for _, pane in ipairs(panes) do
-        if pane.id == tonumber(number) then
-          seen = pane
-          break
-        end
-      end
-      local program = seen and program_of(seen)
-      if not program then
-        return nil,
-          errors.new("backend_error", ("pane %s of session %s is not running; it was left open"):format(name, session))
-      end
-      local matched, match_err = proc.matches(tool, nil, program)
-      if match_err then
-        return nil,
-          errors.new("backend_error", ("%s; pane %s of session %s was left open"):format(match_err.msg, name, session))
-      end
-      if matched then
-        return session_of(tool.name, session, seen, program)
-      end
-    end
-    if now() >= deadline then
-      break
-    end
-    vim.wait(START_STEP_MS)
-    if now() >= deadline then
-      break
-    end
+  local record, record_err = started_session(tool, session, tonumber(number) --[[@as integer]])
+  if record_err then
+    record_err.msg = ("%s; pane %s of session %s was left open"):format(record_err.msg, name, session)
   end
-  return nil,
-    last_err or errors.new(
-      "backend_error",
-      ("pane %s of session %s was left open; its program never showed as %s"):format(name, session, tool.name)
-    )
+  return record, record_err
 end
 
 ---`write-chars` to a missing pane exits 0 and drops the text (probe P-Z7), so check the pane first.

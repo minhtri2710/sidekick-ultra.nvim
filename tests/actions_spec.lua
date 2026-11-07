@@ -590,6 +590,18 @@ describe("actions", function()
       expect.equality(cap.calls[1].msg, "backend not registered: herdr")
     end)
 
+    it("delivers nothing to a session that a setup detached while the prompt picker was open", function()
+      attached({ "claude" })
+      pick.choose = function(items)
+        local item = choose("changes")(items)
+        registry.reset()
+        registry.register(backend)
+        return item
+      end
+      actions.prompt({})
+      expect.equality({ cap.ids(), backend.delivered, registry.attached() }, { { "no_match" }, {}, {} })
+    end)
+
     it("delivers to the session picked first when several are attached, with no second pick", function()
       file_buffer()
       attached({ "claude", "gemini" })

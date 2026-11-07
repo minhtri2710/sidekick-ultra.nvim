@@ -30,7 +30,7 @@ local function report_version(name, bin, version)
     local major, minor = line:match("(%d+)%.(%d+)")
     if min and major and (tonumber(major) < min[1] or (tonumber(major) == min[1] and tonumber(minor) < min[2])) then
       health.warn(
-        ("%s: %s is older than %d.%d, which `send` needs"):format(name, line, min[1], min[2]),
+        ("%s: %s is older than %d.%d"):format(name, line, min[1], min[2]),
         { "Upgrade " .. name .. " to " .. ("%d.%d"):format(min[1], min[2]) .. " or newer" }
       )
     end
@@ -53,7 +53,7 @@ local function report_backend(info, cfg)
   end
   local ok, path, source = mod.available()
   if ok then
-    health.ok(("%s: %s%s"):format(name, path or "available", source and (" (from " .. source .. ")") or ""))
+    health.ok(("%s: %s%s"):format(name, path, source and (" (from " .. source .. ")") or ""))
   else
     local binary_key
     for key, option in pairs(info.options) do

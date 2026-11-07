@@ -854,6 +854,22 @@ describe("zellij backend", function()
       end
     end)
 
+    it("names the pane left open when the new pane reports no working directory", function()
+      rec = record(routes(
+        " /bin/sh",
+        patched("list_panes_a_started.json", function(list)
+          terminal(list, 6).pane_cwd = nil
+        end)
+      ))
+      local session, err = start()
+      expect.equality(session, nil)
+      expect.equality(
+        err.msg,
+        "zellij printed no working directory for pane terminal_6 of session skuA; "
+          .. "pane terminal_6 of session skuA was left open"
+      )
+    end)
+
     it("reports a failing list-panes after new-pane at once", function()
       rec = record(routes(" /bin/sh", { code = 2, stdout = "", stderr = "boom\n" }))
       local session, err = start()
