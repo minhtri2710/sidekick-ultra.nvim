@@ -61,8 +61,7 @@ local function run(session, ...)
   return exec.check(command(session, ...))
 end
 
----The program of a `pane_command`: the basename of its first word, or the script's name when that word is a node or
----python interpreter (see procname). The rest of the line is dropped here and never seen again.
+---The program of a `pane_command`. The rest of the line is dropped here and never seen again.
 ---@param pane table
 ---@return string? program
 local function program_of(pane)
@@ -219,8 +218,8 @@ local function alive(session, tool)
   return false
 end
 
----ponytail: one list-panes call per attached zellij session per liveness check (`registry.check`, run by the statusline
----refresh and before each action); batch per zellij session if that ever matters.
+---ponytail: one list-panes call per attached zellij session per liveness check; batch per zellij session if that ever
+---matters.
 ---A failing CLI call or `is_proc` is not an answer: the session stays attached (a false here detaches it silently), as
 ---`registry.discover` keeps the attached sessions of a backend that fails. The send guard, which shares `alive`, still
 ---refuses on an error.
@@ -284,8 +283,7 @@ local function started_session(tool, session, id)
 end
 
 ---Split a new pane to the right of nvim's own, without focus, running the tool. `new-pane` is placed relative to the
----pane that issued it (`ZELLIJ_PANE_ID`, nvim's). It returns once the pane's program matches the tool, so the session
----is running at once.
+---pane that issued it (`ZELLIJ_PANE_ID`, nvim's).
 ---@param tool sidekick_ultra.Tool
 ---@param opts sidekick_ultra.StartOpts
 function M.start(tool, opts)

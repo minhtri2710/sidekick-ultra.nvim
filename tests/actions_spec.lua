@@ -893,10 +893,29 @@ describe("actions", function()
       expect.equality(cap.calls, {})
     end)
 
+    it("notifies the cause of a source that raised, and of a prompt function that raised", function()
+      attached({ "claude" })
+      local render = require("sidekick-ultra.context.render")
+      render.setup({
+        bad = function()
+          error("kaput-prompt")
+        end,
+      }, {
+        boom = function()
+          error("kaput-source")
+        end,
+      })
+      actions.render({ msg = "{boom}" })
+      actions.render({ prompt = "bad" })
+      expect.equality(cap.ids(), { "render_failed", "render_failed" })
+      expect.equality(cap.calls[1].msg:find("kaput-source", 1, true) ~= nil, true)
+      expect.equality(cap.calls[2].msg:find("kaput-prompt", 1, true) ~= nil, true)
+    end)
+
     it("returns the rendered text without sending", function()
       attached({ "claude" })
       local text, err = actions.render({ msg = "{file|line}" })
-      expect.equality({ text, err.id, err.names }, { nil, "render_failed", { "file|line" } })
+      expect.equality({ text, err.id, err.msg:find("file|line", 1, true) ~= nil }, { nil, "render_failed", true })
       expect.equality(cap.ids(), { "render_failed" })
       expect.equality(actions.render({ msg = "plain", prompt = "changes" }), "plain\n" .. DEFAULT_PROMPTS.changes)
       expect.equality(backend.calls, {})

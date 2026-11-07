@@ -1,4 +1,4 @@
----The table check shared by `config`, `tools` and `render`, and the problem record it returns.
+---The option table check, and the problem record every option check returns.
 
 ---A problem found while validating the options: `path` is the full key path. A key that is not allowed has `allowed`
 ---(the allowed keys, sorted); any other problem has `expected` and the offending `got`. `config` turns it into the

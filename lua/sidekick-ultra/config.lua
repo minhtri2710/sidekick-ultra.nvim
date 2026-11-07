@@ -6,9 +6,8 @@
 ---@field keys { prefix: string }|false default keymaps under `prefix`, or false for none
 ---@field [string] any a backend's section (`backends/init.lua` lists the backends and their options)
 
----A validation failure: `path` is the full key path.
+---A validation failure: `msg` starts with the full key path.
 ---@class sidekick_ultra.ConfigError
----@field path string
 ---@field msg string
 
 local backends = require("sidekick-ultra.backends")
@@ -50,7 +49,7 @@ end
 ---@return sidekick_ultra.ConfigError
 local function fail(path, expected, value)
   local got = value == nil and "nil" or type(value)
-  return { path = path, msg = ("%s: expected %s, got %s"):format(path, expected, got) }
+  return { msg = ("%s: expected %s, got %s"):format(path, expected, got) }
 end
 
 ---@return sidekick_ultra.ConfigError?
@@ -65,7 +64,7 @@ end
 local function from_problem(problem)
   if problem.allowed then
     local names = table.concat(problem.allowed, ", ")
-    return { path = problem.path, msg = ("%s: unknown key (allowed: %s)"):format(problem.path, names) }
+    return { msg = ("%s: unknown key (allowed: %s)"):format(problem.path, names) }
   end
   return fail(problem.path, problem.expected, problem.got)
 end
@@ -110,8 +109,6 @@ function M.validate(opts)
       end
       cfg[section.name] = vim.deepcopy(value)
     end
-  end
-  for _, section in ipairs(SECTIONS) do
     for _, name in ipairs(check.sorted_keys(cfg[section.name])) do
       problem = section.check(name, cfg[section.name][name])
       if problem then

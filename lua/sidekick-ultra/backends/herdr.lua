@@ -8,6 +8,8 @@ local proc = require("sidekick-ultra.proc")
 
 local M = { name = "herdr" }
 
+---The `agent_status` values herdr reports. They are the source of `sidekick_ultra.AgentState` (backend.lua), which
+---changes with this list.
 ---@type table<string, true>
 local STATES = { idle = true, working = true, blocked = true, done = true, unknown = true }
 

@@ -9,7 +9,6 @@ M.DEFAULT_TIMEOUT_MS = 5000
 ---@field stdin? string
 ---@field timeout_ms? integer
 ---@field env? table<string, string> extra variables added to the inherited environment
----@field cwd? string
 
 ---The `backend_error` of a command that ran and failed: `code` is its exit code and `stderr` the first line of its
 ---stderr, so a caller can classify the failure. A spawn failure, a timeout and invalid output carry neither `stderr`
@@ -43,7 +42,6 @@ function M.run(argv, opts)
     text = true,
     stdin = opts.stdin,
     timeout = timeout,
-    cwd = opts.cwd,
     env = opts.env,
   })
   if not ok then

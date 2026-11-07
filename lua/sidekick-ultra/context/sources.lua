@@ -208,13 +208,7 @@ local function diagnostics(snap, all)
 
   local ret = {}
   for _, d in ipairs(list) do
-    local loc = location.position(
-      location.path(d.bufnr, snap.cwd),
-      d.lnum + 1,
-      d.col + 1,
-      d.end_lnum and d.end_lnum + 1,
-      d.end_col
-    )
+    local loc = location.position(location.path(d.bufnr, snap.cwd), d.lnum + 1, d.col + 1, d.end_lnum + 1, d.end_col)
     local msg = vim.split(d.message, "\n", { plain = true })
     local head = { ("[%s] %s"):format(vim.diagnostic.severity[d.severity] or "?", msg[1]) }
     for _, extra in ipairs({ d.source, d.code }) do

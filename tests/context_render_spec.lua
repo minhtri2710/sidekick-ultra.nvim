@@ -28,6 +28,18 @@ describe("context.render", function()
     return location.format(segments, style)
   end
 
+  ---Whether the message of `err` holds every token of `has` and none of `lacks`.
+  ---@param err sidekick_ultra.Error
+  ---@param has string[]
+  ---@param lacks? string[]
+  ---@return boolean
+  local function says(err, has, lacks)
+    local function holds(token)
+      return err.msg:find(token, 1, true) ~= nil
+    end
+    return vim.iter(has):all(holds) and not vim.iter(lacks or {}):any(holds)
+  end
+
   before_each(function()
     orig_cwd = vim.fn.getcwd()
     dir = vim.fn.tempname()
@@ -130,7 +142,7 @@ describe("context.render", function()
       local text, err = run({ prompt = "bad" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(err.names, { "bad" })
+      expect.equality(says(err, { "bad", "boom" }), true)
     end)
   end)
 
@@ -270,14 +282,14 @@ describe("context.render", function()
   describe("failures", function()
     it("names every unknown placeholder, across alternatives", function()
       render.setup(nil, {
-        known = function()
+        present = function()
           return "k"
         end,
       })
-      local text, err = run({ msg = "{known|nope} {other} {nope}" })
+      local text, err = run({ msg = "{present|nope} {other} {nope}" })
       expect.equality(text, nil)
       expect.equality(err.id, "unknown_context")
-      expect.equality(err.names, { "nope", "other" })
+      expect.equality(says(err, { "nope", "other" }, { "present" }), true)
     end)
 
     it("names the empty placeholder expressions", function()
@@ -290,7 +302,7 @@ describe("context.render", function()
       local text, err = run({ msg = "{full} {none} {none|none} {full}" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(err.names, { "none", "none|none" })
+      expect.equality(says(err, { "none|none" }, { "full" }), true)
     end)
 
     it("fails the whole render when one placeholder is empty", function()
@@ -298,7 +310,7 @@ describe("context.render", function()
       local text, err = run({ msg = "{file} {selection}" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(err.names, { "selection" })
+      expect.equality(says(err, { "selection" }, { "file" }), true)
     end)
 
     it("names the function placeholder when no textobjects query exists", function()
@@ -307,7 +319,7 @@ describe("context.render", function()
       local text, err = run({ msg = "{function}" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(err.names, { "function" })
+      expect.equality(says(err, { "function" }), true)
     end)
 
     it("keeps the cause when a textobjects query has no parser", function()
@@ -320,12 +332,10 @@ describe("context.render", function()
       local text, err = run({ msg = "{function}" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(err.names, { "function" })
-      expect.equality(err.detail:find("function: ", 1, true), 1)
-      expect.equality(err.detail:find("zzz", 1, true) ~= nil, true)
+      expect.equality(says(err, { "(function: ", "zzz" }), true)
     end)
 
-    it("counts a throwing source as empty and keeps the detail", function()
+    it("counts a throwing source as empty and keeps the cause", function()
       render.setup(nil, {
         boom = function()
           error("kaput")
@@ -334,11 +344,10 @@ describe("context.render", function()
       local text, err = run({ msg = "{boom}" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(err.names, { "boom" })
-      expect.equality(type(err.detail), "string")
+      expect.equality(says(err, { "(boom: ", "kaput" }), true)
     end)
 
-    it("counts a source returning a malformed list as empty and keeps the detail", function()
+    it("counts a source returning a malformed list as empty and keeps the cause", function()
       local bad = {
         numbers = { 1, 2 },
         empty_table = { { {} } },
@@ -356,8 +365,7 @@ describe("context.render", function()
         expect.equality(ok, true)
         expect.equality(text, nil)
         expect.equality(err.id, "render_failed")
-        expect.equality(err.names, { name })
-        expect.equality(type(err.detail), "string")
+        expect.equality(says(err, { "(" .. name .. ": " }), true)
       end
     end)
 
@@ -365,7 +373,7 @@ describe("context.render", function()
       open("a.lua", { "one" })
       local _, err = run({ prompt = "diagnostics" })
       expect.equality(err.id, "render_failed")
-      expect.equality(err.names, { "diagnostics" })
+      expect.equality(says(err, { "diagnostics" }), true)
     end)
   end)
 
@@ -409,7 +417,7 @@ describe("context.render", function()
       open("a.lua", { "one" })
       local text, err = run({ msg = "{this|file}" })
       expect.equality(text, nil)
-      expect.equality({ err.id, err.names }, { "unknown_context", { "this" } })
+      expect.equality({ err.id, says(err, { "this" }, { "file" }) }, { "unknown_context", true })
     end)
 
     it("fails naming selection outside a file buffer without a selection", function()
@@ -417,7 +425,7 @@ describe("context.render", function()
       local text, err = run({ prompt = "about" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(err.names, { "selection" })
+      expect.equality(says(err, { "selection" }), true)
     end)
   end)
 end)
