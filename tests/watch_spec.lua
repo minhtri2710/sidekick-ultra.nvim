@@ -63,6 +63,18 @@ local function expect_no_reload(path)
   expect.equality(first_line(path), before)
 end
 
+---The number of open fs_event handles in the loop: the watcher holds one per watched directory.
+---@return integer
+local function fs_event_handles()
+  local n = 0
+  vim.uv.walk(function(handle)
+    if handle:get_type() == "fs_event" and not handle:is_closing() then
+      n = n + 1
+    end
+  end)
+  return n
+end
+
 describe("watch", function()
   local dir_a, dir_b, file_a, file_b
 
@@ -130,6 +142,38 @@ describe("watch", function()
     open(file_b)
     expect.equality(reloads(file_b, "later "), true)
     expect.equality(reloads(file_a, "earlier "), true)
+  end)
+
+  it("watches one directory per file buffer, and closes a handle when no buffer needs its directory", function()
+    local base = fs_event_handles()
+    open(file_a)
+    vim.cmd("split")
+    open(file_b)
+    registry.attach(fake.session("herdr", "claude"))
+    flush()
+    expect.equality(fs_event_handles(), base + 2)
+    vim.cmd("silent bwipeout! " .. vim.fn.bufnr(file_b))
+    expect.equality(
+      vim.wait(3000, function()
+        return fs_event_handles() == base + 1
+      end, 20),
+      true
+    )
+    registry.detach("herdr:claude1")
+    flush()
+    expect.equality(fs_event_handles(), base)
+  end)
+
+  it("closes its handles on the last detach even when its autocommand group was deleted", function()
+    local base = fs_event_handles()
+    open(file_a)
+    registry.attach(fake.session("herdr", "claude"))
+    flush()
+    expect.equality(fs_event_handles(), base + 1)
+    vim.api.nvim_del_augroup_by_name("sidekick-ultra-watch")
+    registry.detach("herdr:claude1")
+    flush()
+    expect.equality(fs_event_handles(), base)
   end)
 
   it("leaves no buffer autocommands behind after the last detach", function()

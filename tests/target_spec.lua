@@ -227,6 +227,26 @@ describe("target", function()
       expect.equality({ cap.ids(), #b.of("start"), #registry.attached() }, { { "not_in_mux" }, 0, 0 })
     end)
 
+    it("refuses a session whose backend a later setup removed while the picker was open", function()
+      registry.register(fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } }))
+      local state = target.states({ started = true })[1]
+      registry.reset()
+      expect.equality(target.attach_state(state), nil)
+      expect.equality({ cap.ids(), registry.attached() }, { { "backend_error" }, {} })
+    end)
+
+    it("refuses a session and a tool that a later setup removed from the configuration", function()
+      local b = fake.backend("herdr", { is_inside = true, sessions = { fake.session("herdr", "claude") } })
+      registry.register(b)
+      local session_state, tool_state = target.states({ started = true })[1], target.states({ name = "codex" })[1]
+      fake.reset({})
+      registry.register(b)
+      b.calls = {}
+      expect.equality(target.attach_state(session_state), nil)
+      expect.equality(target.attach_state(tool_state), nil)
+      expect.equality({ cap.ids(), registry.attached(), b.calls }, { { "no_match", "no_match" }, {}, {} })
+    end)
+
     it("reports a failing start", function()
       registry.register(fake.backend("herdr", { is_inside = true, start_err = errors.new("backend_error", "x") }))
       expect.equality(target.attach_state(target.states({ name = "codex" })[1]), nil)
@@ -309,6 +329,18 @@ describe("target", function()
       expect.equality(run({ attach = true }), { "herdr:codex1", "codex" })
       expect.equality(#pick.selects, 1)
       expect.equality(#pick.selects[1].items, 2)
+    end)
+
+    it("does not reach the callback with a session that a setup detached while the pick was open", function()
+      two_attached()
+      local b = registry.backend("herdr")
+      pick.choose = function(items)
+        fake.reset({ claude = { cmd = fake.INSTALLED }, codex = { cmd = fake.INSTALLED } })
+        registry.register(b)
+        return items[2]
+      end
+      expect.equality(run({}), nil)
+      expect.equality({ cap.ids(), registry.attached() }, { { "no_match" }, {} })
     end)
 
     it("narrows the attached matches with the filter", function()

@@ -177,12 +177,35 @@ function M.pick(states, opts, cb)
   end)
 end
 
----Attach the chosen state, starting its tool first when it has no session. A missing tool is `not_installed` (its
----url is opened when it has one).
+---Whether `state`, which a picker returned some time after it was listed, is still usable: its session's backend is
+---registered and its tool configured. A `setup` that ran while the picker was open can have removed either. Reports
+---the reason and returns false when it is not.
+---@param state sidekick_ultra.State
+---@return boolean
+local function usable(state)
+  local session = state.session
+  if session and not registry.backend(session.backend) then
+    errors.notify(
+      errors.new("backend_error", "backend not registered: " .. session.backend, { backend = session.backend })
+    )
+    return false
+  end
+  if not tools.get(state.name) then
+    errors.notify(errors.new("no_match", "tool no longer configured: " .. state.name))
+    return false
+  end
+  return true
+end
+
+---Attach the chosen state, starting its tool first when it has no session. A state that is no longer usable (see
+---`usable`) is refused with a notification. A missing tool is `not_installed` (its url is opened when it has one).
 ---@param state sidekick_ultra.State
 ---@return sidekick_ultra.Session? session
 ---@return boolean? started the session was started by this call
 function M.attach_state(state)
+  if not usable(state) then
+    return nil
+  end
   if not state.installed then
     errors.notify(
       errors.new("not_installed", state.name .. " is not installed", { tool = state.name, url = state.tool.url })
@@ -219,7 +242,8 @@ end
 
 ---Resolve the one state an action acts on and pass it to `cb`:
 ---no attached match and the action may attach: pick over every matching state and attach it;
----several attached matches: pick one of them; otherwise the only attached match.
+---several attached matches: pick one of them, which must still be attached when the pick returns; otherwise the only
+---attached match.
 ---`cb` also gets `started`: true when this call started the tool of the state it passes.
 ---@param opts sidekick_ultra.TargetOpts
 ---@param cb fun(state: sidekick_ultra.State, started?: boolean)
@@ -237,7 +261,15 @@ function M.with_target(opts, cb)
       end
     end)
   else
-    M.pick(matching, { auto = true }, cb)
+    M.pick(matching, { auto = true }, function(state)
+      for _, session in ipairs(registry.attached()) do
+        if session.id == state.session.id then
+          cb(state)
+          return
+        end
+      end
+      no_match()
+    end)
   end
 end
 

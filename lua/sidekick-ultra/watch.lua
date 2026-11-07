@@ -91,8 +91,6 @@ function M.stop()
   if not state.active then
     return
   end
-  state.active = false
-  vim.api.nvim_del_augroup_by_name(GROUP)
   for _, timer in ipairs(state.timers) do
     timer:stop()
     timer:close()
@@ -101,6 +99,7 @@ function M.stop()
     handle:close()
   end
   state = { handles = {}, timers = {}, active = false }
+  vim.api.nvim_del_augroup_by_name(GROUP)
 end
 
 ---Start from a stopped state and, when `enabled` (the `watch` option) is true, follow the attach and detach events:

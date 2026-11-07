@@ -737,6 +737,22 @@ describe("actions", function()
       end)
     end)
 
+    it("attaches nothing, and breaks no later action, when a setup ran while its picker was open", function()
+      backend = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
+      registry.register(backend)
+      pick.choose = function(items)
+        fake.reset({ claude = { cmd = fake.INSTALLED } })
+        return vim.tbl_filter(function(item)
+          return item.session ~= nil
+        end, items)[1]
+      end
+      actions.select({ focus = false })
+      expect.equality({ cap.ids(), registry.attached() }, { { "backend_error" }, {} })
+      pick.choose = function() end
+      expect.no_error(actions.focus, {})
+      expect.no_error(require("sidekick-ultra.status").cli)
+    end)
+
     it("applies the name filter to the picker", function()
       backend = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
       registry.register(backend)
@@ -811,6 +827,12 @@ describe("actions", function()
       )
       actions.close({ all = true })
       expect.equality(registry.attached(), {})
+    end)
+
+    it("detaches every attached session with all=true, without a picker", function()
+      attached({ "claude", "codex" })
+      actions.close({ all = true })
+      expect.equality({ registry.attached(), #pick.selects, #cap.calls }, { {}, 0, 2 })
     end)
 
     it("honors the name filter", function()
