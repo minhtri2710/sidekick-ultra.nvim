@@ -1,12 +1,12 @@
 ---The placeholders: one source per name, built in or added by the user's `context` option. A source takes the
----snapshot and returns nothing, a string, or a list of lines; it reads buffers, diagnostics and the quickfix list as
----they are when it runs. A line is a string, or a list of strings and location records (`location.format` writes
+---snapshot and returns nothing (nil or `false`), a string, or a list of lines (an empty list is nothing); it reads
+---buffers, diagnostics and the quickfix list as they are when it runs. A line is a string, or a list of strings and location records (`location.format` writes
 ---them in the target tool's style when the text is sent).
 local location = require("sidekick-ultra.location")
 
 ---@alias sidekick_ultra.Line string|(string|sidekick_ultra.Location)[]
 
----@alias sidekick_ultra.Source fun(snap: sidekick_ultra.Snapshot): string|sidekick_ultra.Line[]?
+---@alias sidekick_ultra.Source fun(snap: sidekick_ultra.Snapshot): string|sidekick_ultra.Line[]|false?
 
 local M = {}
 

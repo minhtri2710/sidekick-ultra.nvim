@@ -138,9 +138,8 @@ local function is_empty(segments)
   return table.concat(segments) == ""
 end
 
----A source's value as flat output segments (lines joined by "\n"), or nil when it yields nothing. The value is nil
----or `false` (nothing), a string (split into lines), or a list of lines (an empty list is nothing). Raises on any
----other value, and when a line is not a string or a list of strings and location records.
+---A source's value as flat output segments (lines joined by "\n"), or nil when it yields nothing. Raises when the
+---value or a line breaks the `sidekick_ultra.Source` contract.
 ---@param value any
 ---@return (string|sidekick_ultra.Location)[]?
 local function as_segments(value)
@@ -151,7 +150,7 @@ local function as_segments(value)
   if type(value) == "string" then
     lines = vim.split(value, "\n", { plain = true })
   elseif type(value) ~= "table" or not vim.islist(value) then
-    error("source must return a string, a list of lines, or nothing, got " .. type(value))
+    error("source must return a string, a list of lines, or nothing, got " .. type(value), 0)
   end
   local segments = {}
   for i, line in ipairs(lines) do
@@ -162,14 +161,13 @@ local function as_segments(value)
       table.insert(segments, line)
     elseif type(line) == "table" and vim.islist(line) then
       for _, segment in ipairs(line) do
-        assert(
-          type(segment) == "string" or (type(segment) == "table" and location.is_location(segment)),
-          "line segment must be a string or a location record"
-        )
+        if type(segment) ~= "string" and not (type(segment) == "table" and location.is_location(segment)) then
+          error("line segment must be a string or a location record", 0)
+        end
         table.insert(segments, segment)
       end
     else
-      error("line must be a string or a list of strings and location records")
+      error("line must be a string or a list of strings and location records", 0)
     end
   end
   return not is_empty(segments) and segments or nil
