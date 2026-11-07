@@ -1,3 +1,4 @@
+local contract = require("sidekick-ultra.backend")
 local fake = require("tests.helpers.fake")
 local helper = require("tests.helpers.backend")
 local herdr = require("sidekick-ultra.backends.herdr")
@@ -270,11 +271,17 @@ describe("herdr backend", function()
     end)
 
     it("still reports every other pane list failure", function()
-      for _, stderr in ipairs({ failing("server_unavailable").stderr, "not json\n", "\n" }) do
-        install(routes({ ["pane list"] = { code = 1, stdout = "", stderr = stderr } }))
+      -- Each row is the stderr herdr printed and a token of its cause, which the error must carry.
+      for _, row in ipairs({
+        { failing("server_unavailable").stderr, "server_unavailable" },
+        { "not json\n", "not json" },
+        { "\n" },
+      }) do
+        install(routes({ ["pane list"] = { code = 1, stdout = "", stderr = row[1] } }))
         local sessions, err = herdr.list(tools())
         expect.equality(sessions, nil)
         expect.equality({ err.id, err.code }, { "backend_error", 1 })
+        expect.equality(row[2] == nil or err.msg:find(row[2], 1, true) ~= nil, true)
       end
     end)
 
@@ -585,7 +592,10 @@ describe("herdr backend", function()
       install(routes({ ["pane get"] = fixture("pane_get_blocked") }))
       local ok, err = herdr.send(pane_session(), "hello")
       expect.equality(ok, nil)
-      expect.equality(err.id, "session_blocked")
+      local _, want = contract.guard_send(pane_session(), function()
+        return true
+      end)
+      expect.equality(err, want)
       expect.equality(rec.argvs(), { { "herdr", "pane", "get", "w1:p1" } })
     end)
 
@@ -617,7 +627,7 @@ describe("herdr backend", function()
     it("names the pane when herdr reports a state it does not know", function()
       install(routes({ ["pane get"] = fixture("pane_get_unrecognized") }))
       local _, err = herdr.send(pane_session(), "hello")
-      expect.equality(err.msg:find("herdr pane w1:p1 reported no usable agent_status", 1, true) ~= nil, true)
+      expect.equality(err.msg:find("w1:p1", 1, true) ~= nil and err.msg:find("agent_status", 1, true) ~= nil, true)
     end)
 
     it("reports a failing send-text as backend_error", function()

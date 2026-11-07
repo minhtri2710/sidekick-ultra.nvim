@@ -204,7 +204,7 @@ describe("tmux backend", function()
       end
     end)
 
-    it("reports a failed command as backend_error with the exit code", function()
+    it("reports a failed command as backend_error with the exit code and the cause", function()
       rec = record({
         ["display-message"] = "0\n",
         ["send-keys"] = bad(fixture("stderr_missing_pane")),
@@ -212,6 +212,7 @@ describe("tmux backend", function()
       local res, err = tmux.submit({ pane = "%99" })
       expect.equality(res, nil)
       expect.equality({ err.id, err.code }, { "backend_error", 1 })
+      expect.equality(err.msg:find("can't find pane", 1, true) ~= nil, true)
     end)
 
     it("returns the error of a command that could not be spawned", function()
@@ -576,13 +577,14 @@ describe("tmux backend", function()
         return err
       end
 
-      it("is a backend_error with the exit code", function()
+      it("is a backend_error with the exit code and the cause", function()
         local err = failing({
           code = 3,
           stdout = "node /x/bin/gemini --api-key " .. SECRET .. "\n",
           stderr = "ps: boom\nsecond\n",
         })
         expect.equality({ err.id, err.code }, { "backend_error", 3 })
+        expect.equality(err.msg:find("ps: boom", 1, true) ~= nil, true)
       end)
 
       it("keeps stdout out of the error and out of its toast", function()
