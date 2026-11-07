@@ -156,7 +156,7 @@
     "tab_id": 0,
     "tab_position": 0,
     "tab_name": "Tab #1",
-    "pane_command": "/usr/local/bin/claude --resume SECRET-TOKEN-xyz",
+    "pane_command": "/usr/local/bin/claude --resume @SECRET@",
     "pane_cwd": "/tmp/sku-proj-a"
   },
   {

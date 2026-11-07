@@ -26,7 +26,7 @@ describe("exec", function()
 
   it("hands a caller the first stderr line of a failed check as data, and none for a run that failed to run", function()
     local _, err = exec.check({ "/bin/sh", "-c", "echo first >&2; echo second >&2; exit 4" })
-    expect.equality({ err.code, err.stderr }, { 4, "first" })
+    expect.equality({ err.code, err.stderr, err.msg }, { 4, "first", "/bin/sh exited with 4: first" })
     _, err = exec.check({ "/bin/sh", "-c", "exit 4" })
     expect.equality({ err.code, err.stderr, err.msg }, { 4, "", "/bin/sh exited with 4" })
     _, err = exec.check({ "/nonexistent/sku-binary" })
@@ -52,6 +52,36 @@ describe("exec", function()
   it("puts an environment in front of a command as /usr/bin/env K=V with the keys sorted, or nothing", function()
     expect.equality(exec.env_prefix({ SKU_B = "2", SKU_A = "a=1" }), { "/usr/bin/env", "SKU_A=a=1", "SKU_B=2" })
     expect.equality(exec.env_prefix({}), {})
+  end)
+
+  it("keeps no output: no module holds what a command or a process line printed", function()
+    local secret = require("tests.helpers.backend").SECRET
+    -- Every backend and proc are loaded, so the scan below sees them in a narrowed run too.
+    for _, name in ipairs(require("sidekick-ultra.backends").names()) do
+      require("sidekick-ultra.backends." .. name)
+    end
+    local res = exec.run({ "/bin/sh", "-c", "echo " .. secret })
+    expect.equality(res.stdout, secret .. "\n")
+    -- A `ps` line with the secret goes through proc, which parses it.
+    local orig = exec.run
+    MiniTest.finally(function()
+      exec.run = orig
+    end)
+    exec.run = function()
+      return { code = 0, stdout = "node /x/bin/pi --api-key " .. secret .. "\n", stderr = "" }
+    end
+    local pi = {
+      is_proc = function()
+        return false
+      end,
+    }
+    require("sidekick-ultra.proc").tool_of("tmux", { pi = pi }, 1, { "node" })
+    for name, mod in pairs(package.loaded) do
+      if type(name) == "string" and name:find("^sidekick%-ultra") then
+        expect.equality({ name, vim.inspect(mod):find(secret, 1, true) }, { name, nil })
+      end
+    end
+    expect.equality(vim.fn.execute("messages"):find(secret, 1, true), nil)
   end)
 
   it("maps a timeout to backend_error", function()

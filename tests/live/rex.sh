@@ -314,10 +314,11 @@ screen_has() { printf '%s' "$1" | grep -qF -- "$2"; }
 # The text is typed but not submitted: it is on the screen and the stub has not echoed it back as `got: <text>`.
 # An empty capture fails the first half, so a failed capture cannot pass this.
 unsubmitted() { screen_has "$1" "$2" && ! screen_has "$1" "got: $2"; }
-# The window that holds the started block does not have that block focused. A missing view or block fails.
+# The window that holds the started block has another block focused, not this one. A missing view or block, and a
+# window with no focused block (null), fail.
 started_block_unfocused() {
   jq -e --arg b "$started_block" \
-    '[.windows[] | select(any(.layers[].blocks[]; .block_id == $b)) | .focused_block_id != $b] == [true]' \
+    '[.windows[] | select(any(.layers[].blocks[]; .block_id == $b)) | (.focused_block_id | type == "string") and .focused_block_id != $b] == [true]' \
     "$ROOT/out/split_view" >/dev/null
 }
 

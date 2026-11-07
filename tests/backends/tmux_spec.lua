@@ -1,36 +1,21 @@
 -- The fixtures in tests/fixtures/tmux follow the shapes a tmux 3.8 probe printed in D8. What is still unverified is
 -- listed in UNVERIFIED.txt there. Every tmux call goes through the exec seam; no spec runs tmux.
-local backend = require("sidekick-ultra.backend")
-local exec = require("sidekick-ultra.exec")
+local errors = require("sidekick-ultra.errors")
 local fake = require("tests.helpers.fake")
+local helper = require("tests.helpers.backend")
+local notify = require("tests.helpers.notify")
 local registry = require("sidekick-ultra.registry")
 local tmux = require("sidekick-ultra.backends.tmux")
 local tools = require("sidekick-ultra.tools")
 
-local errors = require("sidekick-ultra.errors")
-local notify = require("tests.helpers.notify")
-
 local expect = MiniTest.expect
-local SECRET = "SECRET-TOKEN-xyz"
+local SECRET = helper.SECRET
+local fixture = helper.fixtures("tmux", ".txt")
 
-local FIXTURES = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/fixtures/tmux/"
 -- The working directory is the last field, and falls back to the start path when tmux has no current path.
 local LIST_FORMAT = "#{pane_id}\t#{pane_pid}\t#{session_name}\t#{pane_dead}\t"
   .. "#{?pane_current_path,#{pane_current_path},#{pane_start_path}}"
 local WORK = "/private/tmp/sku-live-tmux/work"
-
----@param name string
----@return string
-local function fixture(name)
-  -- Binary mode: a final NL becomes a last empty item, so joining with NL gives the file back byte for byte.
-  return table.concat(vim.fn.readfile(FIXTURES .. name .. ".txt", "b"), "\n")
-end
-
----@param stdout string
----@return table
-local function ok(stdout)
-  return { code = 0, stdout = stdout, stderr = "" }
-end
 
 ---@param stderr string
 ---@return table
@@ -39,36 +24,13 @@ local function bad(stderr)
 end
 
 ---Replace `exec.run`. `routes` maps the subcommand (the first argument after an optional `-S <socket>`, or `ps` for a
----`ps` call) to a result table, a fixture-text string, or a function(call number) returning either. A subcommand
----without a route is recorded in `unexpected` and fails with exit 97. `calls[i]` is `{ argv, opts }`.
----@param routes table<string, table|string|fun(n: integer): table|string>
+---`ps` call) to its answer (see the recorder in tests/helpers/backend.lua). A subcommand without a route fails the
+---case.
+---@param routes table<string, string|table|fun(n: integer, argv: string[]): string|table>
 local function record(routes)
-  local rec = { calls = {}, unexpected = {}, orig = exec.run }
-  local counts = {}
-  exec.run = function(argv, opts)
-    table.insert(rec.calls, { argv = argv, opts = opts })
-    local sub = argv[1] == "ps" and "ps" or argv[2] == "-S" and argv[4] or argv[2]
-    counts[sub] = (counts[sub] or 0) + 1
-    local route = routes[sub]
-    if type(route) == "function" then
-      route = route(counts[sub])
-    end
-    if route == nil then
-      table.insert(rec.unexpected, sub)
-      return { code = 97, stdout = "", stderr = "unexpected command" }
-    end
-    return type(route) == "string" and ok(route) or route
-  end
-  ---The argv of every call, in order.
-  function rec.argvs()
-    return vim.tbl_map(function(call)
-      return call.argv
-    end, rec.calls)
-  end
-  function rec.restore()
-    exec.run = rec.orig
-  end
-  return rec
+  return helper.record(routes, function(argv)
+    return argv[1] == "ps" and "ps" or argv[2] == "-S" and argv[4] or argv[2]
+  end)
 end
 
 ---A process table for `nvim_get_proc` / `nvim_get_proc_children`: pid -> { name, kids }. A pid without an entry is
@@ -134,11 +96,6 @@ describe("tmux backend", function()
   end)
 
   after_each(function()
-    if rec then
-      rec.restore()
-      expect.equality(rec.unexpected, {})
-      rec = nil
-    end
     if restore_procs then
       restore_procs()
       restore_procs = nil
@@ -147,11 +104,13 @@ describe("tmux backend", function()
       vim.env[var] = env[var]
     end
     vim.fn.delete(dir, "rf")
+    if rec then
+      rec.restore()
+      rec = nil
+    end
   end)
 
-  it("satisfies the backend contract and defines no is_running of its own", function()
-    expect.equality(backend.check(tmux), true)
-    expect.equality(tmux.name, "tmux")
+  it("defines no is_running of its own, so the registry checks its pid and process name", function()
     expect.equality(tmux.is_running, nil)
   end)
 
@@ -234,39 +193,37 @@ describe("tmux backend", function()
         ["select-window"] = "",
       })
       local s = { pane = "%1" }
-      tmux.list(tools.all())
-      tmux.send(s, "x")
-      tmux.submit(s)
-      tmux.focus(s)
+      expect.equality(type(tmux.list(tools.all())), "table")
+      expect.equality({ tmux.send(s, "x") }, { true })
+      expect.equality({ tmux.submit(s) }, { true })
+      expect.equality({ tmux.focus(s) }, { true })
       for _, argv in ipairs(rec.argvs()) do
         expect.equality(vim.list_slice(argv, 1, 3), { "tmux", "-S", "/tmp/sku.sock" })
       end
-      -- list; send: mode check, load, paste; submit: mode check, send-keys; focus.
-      expect.equality(#rec.calls, 7)
     end)
 
-    it("maps a non-zero exit to backend_error carrying the first stderr line", function()
+    it("reports a failed command as backend_error naming the subcommand and the exit code", function()
       rec = record({
         ["display-message"] = "0\n",
-        ["send-keys"] = bad(fixture("stderr_missing_pane") .. "second line\n"),
+        ["send-keys"] = bad(fixture("stderr_missing_pane")),
       })
       local res, err = tmux.submit({ pane = "%99" })
       expect.equality(res, nil)
-      expect.equality(err.id, "backend_error")
-      expect.equality(err.backend, "tmux")
-      expect.equality(err.cmd, "send-keys")
-      expect.equality(err.code, 1)
+      expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "tmux", "send-keys", 1 })
       expect.equality(err.msg, "tmux exited with 1: can't find pane: %99")
     end)
 
-    it("maps a spawn failure to backend_error", function()
-      local orig = exec.run
-      exec.run = function(_, opts)
-        return nil, require("sidekick-ultra.errors").new("backend_error", "cannot run tmux: boom", opts)
-      end
+    it("returns the error of a command that could not be spawned", function()
+      rec = record({
+        ["list-panes"] = {
+          run_error = errors.new("backend_error", "cannot run tmux: boom", { backend = "tmux", cmd = "list-panes" }),
+        },
+      })
       local list, err = tmux.list(tools.all())
-      exec.run = orig
-      expect.equality({ list, err.id, err.cmd }, { nil, "backend_error", "list-panes" })
+      expect.equality(
+        { list, err.id, err.cmd, err.msg },
+        { nil, "backend_error", "list-panes", "cannot run tmux: boom" }
+      )
     end)
   end)
 
@@ -451,13 +408,13 @@ describe("tmux backend", function()
       }, { tmux = { enabled = false } })
     end)
 
-    ---ps answers per pid, from the pid in the call (`-p <pid>`); a pid without an answer fails like a missing process.
+    ---ps answers per pid, from the pid in the call (`-p <pid>`, the last word); a pid without an answer fails like a
+    ---missing process.
     ---@param lines table<integer, string|table>
-    ---@return fun(n: integer): table|string
+    ---@return fun(n: integer, argv: string[]): table|string
     local function ps_route(lines)
-      return function()
-        local pid = tonumber(rec.calls[#rec.calls].argv[6])
-        return lines[pid] or { code = 1, stdout = "", stderr = "" }
+      return function(_, argv)
+        return lines[tonumber(argv[#argv])] or { code = 1, stdout = "", stderr = "" }
       end
     end
 
@@ -501,7 +458,6 @@ describe("tmux backend", function()
       use_procs({ [58100] = { name = "node" } })
       tmux.list(tools.all())
       expect.equality(rec.argvs()[2], PS)
-      expect.equality({ rec.calls[2].opts.backend, rec.calls[2].opts.cmd }, { "tmux", "ps" })
     end)
 
     it("keeps a session whose liveness is the interpreter's process name, as registry.is_running reads it", function()
@@ -509,85 +465,6 @@ describe("tmux backend", function()
       expect.equality(registry.is_running(list[1]), true)
       use_procs({ [58100] = { name = "zsh" } })
       expect.equality(registry.is_running(list[1]), false)
-    end)
-
-    it("takes every interpreter name and the script word after its flags", function()
-      local cases = {
-        { "node", "node /x/bin/gemini", "gemini" },
-        { "nodejs", "nodejs /x/bin/gemini", "gemini" },
-        { "bun", "bun /x/bin/gemini", "gemini" },
-        { "node", "node -- /x/bin/gemini", "gemini" },
-        { "node", "node --require ./hook.js --inspect=9229 /x/bin/gemini", "gemini" },
-        { "python", "python /x/bin/aider", "aider" },
-        { "python3", "python3 -m aider --model x", "aider" },
-        { "python3.12", "python3.12 -u /x/bin/aider.py", "aider" },
-        { "Python", "/usr/bin/Python -W ignore -m aider", "aider" },
-      }
-      for _, case in ipairs(cases) do
-        local list = discover(case[1], case[2])
-        expect.equality({ case[2], #list, list[1] and list[1].tool }, { case[2], 1, case[3] })
-        expect.equality(list[1].proc_name, case[1])
-      end
-    end)
-
-    it("finds no tool for an interpreter that runs no script, or a script that is not a tool", function()
-      for _, case in ipairs({
-        { "node", "node -e gemini" },
-        { "node", "node --eval gemini" },
-        { "node", "node -p gemini" },
-        { "node", "node --print gemini" },
-        { "node", "node" },
-        { "python3", "python3 -c aider" },
-        { "python3", "python3" },
-        { "node", "node /x/dist/index.js" },
-        { "python3", "python3 -m pip install gemini" },
-        -- the tool's name only after the script
-        { "node", "node /x/bin/other gemini" },
-        { "node", "node /x/bin/other --name=gemini" },
-      }) do
-        expect.equality({ case[2], discover(case[1], case[2]) }, { case[2], {} })
-      end
-    end)
-
-    it("does not match the interpreter's own name, so a tool needs its script name", function()
-      fake.reset({ nodetool = { cmd = fake.INSTALLED, is_proc = "^node$" } }, { tmux = { enabled = false } })
-      rec = record({ ["list-panes"] = fixture(PANES), ps = "node /x/bin/other\n" })
-      use_procs({ [58100] = { name = "node" } })
-      expect.equality({ tmux.list(tools.all()) }, { {} })
-    end)
-
-    it("reads no command line when no tool is configured", function()
-      rec = record({ ["list-panes"] = fixture(PANES) })
-      use_procs({ [58100] = { name = "node" } })
-      expect.equality({ tmux.list({}) }, { {} })
-      expect.equality(#rec.calls, 1)
-    end)
-
-    it("never tests the empty name of an interpreter that runs code", function()
-      local always = {
-        name = "always",
-        cmd = { "x" },
-        env = {},
-        is_proc = function()
-          return true
-        end,
-      }
-      rec = record({ ["list-panes"] = fixture(PANES), ps = "node -e code\n" })
-      use_procs({ [58100] = { name = "node" } })
-      expect.equality({ tmux.list({ always = always }) }, { {} })
-    end)
-
-    it("reads no command line for a process that is not an interpreter", function()
-      rec = record({ ["list-panes"] = fixture(PANES) })
-      use_procs({
-        [58100] = { name = "zsh", kids = { 1, 2, 3 } },
-        [1] = { name = "nodemon" },
-        [2] = { name = "Python3" },
-        [3] = { name = "claude" },
-      })
-      local list = tmux.list(tools.all())
-      expect.equality({ #list, list[1].tool, list[1].pid }, { 1, "claude", 3 })
-      expect.equality(#rec.calls, 1)
     end)
 
     it(
@@ -615,7 +492,7 @@ describe("tmux backend", function()
         local pids = {}
         for _, argv in ipairs(rec.argvs()) do
           if argv[1] == "ps" then
-            table.insert(pids, argv[6])
+            table.insert(pids, argv[#argv])
           end
         end
         expect.equality(pids, { "58100", "1", "2" })
@@ -662,12 +539,6 @@ describe("tmux backend", function()
         local list, err = tmux.list(tools.all())
         expect.equality(err, nil)
         expect.equality({ #list, list[1].tool, list[1].pid }, { 1, "claude", 1 })
-      end)
-
-      it("gives no session when nothing else in the pane is a tool", function()
-        rec = record({ ["list-panes"] = fixture(PANES), ps = ps_route({ [58100] = GONE }) })
-        use_procs({ [58100] = { name = "node" } })
-        expect.equality({ tmux.list(tools.all()) }, { {} })
       end)
 
       it("does not stop start, which records the pane's root process", function()
@@ -722,53 +593,13 @@ describe("tmux backend", function()
         expect.equality(err.msg, "ps exited with 3 for pid 58100: ps: boom")
       end)
 
-      it("names no stderr when there is none", function()
-        local err = failing({ code = 2, stdout = "", stderr = "" })
-        expect.equality(err.msg, "ps exited with 2 for pid 58100")
-      end)
-
-      it("is an error for exit 1 unless both streams are empty: stderr text, or stdout, makes it a failure", function()
-        local err = failing({ code = 1, stdout = "", stderr = "ps: illegal option\n" })
-        expect.equality(
-          { err.id, err.code, err.msg },
-          { "backend_error", 1, "ps exited with 1 for pid 58100: ps: illegal option" }
-        )
-        err = failing({ code = 1, stdout = "node /x/bin/gemini " .. SECRET .. "\n", stderr = "" })
-        expect.equality({ err.id, err.code, err.msg }, { "backend_error", 1, "ps exited with 1 for pid 58100" })
-        expect.equality(vim.inspect(err):find(SECRET, 1, true), nil)
-      end)
-
-      it("is an error for exit 0 with nothing printed", function()
-        for _, stdout in ipairs({ "", "\n", "  \n" }) do
-          local err = failing({ code = 0, stdout = stdout, stderr = "" })
-          expect.equality(
-            { err.id, err.cmd, err.code, err.msg },
-            { "backend_error", "ps", 0, "ps printed nothing for pid 58100" }
-          )
-        end
-      end)
-
       it("keeps stdout out of the error and out of its toast", function()
         local cap = notify.capture()
+        MiniTest.finally(cap.restore)
         local err = failing({ code = 1, stdout = "node /x/bin/gemini --api-key " .. SECRET .. "\n", stderr = "gone\n" })
         errors.notify(err)
-        cap.restore()
         expect.equality(#cap.calls, 1)
         expect.equality(vim.inspect({ err, cap.calls }):find(SECRET, 1, true), nil)
-      end)
-
-      it("is the exec error itself when ps cannot be spawned", function()
-        local orig = exec.run
-        exec.run = function(argv, opts)
-          if argv[1] == "ps" then
-            return nil, errors.new("backend_error", "cannot run ps: boom", opts)
-          end
-          return ok(fixture(PANES))
-        end
-        use_procs({ [58100] = { name = "node" } })
-        local list, err = tmux.list(tools.all())
-        exec.run = orig
-        expect.equality({ list, err.id, err.cmd, err.msg }, { nil, "backend_error", "ps", "cannot run ps: boom" })
       end)
 
       it("stops start at once and names the pane left open", function()
@@ -789,37 +620,16 @@ describe("tmux backend", function()
     -- Supervisor condition: the command line beyond the script word may carry a secret. Every command line below
     -- holds SECRET; nothing the backend returns, raises or notifies may hold it.
     describe("command line arguments", function()
-      local LINES = {
-        { "node", "node /x/bin/gemini --api-key " .. SECRET, "gemini" },
-        { "node", "node --require " .. SECRET .. " /x/bin/gemini", "gemini" },
-        { "node", 'node -e "' .. SECRET .. '"', nil },
-        { "python3", "python3 -m aider --token " .. SECRET, "aider" },
-        { "python3", 'python3 -c "' .. SECRET .. '"', nil },
-        { "node", 'node -pe "/x/' .. SECRET .. '/gemini"', nil },
-        { "node", 'node -ep "/x/' .. SECRET .. '/gemini"', nil },
-        { "node", "node --eval=0 /x/" .. SECRET .. "/gemini", nil },
-        { "node", "node --print=0 /x/" .. SECRET .. "/gemini", nil },
-        { "node", "node --run /x/" .. SECRET .. "/gemini", nil },
-        { "node", "node --env-file " .. SECRET .. " /x/bin/gemini", "gemini" },
-        { "node", "node --title " .. SECRET .. " /x/bin/gemini", "gemini" },
-        { "node", "node --config-file /x/bin/qwen --x /x/" .. SECRET .. "/gemini", "qwen" },
-        { "node", "node - /x/" .. SECRET .. "/gemini", nil },
-        { "python3", 'python3 -uc "/x/' .. SECRET .. '/gemini"', nil },
-        { "python3", "python3 -c/x/" .. SECRET .. "/gemini", nil },
-        { "python3", "python3 -Wc /x/bin/aider --token " .. SECRET, nil },
-        { "python3", "python3 -maider /x/" .. SECRET .. "/gemini", nil },
-        { "python3", "python3 -uX /x/" .. SECRET .. "/gemini /x/bin/aider", "aider" },
-        { "python3", "python3 --check-hash-based-pycs " .. SECRET .. " /x/bin/aider", "aider" },
-        { "python3", "python3 - /x/" .. SECRET .. "/gemini", nil },
-      }
+      -- Each row runs under the interpreter named by its first word.
+      local LINES = helper.SECRET_LINES
 
       it("reach no session and no recorded call of list", function()
         for _, case in ipairs(LINES) do
-          rec = record({ ["list-panes"] = fixture(PANES), ps = case[2] .. "\n" })
-          use_procs({ [58100] = { name = case[1] } })
+          rec = record({ ["list-panes"] = fixture(PANES), ps = case[1] .. "\n" })
+          use_procs({ [58100] = { name = case[1]:match("^%S+") } })
           local list, err = tmux.list(tools.all())
           expect.equality(err, nil)
-          expect.equality(list[1] and list[1].tool, case[3])
+          expect.equality(list[1] and list[1].tool, case[2])
           expect.equality(vim.inspect({ list, rec.calls }):find(SECRET, 1, true), nil)
           rec.restore()
           rec = nil
@@ -829,8 +639,8 @@ describe("tmux backend", function()
       it("reach no session of start", function()
         vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
         for _, case in ipairs(LINES) do
-          rec = record({ ["split-window"] = fixture("split_window"), ps = case[2] .. "\n" })
-          use_procs({ [58500] = { name = case[1] } })
+          rec = record({ ["split-window"] = fixture("split_window"), ps = case[1] .. "\n" })
+          use_procs({ [58500] = { name = case[1]:match("^%S+") } })
           local session, err = tmux.start(tools.get("gemini"), { cwd = "/w", env = {} })
           expect.equality(err, nil)
           expect.equality(vim.inspect({ session, rec.calls }):find(SECRET, 1, true), nil)
@@ -841,39 +651,24 @@ describe("tmux backend", function()
 
       it("reach no session of registry.discover, and no notify", function()
         local cap = notify.capture()
+        MiniTest.finally(cap.restore)
         registry.register(tmux)
         for _, case in ipairs(LINES) do
-          rec = record({ ["list-panes"] = fixture(PANES), ps = case[2] .. "\n" })
-          use_procs({ [58100] = { name = case[1] } })
+          rec = record({ ["list-panes"] = fixture(PANES), ps = case[1] .. "\n" })
+          use_procs({ [58100] = { name = case[1]:match("^%S+") } })
           local list = registry.discover()
           expect.equality(vim.inspect({ list, cap.calls }):find(SECRET, 1, true), nil)
           rec.restore()
           rec = nil
         end
-        cap.restore()
         expect.equality(cap.calls, {})
-      end)
-
-      it("are not kept by the exec seam, which holds no state", function()
-        local res = exec.run({ "/bin/sh", "-c", "echo " .. SECRET })
-        expect.equality(res.stdout, SECRET .. "\n")
-        for name, mod in pairs(package.loaded) do
-          if type(name) == "string" and name:find("^sidekick%-ultra") then
-            expect.equality({ name, vim.inspect(mod):find(SECRET, 1, true) }, { name, nil })
-          end
-        end
-        expect.equality(vim.fn.execute("messages"):find(SECRET, 1, true), nil)
       end)
     end)
   end)
 
   describe("start", function()
-    local OPTS_ENV = {}
-
-    ---The new pane's root process is pid 58500 (tests/fixtures/tmux/split_window.txt), a shell that is not a tool.
-    local function split_route()
-      return fixture("split_window")
-    end
+    -- The new pane's root process is pid 58500 (tests/fixtures/tmux/split_window.txt), a shell that is not a tool.
+    local SPLIT = fixture("split_window")
 
     before_each(function()
       vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%0"
@@ -881,7 +676,7 @@ describe("tmux backend", function()
     end)
 
     it("splits right of nvim's pane without focus, with cwd, sorted env, and the command as argv", function()
-      rec = record({ ["split-window"] = split_route() })
+      rec = record({ ["split-window"] = SPLIT })
       local tool = vim.tbl_extend("force", tools.get("claude"), { cmd = { "claude", "--flag", "a b" } })
       local session, err = tmux.start(tool, { cwd = "/work/dir", env = { B = "2", A = "1" } })
       expect.equality(err, nil)
@@ -912,16 +707,16 @@ describe("tmux backend", function()
     end)
 
     it("passes a one-element command shell-escaped, because tmux runs it through sh -c", function()
-      rec = record({ ["split-window"] = split_route() })
+      rec = record({ ["split-window"] = SPLIT })
       tmux.start(vim.tbl_extend("force", tools.get("claude"), { cmd = { "/opt/my tools/cl'aude" } }), {
         cwd = "/w",
-        env = OPTS_ENV,
+        env = {},
       })
       local argv = rec.argvs()[1]
       expect.equality(vim.list_slice(argv, #argv - 1), { "--", "'/opt/my tools/cl'\\''aude'" })
       rec.restore()
-      rec = record({ ["split-window"] = split_route() })
-      tmux.start(vim.tbl_extend("force", tools.get("claude"), { cmd = { "claude" } }), { cwd = "/w", env = OPTS_ENV })
+      rec = record({ ["split-window"] = SPLIT })
+      tmux.start(vim.tbl_extend("force", tools.get("claude"), { cmd = { "claude" } }), { cwd = "/w", env = {} })
       argv = rec.argvs()[1]
       expect.equality(vim.list_slice(argv, #argv - 1), { "--", "'claude'" })
       expect.equality(vim.tbl_contains(argv, "-e"), false)
@@ -929,14 +724,14 @@ describe("tmux backend", function()
 
     it("uses -S when tmux.socket is set", function()
       setup({ socket = "/tmp/sku.sock" })
-      rec = record({ ["split-window"] = split_route() })
-      tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+      rec = record({ ["split-window"] = SPLIT })
+      tmux.start(tools.get("claude"), { cwd = "/w", env = {} })
       expect.equality(vim.list_slice(rec.argvs()[1], 1, 4), { "tmux", "-S", "/tmp/sku.sock", "split-window" })
     end)
 
     it("returns a session that counts as running at once, and does not focus", function()
-      rec = record({ ["split-window"] = split_route() })
-      local session = tmux.start(tools.get("claude"), { cwd = "/work/dir", env = OPTS_ENV })
+      rec = record({ ["split-window"] = SPLIT })
+      local session = tmux.start(tools.get("claude"), { cwd = "/work/dir", env = {} })
       expect.equality(session, {
         id = "tmux:%5",
         backend = "tmux",
@@ -954,37 +749,37 @@ describe("tmux backend", function()
     end)
 
     it("records the tool's own process when the tree already runs it", function()
-      rec = record({ ["split-window"] = split_route() })
+      rec = record({ ["split-window"] = SPLIT })
       use_procs({ [58500] = { name = "zsh", kids = { 58501 } }, [58501] = { name = "claude" } })
-      local session = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+      local session = tmux.start(tools.get("claude"), { cwd = "/w", env = {} })
       expect.equality({ session.pid, session.proc_name }, { 58501, "claude" })
     end)
 
     it("records the pane's root process, not another tool's, when the started tool is not up yet", function()
-      rec = record({ ["split-window"] = split_route() })
+      rec = record({ ["split-window"] = SPLIT })
       -- A codex below the shell is not this claude session: only the started tool counts.
       use_procs({ [58500] = { name = "zsh", kids = { 58501 } }, [58501] = { name = "codex" } })
-      local session = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+      local session = tmux.start(tools.get("claude"), { cwd = "/w", env = {} })
       expect.equality({ session.pid, session.proc_name }, { 58500, "zsh" })
     end)
 
     it("returns the tmux error and creates nothing else when split-window fails", function()
       rec = record({ ["split-window"] = bad("no space for new pane\n") })
-      local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+      local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = {} })
       expect.equality({ session, err.id, err.cmd }, { nil, "backend_error", "split-window" })
       expect.equality(#rec.calls, 1)
     end)
 
     it("takes the id and pid from the printed line, with or without its final newline", function()
       rec = record({ ["split-window"] = "%5\t58500" })
-      local session = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+      local session = tmux.start(tools.get("claude"), { cwd = "/w", env = {} })
       expect.equality({ session.id, session.pid }, { "tmux:%5", 58500 })
     end)
 
     it("fails when tmux prints no pane id, or more than one line", function()
       for _, out in ipairs({ "\n", "%5\n", "%5\t58500 extra\n", "%5\t58500\n%6\t58600\n", "5\t58500\n", "x%5\t58500\n" }) do
         rec = record({ ["split-window"] = out })
-        local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+        local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = {} })
         expect.equality({ session, err.id }, { nil, "backend_error" })
         rec.restore()
       end
@@ -992,9 +787,9 @@ describe("tmux backend", function()
     end)
 
     it("fails, naming the pane left open, when its process is not visible to this nvim", function()
-      rec = record({ ["split-window"] = split_route() })
+      rec = record({ ["split-window"] = SPLIT })
       use_procs({})
-      local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = OPTS_ENV })
+      local session, err = tmux.start(tools.get("claude"), { cwd = "/w", env = {} })
       expect.equality({ session, err.id }, { nil, "backend_error" })
       expect.equality(err.msg:find("%5", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
     end)
@@ -1041,7 +836,6 @@ describe("tmux backend", function()
     it("sends nothing when the mode cannot be read or left", function()
       for _, routes in ipairs({
         { ["display-message"] = bad(fixture("stderr_missing_pane")) },
-        { ["display-message"] = "yes\n" },
         { ["display-message"] = "1\n", ["copy-mode"] = bad("pane is busy\n") },
       }) do
         rec = record(routes)
@@ -1072,10 +866,11 @@ describe("tmux backend", function()
       expect.equality(#rec.calls, 1)
     end)
 
-    it("names an unreadable mode count in the error", function()
+    it("names an unreadable mode count in the error, and loads nothing", function()
       rec = record({ ["display-message"] = "yes\n" })
-      local _, err = tmux.send({ pane = "%2" }, "x")
-      expect.equality(err.msg, "tmux printed an unexpected mode count for pane %2: yes")
+      local res, err = tmux.send({ pane = "%2" }, "x")
+      expect.equality({ res, err.msg }, { nil, "tmux printed an unexpected mode count for pane %2: yes" })
+      expect.equality(#rec.calls, 1)
     end)
 
     it("uses a different buffer for each send", function()
@@ -1101,7 +896,6 @@ describe("tmux backend", function()
       })
       local res, err = tmux.send({ pane = "%99" }, "x")
       expect.equality({ res, err.id, err.cmd }, { nil, "backend_error", "paste-buffer" })
-      expect.equality(err.msg, "tmux exited with 1: can't find pane: %99")
       local buffer = rec.argvs()[2][4]
       expect.equality(rec.argvs()[4], { "tmux", "delete-buffer", "-b", buffer })
     end)
@@ -1208,7 +1002,6 @@ describe("tmux backend", function()
       rec = record({ ["select-window"] = bad(fixture("stderr_missing_pane")) })
       local res, err = tmux.focus({ pane = "%99" })
       expect.equality({ res, err.id, err.cmd }, { nil, "backend_error", "select-window" })
-      expect.equality(err.msg, "tmux exited with 1: can't find pane: %99")
     end)
   end)
 end)

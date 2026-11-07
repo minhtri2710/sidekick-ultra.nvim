@@ -591,6 +591,7 @@ local function run()
       by_id["terminal_" .. pane.id] = pane
     end
     check("start left the new pane unfocused", focused[session.pane] == false, focused)
+    check("start left nvim's pane focused", focused["terminal_" .. nvim_pane] == true, focused)
     local new_pane, own_pane = by_id[session.pane], by_id["terminal_" .. nvim_pane]
     check("the new pane is in nvim's tab", new_pane ~= nil and own_pane ~= nil and new_pane.tab_id == own_pane.tab_id, { new_pane and new_pane.tab_id, own_pane and own_pane.tab_id })
     check("the new pane is right of nvim's pane", new_pane ~= nil and own_pane ~= nil and new_pane.pane_x > own_pane.pane_x, { new_pane and new_pane.pane_x, own_pane and own_pane.pane_x })

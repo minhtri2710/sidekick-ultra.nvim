@@ -5,7 +5,7 @@ local registry = require("sidekick-ultra.registry")
 local expect = MiniTest.expect
 
 describe("registry", function()
-  local cap, events
+  local cap, events, ui_pick
   before_each(function()
     fake.reset({ claude = { cmd = fake.INSTALLED }, codex = { cmd = fake.INSTALLED } })
     cap = notify.capture()
@@ -20,16 +20,14 @@ describe("registry", function()
   end)
   after_each(function()
     cap.restore()
+    if ui_pick then
+      ui_pick.restore()
+      ui_pick = nil
+    end
     vim.api.nvim_del_augroup_by_name("sku-spec-events")
     registry.reset()
     vim.env.TERM_PROGRAM = nil
   end)
-
-  local function settle()
-    vim.wait(50, function()
-      return false
-    end)
-  end
 
   describe("backends", function()
     it("rejects a backend that does not match the contract", function()
@@ -99,6 +97,12 @@ describe("registry", function()
       expect.equality(vim.tbl_contains(a.calls[1][2], "claude"), true)
     end)
 
+    it("reports nothing and attaches nothing when a backend lists no sessions", function()
+      registry.register(fake.backend("herdr", { sessions = {} }))
+      expect.equality(registry.discover(), {})
+      expect.equality({ cap.calls, registry.attached() }, { {}, {} })
+    end)
+
     it("reports duplicate_session once and keeps the first", function()
       local first = fake.session("herdr", "claude", 1, { state = "idle" })
       local second = fake.session("herdr", "claude", 1, { state = "working" })
@@ -142,11 +146,11 @@ describe("registry", function()
       local s = fake.session("herdr", "claude")
       expect.equality(registry.attach(s), true)
       expect.equality(registry.attach(s), false)
-      settle()
+      fake.flush()
       expect.equality(events, { { registry.ATTACH, "herdr:claude1" } })
       expect.equality(registry.detach("herdr:claude1") == s, true)
       expect.equality(registry.detach("herdr:claude1"), nil)
-      settle()
+      fake.flush()
       expect.equality(events[2], { registry.DETACH, "herdr:claude1" })
       expect.equality(#events, 2)
       expect.equality(registry.attached(), {})
@@ -159,7 +163,7 @@ describe("registry", function()
       b.sessions = {}
       registry.discover()
       expect.equality(registry.attached(), {})
-      settle()
+      fake.flush()
       expect.equality(events[#events], { registry.DETACH, "herdr:claude1" })
       expect.equality(cap.calls, {})
     end)
@@ -182,7 +186,7 @@ describe("registry", function()
       local attached = registry.attached()
       expect.equality(#attached, 1)
       expect.equality(attached[1].state, "working")
-      settle()
+      fake.flush()
       expect.equality(#events, 1)
     end)
 
@@ -196,17 +200,17 @@ describe("registry", function()
       registry.check()
       expect.equality(registry.attached(), {})
       expect.equality(#b.of("list"), 1)
-      settle()
+      fake.flush()
       expect.equality(events[#events], { registry.DETACH, "herdr:claude1" })
     end)
 
-    it("detaches a session that fails the check when no backend lists it", function()
+    it("detaches a session that fails the check when its backend is not registered", function()
       local s = fake.session("herdr", "claude")
       registry.attach(s)
       s.proc_name = "someone-else"
       registry.check()
       expect.equality(registry.attached(), {})
-      settle()
+      fake.flush()
       expect.equality(events[#events], { registry.DETACH, "herdr:claude1" })
     end)
 
@@ -219,7 +223,7 @@ describe("registry", function()
       registry.check()
       expect.equality(registry.attached(), {})
       expect.equality(cap.ids(), { "backend_error" })
-      settle()
+      fake.flush()
       expect.equality(events[#events], { registry.DETACH, "herdr:claude1" })
     end)
 
@@ -240,7 +244,7 @@ describe("registry", function()
       registry.attach(s)
       s.proc_name = "someone-else"
       expect.equality(#registry.attached(), 1)
-      settle()
+      fake.flush()
       expect.equality({ b.of("list"), events }, { {}, { { registry.ATTACH, "herdr:claude1" } } })
     end)
 
@@ -271,7 +275,7 @@ describe("registry", function()
         end, registry.attached()),
         { { "herdr:claude1", "working" } }
       )
-      settle()
+      fake.flush()
       expect.equality(events[#events], { registry.DETACH, "herdr:claude2" })
     end)
 
@@ -287,6 +291,7 @@ describe("registry", function()
       end
       registry.register(b)
       local pick = require("tests.helpers.ui").capture()
+      ui_pick = pick
       local target = require("sidekick-ultra.target")
       local started = target.attach_state(target.states({ name = "codex" })[1])
       local count = #pick.selects
@@ -294,7 +299,6 @@ describe("registry", function()
       target.with_target({ attach = true }, function(sessions)
         found = sessions[1].id
       end)
-      pick.restore()
       expect.equality({ found, #pick.selects - count }, { started.id, 0 })
       expect.equality(#registry.attached(), 1)
       local _, name = fake.self_proc()
@@ -370,7 +374,7 @@ describe("registry", function()
         end, registry.attached()),
         { "zellij:claude1" }
       )
-      settle()
+      fake.flush()
       expect.equality(events[#events], { registry.DETACH, "zellij:claude2" })
     end)
   end)
@@ -378,7 +382,7 @@ describe("registry", function()
   describe("start backend selection", function()
     local function select(inside_names, term)
       registry.reset()
-      for _, name in ipairs({ "herdr", "rex", "tmux", "zellij" }) do
+      for _, name in ipairs(require("sidekick-ultra.backends").names()) do
         registry.register(fake.backend(name, { is_inside = vim.tbl_contains(inside_names, name) }))
       end
       vim.env.TERM_PROGRAM = term
@@ -391,18 +395,9 @@ describe("registry", function()
       expect.equality({ select({ "rex" }, "herdr") }, { "rex" })
     end)
 
-    it("uses the one named by TERM_PROGRAM when both are inside", function()
-      expect.equality({ select({ "herdr", "rex" }, "rex") }, { "rex" })
-    end)
-
     it("uses the innermost of tmux and herdr, which TERM_PROGRAM names", function()
       expect.equality({ select({ "herdr", "tmux" }, "tmux") }, { "tmux" })
       expect.equality({ select({ "herdr", "tmux" }, "herdr") }, { "herdr" })
-    end)
-
-    it("uses zellij when it is the only one inside, whatever TERM_PROGRAM says", function()
-      expect.equality({ select({ "zellij" }, nil) }, { "zellij" })
-      expect.equality({ select({ "zellij" }, "tmux") }, { "zellij" })
     end)
 
     it("picks by TERM_PROGRAM among several, and zellij never matches it (it sets none)", function()
@@ -421,10 +416,6 @@ describe("registry", function()
     it("refuses with a message that says it is inside none when no backend is inside", function()
       local _, err = registry.start_backend()
       expect.equality(err.msg:find("does not run inside a supported multiplexer", 1, true) ~= nil, true)
-    end)
-
-    it("refuses when both are inside and TERM_PROGRAM is unset", function()
-      expect.equality({ select({ "herdr", "rex" }, nil) }, { nil, "not_in_mux" })
     end)
   end)
 

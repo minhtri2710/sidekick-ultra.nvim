@@ -50,7 +50,6 @@ local function capture()
   return snap
 end
 
----Run a backend method for a session; notify and return false on failure.
 ---@param session sidekick_ultra.Session
 ---@param method "send"|"submit"|"focus"
 ---@return boolean

@@ -8,8 +8,8 @@ local proc = require("sidekick-ultra.proc")
 ---@type sidekick_ultra.Backend
 local M = { name = "rex" }
 
----Where the Rex Beta app keeps its CLI. A field so specs can point it elsewhere.
-M.bundle_bin = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+---Where the Rex Beta app keeps its CLI.
+local BUNDLE_BIN = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
 
 ---@type { bin?: string, server?: string }
 local options = {}
@@ -33,8 +33,8 @@ function M.available()
   if ok then
     return ok, path, source
   end
-  if vim.fn.executable(M.bundle_bin) == 1 then
-    return true, M.bundle_bin, "bundle"
+  if vim.fn.executable(BUNDLE_BIN) == 1 then
+    return true, BUNDLE_BIN, "bundle"
   end
   return false
 end

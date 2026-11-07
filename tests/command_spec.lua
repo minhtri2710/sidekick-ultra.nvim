@@ -7,6 +7,10 @@ local expect = MiniTest.expect
 
 describe("command", function()
   describe("parse", function()
+    after_each(function()
+      vim.g.sku_command_ran = nil
+    end)
+
     ---@return string? sub, table|string result
     local function parse(line)
       local sub, res = command.parse(line)
@@ -60,7 +64,6 @@ describe("command", function()
       local sub, err = parse([[send {msg = (function() vim.g.sku_command_ran = true end)()}]])
       expect.equality({ sub, err }, { nil, "invalid_args" })
       expect.equality(vim.g.sku_command_ran, false)
-      vim.g.sku_command_ran = nil
     end)
 
     it("returns invalid_args for malformed arguments, naming them", function()

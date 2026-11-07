@@ -4,19 +4,27 @@ local watch = require("sidekick-ultra.watch")
 
 local expect = MiniTest.expect
 
+local flush = fake.flush
+
 local function wait_for(cond)
   return vim.wait(3000, cond, 20)
 end
 
----Run the events attach and detach scheduled: callbacks run in the order they were queued.
-local function flush()
-  local done = false
-  vim.schedule(function()
-    done = true
-  end)
-  wait_for(function()
-    return done
-  end)
+---Write the file, and again every second until `cond` holds. A change made right after a watcher starts can be
+---missed by the operating system's file events, so one write is not enough to wait on. The pause is longer than the
+---watcher's debounce, so a rewrite never postpones the reload it is waiting for.
+---@param path string
+---@param cond fun(): boolean
+local function write_until(path, cond)
+  local deadline, n = vim.uv.now() + 5000, 0
+  while vim.uv.now() < deadline do
+    n = n + 1
+    vim.fn.writefile({ "changed " .. n, "more" }, path)
+    if vim.wait(1000, cond, 10) then
+      return true
+    end
+  end
+  return false
 end
 
 describe("watch", function()
@@ -113,13 +121,13 @@ describe("watch", function()
     open(file_a)
     registry.attach(fake.session("herdr", "claude"))
     flush()
-    vim.fn.writefile({ "changed by the agent", "second line" }, file_a)
     expect.equality(
-      wait_for(function()
-        return vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] == "changed by the agent"
+      write_until(file_a, function()
+        return vim.api.nvim_buf_get_lines(0, 0, 1, false)[1] ~= "one"
       end),
       true
     )
+    expect.equality(vim.startswith(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1], "changed "), true)
   end)
 
   it("does not reload after the last detach", function()
@@ -128,8 +136,19 @@ describe("watch", function()
     flush()
     registry.detach("herdr:claude1")
     flush()
-    vim.fn.writefile({ "changed after detach", "more" }, file_a)
-    vim.wait(400, function()
+    -- An observer of its own proves the file events do arrive; only then does "no reload" mean anything.
+    local seen = false
+    local observer = assert(vim.uv.new_fs_event())
+    observer:start(dir_a, {}, function()
+      seen = true
+    end)
+    local delivered = write_until(file_a, function()
+      return seen
+    end)
+    observer:close()
+    expect.equality(delivered, true)
+    -- A reload would follow the event by one debounce period (100 ms); 300 ms is three of them.
+    vim.wait(300, function()
       return false
     end)
     expect.equality(vim.api.nvim_buf_get_lines(0, 0, 1, false)[1], "one")

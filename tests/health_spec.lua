@@ -61,6 +61,9 @@ describe("health", function()
       package.loaded["sidekick-ultra.backends." .. name] = loaded[name]
     end
     exec.run = orig_run
+    for _, name in ipairs(NAMES) do
+      package.preload["sidekick-ultra.backends." .. name] = nil
+    end
     vim.env.HERDR_SOCKET_PATH = nil
   end)
 
@@ -71,8 +74,17 @@ describe("health", function()
   end)
 
   it("reports disabled backends without loading them", function()
+    for _, name in ipairs(NAMES) do
+      package.loaded["sidekick-ultra.backends." .. name] = nil
+      package.preload["sidekick-ultra.backends." .. name] = function()
+        error(name .. " must not be required")
+      end
+    end
     fake.reset()
     check()
+    for _, name in ipairs(NAMES) do
+      expect.equality(package.loaded["sidekick-ultra.backends." .. name], nil)
+    end
     expect.equality(has("info", "herdr: disabled"), true)
     expect.equality(has("info", "rex: disabled"), true)
     expect.equality(has("info", "tmux: disabled"), true)
@@ -111,6 +123,18 @@ describe("health", function()
     expect.equality(has("info", "/secret/path"), false)
     expect.equality(has("info", "rex: rex.server is not configured"), true)
     expect.equality(has("info", "start is unavailable"), true)
+  end)
+
+  it("says only that the binary is not found when rex is missing and rex.bin is not set", function()
+    local rex = fake.backend("rex")
+    rex.available = function()
+      return false
+    end
+    package.loaded["sidekick-ultra.backends.rex"] = rex
+    fake.reset(nil, { rex = { enabled = true } })
+    check()
+    expect.equality(has("error", "rex: binary not found"), true)
+    expect.equality(has("error", "rex.bin"), false)
   end)
 
   it("names rex.bin and its value when the configured binary is missing", function()
@@ -235,13 +259,20 @@ describe("health", function()
       vim.env.TERM_PROGRAM = term
     end)
 
+    ---The reason the registry gives for having no start backend, which the row must repeat.
+    local function unavailable_reason()
+      local backend, err = require("sidekick-ultra.registry").start_backend()
+      assert(not backend, "a start backend was found")
+      return err.msg
+    end
+
     it("is unavailable when nvim runs inside two muxes and TERM_PROGRAM names neither", function()
       muxes(true, true)
       vim.env.TERM_PROGRAM = "iTerm.app"
       fake.reset(nil, { tmux = { enabled = true }, zellij = { enabled = true } })
       check()
       expect.equality(has("ok", "start is available"), false)
-      expect.equality(has("info", "start is unavailable"), true)
+      expect.equality(has("info", "start is unavailable: " .. unavailable_reason()), true)
     end)
 
     it("names the one backend start uses when nvim runs inside two muxes and TERM_PROGRAM names one", function()
@@ -262,7 +293,7 @@ describe("health", function()
       fake.reset(nil, { tmux = { enabled = true } })
       check()
       expect.equality(has("ok", "start is available"), false)
-      expect.equality(has("info", "start is unavailable"), true)
+      expect.equality(has("info", "start is unavailable: " .. unavailable_reason()), true)
     end)
 
     it("is unavailable before setup() ran, as no backend is registered", function()
@@ -271,7 +302,7 @@ describe("health", function()
       require("sidekick-ultra.registry").reset()
       check()
       expect.equality(has("ok", "start is available"), false)
-      expect.equality(has("info", "start is unavailable"), true)
+      expect.equality(has("info", "start is unavailable: " .. unavailable_reason()), true)
     end)
   end)
 

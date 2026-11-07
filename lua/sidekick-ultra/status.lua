@@ -33,7 +33,6 @@ function M.cli()
   return items
 end
 
----Start from an empty cache and follow the attach and detach events.
 function M.setup()
   items = {}
   refreshed_at = nil

@@ -62,8 +62,19 @@ describe("picker", function()
     local select = open({ diagnostics_all = "Can you help me fix these diagnostics?\n{diagnostics_all}" })
     expect.equality(
       select.opts.format_item(select.items[1]),
-      ("%-18s %s"):format("diagnostics_all", "Can you help me fix these diagnostics?\\n{diagnostics_all}")
+      "diagnostics_all    Can you help me fix these diagnostics?\\n{diagnostics_all}"
     )
+  end)
+
+  it("labels a table prompt with its msg and a function prompt as <function>", function()
+    fake.reset({}, { prompts = { tabled = { msg = "from table" }, dyn = function() end } })
+    picker.select(
+      { { name = "dyn", preview = { text = "" } }, { name = "tabled", preview = { text = "" } } },
+      function() end
+    )
+    local select = pick.selects[#pick.selects]
+    expect.equality(select.opts.format_item(select.items[1]):match("^dyn%s+(.*)$"), "<function>")
+    expect.equality(select.opts.format_item(select.items[2]):match("^tabled%s+(.*)$"), "from table")
   end)
 
   it("passes the user's choice on", function()
