@@ -1,6 +1,7 @@
 ---The rex backend: sessions are rex blocks. Every command is `<bin> --autostart=false [-S <server>] <subcommand>`.
 ---The shapes were checked against a live rex 0.0.1793377904-ge6592f (Rex Beta build 1696). What is still
 ---unverified is listed in tests/fixtures/rex/UNVERIFIED.txt.
+local contract = require("sidekick-ultra.backend")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
 local proc = require("sidekick-ultra.proc")
@@ -13,7 +14,6 @@ local BUNDLE_BIN = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/C
 
 ---@type { bin?: string, server?: string }
 local options = {}
----The binary `available()` found when `setup()` ran; every command runs it.
 ---@type string?
 local bin_path
 
@@ -45,15 +45,10 @@ function M.setup(opts)
   bin_path = select(2, M.available())
 end
 
+---REX_SESSION and REX_BLOCK also reach processes that do not run in rex (the paseo daemon passes them to every agent
+---it starts), so `TERM_PROGRAM` is part of the test.
 function M.inside()
   return vim.env.TERM_PROGRAM == "rex" and (vim.env.REX_SESSION or "") ~= "" and (vim.env.REX_BLOCK or "") ~= ""
-end
-
----@param label string
----@param msg string
----@return sidekick_ultra.Error
-local function failure(label, msg)
-  return errors.new("backend_error", msg, { backend = M.name, cmd = label })
 end
 
 ---The full argv for a subcommand. Never relies on REX_SERVER (rex ignored it in firstmate's runs).
@@ -65,26 +60,6 @@ local function command(...)
     vim.list_extend(argv, { "-S", options.server })
   end
   return vim.list_extend(argv, { ... })
-end
-
----@param label string subcommand label for errors
----@param ... string
----@return any? decoded
----@return sidekick_ultra.Error? err
-local function json(label, ...)
-  return exec.json(command(...), { backend = M.name, cmd = label })
-end
-
----@param label string
----@param ... string
----@return true? ok
----@return sidekick_ultra.Error? err
-local function run(label, ...)
-  local _, err = exec.check(command(...), { backend = M.name, cmd = label })
-  if err then
-    return nil, err
-  end
-  return true
 end
 
 ---`parent[key]` as a list: absent or null is empty, a non-list is nil (malformed).
@@ -134,13 +109,13 @@ end
 ---@return string[]? ids
 ---@return sidekick_ultra.Error? err
 local function block_ids(sid)
-  local view, err = json("session.view", "api", "call", "-s", sid, "session.view")
+  local view, err = exec.json(command("api", "call", "-s", sid, "session.view"))
   if not view then
     return nil, err
   end
   local ids = view_blocks(view)
   if not ids then
-    return nil, failure("session.view", "rex printed an unexpected session view")
+    return nil, errors.new("backend_error", "rex printed an unexpected session view")
   end
   return ids
 end
@@ -152,19 +127,19 @@ end
 ---@return table? fg
 ---@return sidekick_ultra.Error? err
 local function foreground(sid, bid)
-  local data, err = json("process", "block", "call", "-s", sid, "-b", bid, "process")
+  local data, err = exec.json(command("block", "call", "-s", sid, "-b", bid, "process"))
   if not data then
     return nil, err
   end
   if type(data) ~= "table" then
-    return nil, failure("process", "rex printed an unexpected process view")
+    return nil, errors.new("backend_error", "rex printed an unexpected process view")
   end
   local fg = data.foreground
   if fg == nil then
     return nil
   end
   if type(fg) ~= "table" or type(fg.pid) ~= "number" then
-    return nil, failure("process", "rex printed an unexpected process view")
+    return nil, errors.new("backend_error", "rex printed an unexpected process view")
   end
   return { pid = fg.pid, name = fg.name, argv0 = fg.argv0, cwd = fg.cwd }
 end
@@ -184,11 +159,10 @@ local function tool_of(configured, fg)
   if type(fg.name) == "string" then
     table.insert(words, fg.name)
   end
-  return proc.tool_of(M.name, configured, fg.pid, words)
+  return proc.tool_of(configured, fg.pid, words)
 end
 
----Session record for a block whose foreground process runs `tool_name`. Nil (not running here) when the pid is not
----visible to this nvim.
+---Nil (not running here) when the pid is not visible to this nvim.
 ---@param tool_name string
 ---@param sid string
 ---@param bid string
@@ -201,10 +175,10 @@ local function session_of(tool_name, sid, bid, fg)
     return nil
   end
   if type(fg.cwd) ~= "string" or fg.cwd == "" then
-    return nil, failure("process", "rex printed no working directory for block " .. bid)
+    return nil, errors.new("backend_error", "rex printed no working directory for block " .. bid)
   end
   return {
-    id = "rex:" .. bid,
+    id = M.name .. ":" .. bid,
     backend = M.name,
     tool = tool_name,
     cwd = fg.cwd,
@@ -219,7 +193,7 @@ end
 ---through `rex do` (one Lua script, one call) when listing gets slow.
 ---@param configured table<string, sidekick_ultra.Tool>
 function M.list(configured)
-  local listing, err = json("ls", "ls", "--json")
+  local listing, err = exec.json(command("ls", "--json"))
   if not listing then
     -- Exit 4 is "server unreachable": no server, no sessions.
     if err.code == 4 then
@@ -229,12 +203,12 @@ function M.list(configured)
   end
   local sessions = children(listing, "sessions")
   if not sessions then
-    return nil, failure("ls", "rex printed an unexpected session list")
+    return nil, errors.new("backend_error", "rex printed an unexpected session list")
   end
   local ret = {}
   for _, entry in ipairs(sessions) do
     if type(entry) ~= "table" or type(entry.session_id) ~= "string" then
-      return nil, failure("ls", "rex printed an unexpected session list")
+      return nil, errors.new("backend_error", "rex printed an unexpected session list")
     end
     local ids, ids_err = block_ids(entry.session_id)
     if not ids then
@@ -274,91 +248,83 @@ function M.start(tool, opts)
   local args = { "split", "-s", sid, "-b", anchor, "--split=right", "-c", opts.cwd, "--focus=false", "--json", "--" }
   vim.list_extend(args, exec.env_prefix(opts.env))
   vim.list_extend(args, tool.cmd)
-  local created, err = json("split", unpack(args))
+  local created, err = exec.json(command(unpack(args)))
   if not created then
     return nil, err
   end
   local ids = children(created, "block_ids")
   local bid = ids and ids[1]
   if type(bid) ~= "string" then
-    return nil, failure("split", "rex printed no id for the new block")
+    return nil, errors.new("backend_error", "rex printed no id for the new block")
   end
 
-  -- The block is "running" at once: record whatever its foreground is now (the login shell or the command). The next
-  -- discovery replaces this record with the tool's own pid, matched by id.
   local fg, fg_err = foreground(sid, bid)
   if fg_err then
     return nil, fg_err
   end
   if not fg then
-    return nil, failure("split", ("block %s has no foreground process; it was left open"):format(bid))
+    return nil, errors.new("backend_error", ("block %s has no foreground process; it was left open"):format(bid))
   end
   local session, session_err = session_of(tool.name, sid, bid, fg)
   if not session and not session_err then
-    return nil, failure("split", ("block %s is not visible to this nvim; it was left open"):format(bid))
+    return nil, errors.new("backend_error", ("block %s is not visible to this nvim; it was left open"):format(bid))
   end
   return session, session_err
 end
 
----Refuse when a `blocked` program-status record is owned by the session's foreground pid, or when the state cannot
----be read. Firstmate also accepts records owned by an ancestor of the foreground; v1 records only the foreground pid.
+---Whether a `blocked` program-status record is owned by the session's foreground pid. Firstmate also accepts records
+---owned by an ancestor of the foreground; v1 records only the foreground pid.
 ---@param session sidekick_ultra.Session
----@return true? ok
+---@return boolean? blocked
 ---@return sidekick_ultra.Error? err
-local function guard(session)
+local function is_blocked(session)
   local data, err =
-    json("program_status", "block", "call", "-s", session.session_id, "-b", session.block_id, "program_status")
+    exec.json(command("block", "call", "-s", session.session_id, "-b", session.block_id, "program_status"))
   if not data then
-    return nil,
-      errors.new("status_unreadable", "cannot read the state of " .. session.id .. ": " .. err.msg, {
-        backend = M.name,
-        cmd = "program_status",
-        code = err.code,
-      })
+    return nil, err
   end
+  local unexpected = errors.new("backend_error", "rex printed an unexpected program status")
   local records = children(data, "records")
-  local function unreadable()
-    return errors.new(
-      "status_unreadable",
-      "rex printed an unexpected state for " .. session.id,
-      { backend = M.name, cmd = "program_status" }
-    )
-  end
   if not records then
-    return nil, unreadable()
+    return nil, unexpected
   end
+  local blocked = false
   for _, record in ipairs(records) do
     if type(record) ~= "table" or type(record.state) ~= "string" then
-      return nil, unreadable()
+      return nil, unexpected
     end
-  end
-  for _, record in ipairs(records) do
     if record.state == "blocked" and type(record.owner) == "table" and record.owner.pid == session.pid then
-      return nil, errors.new("session_blocked", session.id .. " is waiting for an answer", { backend = M.name })
+      blocked = true
     end
   end
-  return true
+  return blocked
 end
 
 ---@param session sidekick_ultra.Session
 ---@param text string
+---@return sidekick_ultra.ExecResult? ok
+---@return sidekick_ultra.Error? err
 function M.send(session, text)
-  local ok, err = guard(session)
+  local ok, err = contract.guard_send(session, is_blocked)
   if not ok then
     return nil, err
   end
-  return run("send", "send", "-s", session.session_id, "-b", session.block_id, "--", text)
+  return exec.check(command("send", "-s", session.session_id, "-b", session.block_id, "--", text))
 end
 
 ---@param session sidekick_ultra.Session
+---@return sidekick_ultra.ExecResult? ok
+---@return sidekick_ultra.Error? err
 function M.submit(session)
-  return run("send-key", "send-key", "-s", session.session_id, "-b", session.block_id, "enter")
+  return exec.check(command("send-key", "-s", session.session_id, "-b", session.block_id, "enter"))
 end
 
 ---`rex focus` takes a block or window as its target (help text of the installed binary).
 ---@param session sidekick_ultra.Session
+---@return sidekick_ultra.ExecResult? ok
+---@return sidekick_ultra.Error? err
 function M.focus(session)
-  return run("focus", "focus", "-s", session.session_id, session.block_id)
+  return exec.check(command("focus", "-s", session.session_id, session.block_id))
 end
 
 return M

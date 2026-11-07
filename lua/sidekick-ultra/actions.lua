@@ -61,9 +61,7 @@ end
 local function call(session, method, ...)
   local backend = registry.backend(session.backend)
   if not backend then
-    errors.notify(
-      errors.new("backend_error", "backend not registered: " .. session.backend, { backend = session.backend })
-    )
+    errors.notify(errors.new("backend_error", "backend not registered: " .. session.backend))
     return false
   end
   local ok, err = backend[method](session, ...)
@@ -82,12 +80,12 @@ local function deliver(state, segments, submit)
   local session = state.session
   local text = location.format(segments, state.tool.location)
   if state.tool.mux_focus then
-    if not call(session, "send", FOCUS_IN) then
+    if not call(session, "send", FOCUS_IN, state.tool) then
       return false
     end
     vim.uv.sleep(FOCUS_WAIT_MS)
   end
-  if not call(session, "send", text == "\n" and text or text .. "\n") then
+  if not call(session, "send", text == "\n" and text or text .. "\n", state.tool) then
     return false
   end
   return not submit or call(session, "submit")

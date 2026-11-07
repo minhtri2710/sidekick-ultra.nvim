@@ -185,9 +185,7 @@ end
 local function usable(state)
   local session = state.session
   if session and not registry.backend(session.backend) then
-    errors.notify(
-      errors.new("backend_error", "backend not registered: " .. session.backend, { backend = session.backend })
-    )
+    errors.notify(errors.new("backend_error", "backend not registered: " .. session.backend))
     return false
   end
   if not tools.get(state.name) then

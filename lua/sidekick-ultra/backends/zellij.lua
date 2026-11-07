@@ -7,7 +7,6 @@ local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
 local proc = require("sidekick-ultra.proc")
 local procname = require("sidekick-ultra.procname")
-local tools = require("sidekick-ultra.tools")
 
 ---@type sidekick_ultra.Backend
 local M = { name = "zellij" }
@@ -17,13 +16,11 @@ local M = { name = "zellij" }
 local START_WAIT_MS = 2000
 local START_STEP_MS = 50
 
----Milliseconds on a monotonic clock.
 ---@return number
 local function now()
   return vim.uv.hrtime() / 1e6
 end
 
----The binary `available()` found when `setup()` ran; every command runs it.
 ---@type string?
 local bin_path
 
@@ -38,38 +35,30 @@ function M.setup()
   bin_path = select(2, M.available())
 end
 
+---`start` needs the session name: `new-pane` runs in nvim's own session.
 function M.inside()
-  return (vim.env.ZELLIJ or "") ~= "" and (vim.env.ZELLIJ_PANE_ID or "") ~= ""
+  return (vim.env.ZELLIJ or "") ~= ""
+    and (vim.env.ZELLIJ_PANE_ID or "") ~= ""
+    and (vim.env.ZELLIJ_SESSION_NAME or "") ~= ""
 end
 
----@param label string
----@param msg string
----@return sidekick_ultra.Error
-local function failure(label, msg)
-  return errors.new("backend_error", msg, { backend = M.name, cmd = label })
-end
-
----@param label string subcommand label for errors
 ---@param session? string
 ---@param ... string
 ---@return string[] argv
----@return sidekick_ultra.ExecOpts opts
-local function command(label, session, ...)
+local function command(session, ...)
   local argv = { bin_path }
   if session then
     vim.list_extend(argv, { "--session", session })
   end
-  vim.list_extend(argv, { ... })
-  return argv, { backend = M.name, cmd = label }
+  return vim.list_extend(argv, { ... })
 end
 
----@param label string
 ---@param session string
 ---@param ... string
 ---@return table? res
 ---@return sidekick_ultra.Error? err
-local function run(label, session, ...)
-  return exec.check(command(label, session, ...))
+local function run(session, ...)
+  return exec.check(command(session, ...))
 end
 
 ---The program of a `pane_command`: the basename of its first word, or the script's name when that word is a node or
@@ -86,29 +75,24 @@ end
 ---@param session string
 ---@return table[]? panes
 ---@return sidekick_ultra.Error? err
----@return boolean? silent true when zellij exited 0 and printed nothing (no answer, worth asking again)
+---@return boolean? silent true when zellij exited 0 and printed nothing
 local function panes_of(session)
-  local argv, opts = command("list-panes", session, "action", "list-panes", "--all", "--json", "--command", "--state")
-  local res, err = exec.check(argv, opts)
-  if not res then
+  local decoded, err = exec.json(command(session, "action", "list-panes", "--all", "--json", "--command", "--state"))
+  if err then
+    -- zellij can exit 0 with nothing printed (the server gives up after 1 s). That is no answer, not "no panes": an
+    -- empty list is the text `[]`.
+    if err.empty then
+      return nil, errors.new("backend_error", "zellij did not answer: list-panes printed nothing"), true
+    end
     return nil, err
   end
-  -- zellij can exit 0 with nothing printed (the server gives up after 1 s). That is no answer, not "no panes": an
-  -- empty list is the text `[]`.
-  if vim.trim(res.stdout) == "" then
-    return nil, failure("list-panes", "zellij did not answer: list-panes printed nothing"), true
-  end
-  local ok, decoded = exec.decode(res.stdout)
-  if not ok then
-    return nil, failure("list-panes", "zellij printed invalid JSON")
-  end
   if type(decoded) ~= "table" or not vim.islist(decoded) then
-    return nil, failure("list-panes", "zellij printed an unexpected pane list")
+    return nil, errors.new("backend_error", "zellij printed an unexpected pane list")
   end
   local ret = {}
   for _, pane in ipairs(decoded) do
     if type(pane) ~= "table" or type(pane.id) ~= "number" then
-      return nil, failure("list-panes", "zellij printed an unexpected pane list")
+      return nil, errors.new("backend_error", "zellij printed an unexpected pane list")
     end
     if pane.is_plugin ~= true and pane.exited ~= true then
       table.insert(ret, pane)
@@ -134,10 +118,13 @@ local function session_of(tool_name, session, pane, program)
   local name = "terminal_" .. pane.id
   if type(pane.pane_cwd) ~= "string" or pane.pane_cwd == "" then
     return nil,
-      failure("list-panes", ("zellij printed no working directory for pane %s of session %s"):format(name, session))
+      errors.new(
+        "backend_error",
+        ("zellij printed no working directory for pane %s of session %s"):format(name, session)
+      )
   end
   return {
-    id = ("zellij:%s:%s"):format(session, name),
+    id = ("%s:%s:%s"):format(M.name, session, name),
     backend = M.name,
     tool = tool_name,
     cwd = pane.pane_cwd,
@@ -150,21 +137,17 @@ end
 ---@return string[]? names
 ---@return sidekick_ultra.Error? err
 local function session_names()
-  local argv, opts = command("list-sessions", nil, "list-sessions", "-n", "-s")
-  local res, err = exec.run(argv, opts)
+  local res, err = exec.check(command(nil, "list-sessions", "-n", "-s"))
   if not res then
-    return nil, err
-  end
-  if res.code ~= 0 then
-    if res.stdout == "" and res.stderr:find("No active zellij sessions", 1, true) then
+    if (err.stderr or ""):find("No active zellij sessions", 1, true) then
       return {}
     end
-    return nil, exec.result_error(argv, res, opts)
+    return nil, err
   end
   -- A successful list-sessions with nothing printed is no answer either: "no session" is exit 1 with a message.
   local names = vim.split(vim.trim(res.stdout), "\n", { plain = true, trimempty = true })
   if #names == 0 then
-    return nil, failure("list-sessions", "zellij did not answer: list-sessions printed nothing")
+    return nil, errors.new("backend_error", "zellij did not answer: list-sessions printed nothing")
   end
   return names
 end
@@ -173,10 +156,9 @@ end
 ---sessions; batch them when listing gets slow.
 ---@param configured table<string, sidekick_ultra.Tool>
 function M.list(configured)
-  local own = M.inside() and vim.env.ZELLIJ_SESSION_NAME or ""
   local sessions, err
-  if own ~= "" then
-    sessions = { own }
+  if M.inside() then
+    sessions = { vim.env.ZELLIJ_SESSION_NAME }
   else
     sessions, err = session_names()
     if not sessions then
@@ -195,13 +177,18 @@ function M.list(configured)
     end
     for _, pane in ipairs(panes) do
       local program = program_of(pane)
-      local name = program and proc.find(configured, nil, { program })
-      if name then
-        local record, record_err = session_of(name, session, pane, program)
-        if not record then
-          return nil, record_err
+      if program then
+        local name, find_err = proc.find(configured, nil, { program })
+        if find_err then
+          return nil, find_err
         end
-        table.insert(ret, record)
+        if name then
+          local record, record_err = session_of(name, session, pane, program)
+          if not record then
+            return nil, record_err
+          end
+          table.insert(ret, record)
+        end
       end
     end
   end
@@ -211,13 +198,10 @@ end
 ---Whether the session's pane exists, has not exited, and its current program still satisfies the tool's `is_proc`.
 ---Not an equality with `proc_name`: the tool's `is_proc` decides.
 ---@param session sidekick_ultra.Session
----@return boolean? alive
+---@param tool sidekick_ultra.Tool
+---@return boolean? alive nil when it could not be told
 ---@return sidekick_ultra.Error? err
-local function alive(session)
-  local tool = tools.get(session.tool)
-  if not tool then
-    return false
-  end
+local function alive(session, tool)
   local panes, err = panes_of(session.zellij_session)
   if not panes then
     if session_gone(err) then
@@ -228,7 +212,10 @@ local function alive(session)
   for _, pane in ipairs(panes) do
     if "terminal_" .. pane.id == session.pane then
       local program = program_of(pane)
-      return program ~= nil and proc.matches(tool, nil, program)
+      if not program then
+        return false
+      end
+      return proc.matches(tool, nil, program)
     end
   end
   return false
@@ -236,26 +223,24 @@ end
 
 ---ponytail: one list-panes call per attached zellij session per liveness check (`registry.check`, run by the statusline
 ---refresh and before each action); batch per zellij session if that ever matters.
----A failing CLI call is not an answer: the session stays attached (a false here detaches it silently), as
+---A failing CLI call or `is_proc` is not an answer: the session stays attached (a false here detaches it silently), as
 ---`registry.discover` keeps the attached sessions of a backend that fails. The send guard, which shares `alive`, still
 ---refuses on an error.
 ---@param session sidekick_ultra.Session
+---@param tool sidekick_ultra.Tool
 ---@return boolean
-function M.is_running(session)
-  return alive(session) ~= false
+function M.is_running(session, tool)
+  return alive(session, tool) ~= false
 end
 
 ---Split a new pane to the right of nvim's own, without focus, running the tool. `new-pane` is placed relative to the
 ---pane that issued it (`ZELLIJ_PANE_ID`, nvim's). It has no env flag, so a non-empty `opts.env` goes in front of the
 ---command as `/usr/bin/env K=V`. It returns once the pane's program matches the tool (see the wait below), so the
----session is running at once. It does not focus the pane; `actions` does.
+---session is running at once.
 ---@param tool sidekick_ultra.Tool
 ---@param opts sidekick_ultra.StartOpts
 function M.start(tool, opts)
-  local session = vim.env.ZELLIJ_SESSION_NAME or ""
-  if session == "" then
-    return nil, failure("new-pane", "ZELLIJ_SESSION_NAME is not set")
-  end
+  local session = vim.env.ZELLIJ_SESSION_NAME
   local args = {
     "action",
     "new-pane",
@@ -270,7 +255,7 @@ function M.start(tool, opts)
   }
   vim.list_extend(args, exec.env_prefix(opts.env))
   vim.list_extend(args, tool.cmd)
-  local res, err = run("new-pane", session, unpack(args))
+  local res, err = run(session, unpack(args))
   if not res then
     return nil, err
   end
@@ -282,8 +267,8 @@ function M.start(tool, opts)
     -- tab/mod.rs). A slow server (it waits 1 s for the pane) can also print nothing for a pane it did create. The text
     -- is true in every case.
     return nil,
-      failure(
-        "new-pane",
+      errors.new(
+        "backend_error",
         (
           "zellij printed no id and probably created no pane: it creates none when there is no room in the tab beside "
           .. "nvim's pane, when floating panes are visible there, or when nvim's pane is floating; if it created one "
@@ -292,8 +277,7 @@ function M.start(tool, opts)
       )
   end
 
-  -- Return only once the pane shows the tool as its program, so the session is running at once: the env wrapper, a
-  -- shell or a script's interpreter show first. An empty answer is asked again within the bound.
+  -- The env wrapper, a shell or a script's interpreter show first. An empty answer is asked again within the bound.
   local deadline = now() + START_WAIT_MS
   local last_err
   while true do
@@ -315,9 +299,14 @@ function M.start(tool, opts)
       local program = seen and program_of(seen)
       if not program then
         return nil,
-          failure("new-pane", ("pane %s of session %s is not running; it was left open"):format(name, session))
+          errors.new("backend_error", ("pane %s of session %s is not running; it was left open"):format(name, session))
       end
-      if proc.matches(tool, nil, program) then
+      local matched, match_err = proc.matches(tool, nil, program)
+      if match_err then
+        return nil,
+          errors.new("backend_error", ("%s; pane %s of session %s was left open"):format(match_err.msg, name, session))
+      end
+      if matched then
         return session_of(tool.name, session, seen, program)
       end
     end
@@ -330,52 +319,45 @@ function M.start(tool, opts)
     end
   end
   return nil,
-    last_err or failure(
-      "new-pane",
+    last_err or errors.new(
+      "backend_error",
       ("pane %s of session %s was left open; its program never showed as %s"):format(name, session, tool.name)
     )
 end
 
----`write-chars` to a missing pane exits 0 and drops the text (probe P-Z7), so check the pane first. zellij has no
----agent status, so `send` has no blocked guard (herdr and rex have one).
+---`write-chars` to a missing pane exits 0 and drops the text (probe P-Z7), so check the pane first.
 ---@param session sidekick_ultra.Session
 ---@param text string
-function M.send(session, text)
-  local running, err = alive(session)
+---@param tool sidekick_ultra.Tool
+---@return sidekick_ultra.ExecResult? ok
+---@return sidekick_ultra.Error? err
+function M.send(session, text, tool)
+  local running, err = alive(session, tool)
   if err then
     return nil, err
   end
   if not running then
     return nil,
-      failure(
-        "write-chars",
+      errors.new(
+        "backend_error",
         ("pane %s of zellij session %s is not running; nothing was sent"):format(session.pane, session.zellij_session)
       )
   end
-  local res, send_err =
-    run("write-chars", session.zellij_session, "action", "write-chars", "--pane-id", session.pane, "--", text)
-  if not res then
-    return nil, send_err
-  end
-  return true
+  return run(session.zellij_session, "action", "write-chars", "--pane-id", session.pane, "--", text)
 end
 
 ---@param session sidekick_ultra.Session
+---@return sidekick_ultra.ExecResult? ok
+---@return sidekick_ultra.Error? err
 function M.submit(session)
-  local res, err = run("send-keys", session.zellij_session, "action", "send-keys", "--pane-id", session.pane, "Enter")
-  if not res then
-    return nil, err
-  end
-  return true
+  return run(session.zellij_session, "action", "send-keys", "--pane-id", session.pane, "Enter")
 end
 
 ---@param session sidekick_ultra.Session
+---@return sidekick_ultra.ExecResult? ok
+---@return sidekick_ultra.Error? err
 function M.focus(session)
-  local res, err = run("focus-pane-id", session.zellij_session, "action", "focus-pane-id", session.pane)
-  if not res then
-    return nil, err
-  end
-  return true
+  return run(session.zellij_session, "action", "focus-pane-id", session.pane)
 end
 
 return M

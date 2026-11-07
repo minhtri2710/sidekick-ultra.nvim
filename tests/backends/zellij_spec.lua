@@ -57,6 +57,18 @@ local function record(routes)
   end)
 end
 
+---The core hands a backend the session's tool (`registry.is_running`, `actions`); these do the same.
+---@param session sidekick_ultra.Session
+local function is_running(session)
+  return zellij.is_running(session, tools.get(session.tool))
+end
+
+---@param session sidekick_ultra.Session
+---@param text string
+local function send(session, text)
+  return zellij.send(session, text, tools.get(session.tool))
+end
+
 local LIST_SESSIONS = "list-sessions -n -s"
 local PANES_A = "--session skuA action list-panes --all --json --command --state"
 local PANES_B = "--session skuB action list-panes --all --json --command --state"
@@ -148,17 +160,19 @@ describe("zellij backend", function()
   end)
 
   describe("inside", function()
-    local function inside(zellij_env, pane)
-      vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID = zellij_env, pane
+    local function inside(zellij_env, pane, session)
+      vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = zellij_env, pane, session
       return zellij.inside()
     end
 
-    it("needs both ZELLIJ and ZELLIJ_PANE_ID set and non-empty", function()
-      expect.equality(inside("0", "0"), true)
-      expect.equality(inside(nil, "0"), false)
-      expect.equality(inside("0", nil), false)
-      expect.equality(inside("", "0"), false)
-      expect.equality(inside("0", ""), false)
+    it("needs ZELLIJ, ZELLIJ_PANE_ID and ZELLIJ_SESSION_NAME set and non-empty, as start does", function()
+      expect.equality(inside("0", "0", "skuA"), true)
+      expect.equality(inside(nil, "0", "skuA"), false)
+      expect.equality(inside("0", nil, "skuA"), false)
+      expect.equality(inside("", "0", "skuA"), false)
+      expect.equality(inside("0", "", "skuA"), false)
+      expect.equality(inside("0", "0", nil), false)
+      expect.equality(inside("0", "0", ""), false)
     end)
   end)
 
@@ -300,10 +314,10 @@ describe("zellij backend", function()
       "reports empty output of a successful list-sessions or list-panes as no answer, never as no sessions or panes",
       function()
         for _, case in ipairs({
-          { LIST_SESSIONS, "", "list-sessions" },
-          { LIST_SESSIONS, "\n  \n", "list-sessions" },
-          { PANES_A, "", "list-panes" },
-          { PANES_A, " \n", "list-panes" },
+          { LIST_SESSIONS, "" },
+          { LIST_SESSIONS, "\n  \n" },
+          { PANES_A, "" },
+          { PANES_A, " \n" },
         }) do
           local r = routes()
           r[case[1]] = case[2]
@@ -312,7 +326,7 @@ describe("zellij backend", function()
           rec.restore()
           rec = nil
           expect.equality(list, nil)
-          expect.equality({ err.id, err.cmd }, { "backend_error", case[3] })
+          expect.equality(err.id, "backend_error")
           expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
         end
       end
@@ -349,7 +363,7 @@ describe("zellij backend", function()
     end)
 
     it("maps any other failure of a step to backend_error with its exit code", function()
-      for step, label in pairs({ [LIST_SESSIONS] = "list-sessions", [PANES_A] = "list-panes" }) do
+      for _, step in ipairs({ LIST_SESSIONS, PANES_A }) do
         local r = routes()
         r[step] = { code = 3, stdout = "", stderr = "something else\n" }
         rec = record(r)
@@ -357,7 +371,7 @@ describe("zellij backend", function()
         rec.restore()
         rec = nil
         expect.equality(list, nil)
-        expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "zellij", label, 3 })
+        expect.equality({ err.id, err.code }, { "backend_error", 3 })
       end
     end)
 
@@ -370,7 +384,7 @@ describe("zellij backend", function()
         rec.restore()
         rec = nil
         expect.equality(list, nil)
-        expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "zellij", "list-panes" })
+        expect.equality(err.id, "backend_error")
       end
     end)
 
@@ -385,7 +399,7 @@ describe("zellij backend", function()
         rec.restore()
         rec = nil
         expect.equality(list, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
+        expect.equality(err.id, "backend_error")
       end
     end)
 
@@ -413,7 +427,7 @@ describe("zellij backend", function()
         rec.restore()
         rec = nil
         expect.equality(list, nil)
-        expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", failed.code })
+        expect.equality({ err.id, err.code }, { "backend_error", failed.code })
       end
     end)
 
@@ -422,15 +436,6 @@ describe("zellij backend", function()
       rec = record(routes())
       zellij.list(tools.all())
       expect.equality(rec.keys, { LIST_SESSIONS, PANES_A, PANES_B })
-    end)
-
-    it("reports the no-session text only for a failed list-sessions with empty stdout", function()
-      rec = record({
-        [LIST_SESSIONS] = { code = 1, stdout = "skuA\n", stderr = "No active zellij sessions found.\n" },
-      })
-      local list, err = zellij.list(tools.all())
-      expect.equality(list, nil)
-      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-sessions", 1 })
     end)
 
     it("runs the binary found at setup, not one looked up again for each call", function()
@@ -444,7 +449,7 @@ describe("zellij backend", function()
       vim.fn.delete(bin)
       local list, err = zellij.list(tools.all())
       expect.equality(list, nil)
-      expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "zellij", "list-sessions" })
+      expect.equality(err.id, "backend_error")
       expect.equality(vim.startswith(err.msg, "cannot run " .. bin), true)
     end)
   end)
@@ -455,7 +460,7 @@ describe("zellij backend", function()
     ---@return boolean
     local function running(panes_json, session)
       rec = record({ [PANES_A] = panes_json })
-      local result = zellij.is_running(session or claude())
+      local result = is_running(session or claude())
       expect.equality(rec.keys, { PANES_A })
       rec.restore()
       rec = nil
@@ -512,17 +517,6 @@ describe("zellij backend", function()
       )
     end)
 
-    it("is false, without a call, for a tool that is no longer configured", function()
-      rec = record({})
-      expect.equality(
-        zellij.is_running(claude(function(s)
-          s.tool = "gone-tool"
-        end)),
-        false
-      )
-      expect.equality(rec.calls, {})
-    end)
-
     it("ignores everything after argv0 when comparing the program", function()
       expect.equality(
         running(patched("list_panes_a.json", function(panes)
@@ -555,7 +549,7 @@ describe("zellij backend", function()
     it("stays true when list-panes exits 0 and prints nothing", function()
       for _, empty in ipairs({ "", "\n" }) do
         rec = record({ [PANES_A] = empty })
-        expect.equality(zellij.is_running(claude()), true)
+        expect.equality(is_running(claude()), true)
         rec.restore()
         rec = nil
       end
@@ -563,7 +557,7 @@ describe("zellij backend", function()
 
     it("is false when the session is gone", function()
       rec = record({ [PANES_A] = NOT_FOUND })
-      expect.equality(zellij.is_running(claude()), false)
+      expect.equality(is_running(claude()), false)
     end)
 
     it("stays true when zellij fails or prints something unreadable, so no attached session is dropped", function()
@@ -574,7 +568,7 @@ describe("zellij backend", function()
         ok('[{"id":"x"}]'),
       }) do
         rec = record({ [PANES_A] = result })
-        expect.equality(zellij.is_running(claude()), true)
+        expect.equality(is_running(claude()), true)
         rec.restore()
         rec = nil
       end
@@ -676,7 +670,7 @@ describe("zellij backend", function()
     end
 
     local function bound_error_names_everything(err)
-      expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+      expect.equality(err.id, "backend_error")
       for _, part in ipairs({ "claude", "terminal_6", "skuA", "left open", "never showed" }) do
         expect.equality({ part, err.msg:find(part, 1, true) ~= nil }, { part, true })
       end
@@ -706,7 +700,7 @@ describe("zellij backend", function()
       rec.restore()
       -- The session it returns is running by the plain rule.
       rec = record({ [PANES_A] = started })
-      expect.equality(zellij.is_running(session), true)
+      expect.equality(is_running(session), true)
     end)
 
     it(
@@ -755,7 +749,7 @@ describe("zellij backend", function()
         rec.restore()
         rec = nil
         expect.equality(session, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+        expect.equality(err.id, "backend_error")
         expect.equality(err.msg:find("terminal_6", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
         expect.equality(polls, { 0, STEP_MS })
         waits, clock = {}, 0
@@ -778,7 +772,7 @@ describe("zellij backend", function()
       rec = record(r)
       local session, err = start()
       expect.equality(session, nil)
-      expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
+      expect.equality(err.id, "backend_error")
       expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
       -- The second poll starts at 1000 + STEP_MS, before the deadline; the third would start after it.
       expect.equality(polls, { 0, 1000 + STEP_MS })
@@ -793,24 +787,15 @@ describe("zellij backend", function()
       rec = record(r)
       local session, err = start()
       expect.equality(session, nil)
-      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 2 })
+      expect.equality({ err.id, err.code }, { "backend_error", 2 })
       expect.equality(waits, { STEP_MS })
-    end)
-
-    it("fails without a session name and runs nothing", function()
-      vim.env.ZELLIJ_SESSION_NAME = ""
-      rec = record({})
-      local session, err = start()
-      expect.equality(session, nil)
-      expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "zellij", "new-pane" })
-      expect.equality(rec.calls, {})
     end)
 
     it("maps a failing new-pane to backend_error and maps nothing", function()
       rec = record({ [NEW_PANE .. " /bin/sh"] = { code = 1, stdout = "", stderr = "no room\n" } })
       local session, err = start()
       expect.equality(session, nil)
-      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "new-pane", 1 })
+      expect.equality({ err.id, err.code }, { "backend_error", 1 })
       expect.equality(#rec.subs, 1)
     end)
 
@@ -821,7 +806,7 @@ describe("zellij backend", function()
         rec.restore()
         rec = nil
         expect.equality(session, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+        expect.equality(err.id, "backend_error")
         -- The text must say why zellij prints nothing, and that a pane may still be open.
         for _, part in ipairs({ "no room", "floating", "sku-claude", "left open", "skuA" }) do
           expect.equality({ part, err.msg:find(part, 1, true) ~= nil }, { part, true })
@@ -844,7 +829,7 @@ describe("zellij backend", function()
         rec.restore()
         rec = nil
         expect.equality(session, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+        expect.equality(err.id, "backend_error")
         expect.equality(err.msg:find("terminal_6", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
       end
     end)
@@ -853,7 +838,7 @@ describe("zellij backend", function()
       rec = record(routes(" /bin/sh", { code = 2, stdout = "", stderr = "boom\n" }))
       local session, err = start()
       expect.equality(session, nil)
-      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 2 })
+      expect.equality({ err.id, err.code }, { "backend_error", 2 })
       expect.equality(waits, {})
     end)
 
@@ -884,7 +869,7 @@ describe("zellij backend", function()
 
     it("checks the pane, then writes the raw text after -- with no Enter", function()
       rec = record({ [PANES_A] = fixture("list_panes_a.json"), [WRITE] = "" })
-      expect.equality({ zellij.send(claude(), "hello world") }, { true })
+      expect.equality(send(claude(), "hello world") ~= nil, true)
       expect.equality(rec.keys, { PANES_A, WRITE })
       expect.equality(rec.calls[2].argv, {
         bin,
@@ -905,7 +890,7 @@ describe("zellij backend", function()
         [PANES_A] = fixture("list_panes_a.json"),
         [write_chars("skuA", "terminal_1", text)] = "",
       })
-      expect.equality({ zellij.send(claude(), text) }, { true })
+      expect.equality(send(claude(), text) ~= nil, true)
       expect.equality(rec.calls[2].argv[8], "--")
       expect.equality(rec.calls[2].argv[9], text)
     end)
@@ -922,9 +907,9 @@ describe("zellij backend", function()
         end),
         [WRITE] = "",
       })
-      local ok_, err = zellij.send(claude(), "hello world")
+      local ok_, err = send(claude(), "hello world")
       expect.equality(ok_, nil)
-      expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "zellij", "write-chars" })
+      expect.equality(err.id, "backend_error")
       expect.equality(err.msg:find("terminal_1", 1, true) ~= nil and err.msg:find("skuA", 1, true) ~= nil, true)
       expect.equality(wrote(rec.keys), false)
     end)
@@ -941,20 +926,20 @@ describe("zellij backend", function()
         end,
       }) do
         rec = record({ [PANES_A] = patched("list_panes_a.json", patch), [WRITE] = "" })
-        local ok_, err = zellij.send(claude(), "hello world")
+        local ok_, err = send(claude(), "hello world")
         expect.equality(wrote(rec.keys), false)
         rec.restore()
         rec = nil
         expect.equality(ok_, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "write-chars" })
+        expect.equality(err.id, "backend_error")
       end
     end)
 
     it("refuses when the session is gone, without writing", function()
       rec = record({ [PANES_A] = NOT_FOUND, [WRITE] = "" })
-      local ok_, err = zellij.send(claude(), "hello world")
+      local ok_, err = send(claude(), "hello world")
       expect.equality(ok_, nil)
-      expect.equality({ err.id, err.cmd }, { "backend_error", "write-chars" })
+      expect.equality(err.id, "backend_error")
       expect.equality(wrote(rec.keys), false)
     end)
 
@@ -962,9 +947,9 @@ describe("zellij backend", function()
       "does not read an empty answer of the pane check as a gone pane: it reports no answer and writes nothing",
       function()
         rec = record({ [PANES_A] = "", [WRITE] = "" })
-        local ok_, err = zellij.send(claude(), "hello world")
+        local ok_, err = send(claude(), "hello world")
         expect.equality(ok_, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
+        expect.equality(err.id, "backend_error")
         expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
         expect.equality(wrote(rec.keys), false)
       end
@@ -972,9 +957,9 @@ describe("zellij backend", function()
 
     it("returns the error of a failing pane check and does not write", function()
       rec = record({ [PANES_A] = { code = 2, stdout = "", stderr = "boom\n" }, [WRITE] = "" })
-      local ok_, err = zellij.send(claude(), "hello world")
+      local ok_, err = send(claude(), "hello world")
       expect.equality(ok_, nil)
-      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 2 })
+      expect.equality({ err.id, err.code }, { "backend_error", 2 })
       expect.equality(wrote(rec.keys), false)
     end)
 
@@ -983,9 +968,9 @@ describe("zellij backend", function()
         [PANES_A] = fixture("list_panes_a.json"),
         [WRITE] = { code = 1, stdout = "", stderr = "denied\n" },
       })
-      local ok_, err = zellij.send(claude(), "hello world")
+      local ok_, err = send(claude(), "hello world")
       expect.equality(ok_, nil)
-      expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "write-chars", 1 })
+      expect.equality({ err.id, err.code }, { "backend_error", 1 })
     end)
   end)
 
@@ -993,19 +978,19 @@ describe("zellij backend", function()
     it("submit presses Enter in the pane", function()
       local key = "--session skuA action send-keys --pane-id terminal_1 Enter"
       rec = record({ [key] = "" })
-      expect.equality({ zellij.submit(claude()) }, { true })
+      expect.equality(zellij.submit(claude()) ~= nil, true)
       expect.equality(rec.keys, { key })
     end)
 
     it("focus focuses the pane by id", function()
       local key = "--session skuA action focus-pane-id terminal_1"
       rec = record({ [key] = "" })
-      expect.equality({ zellij.focus(claude()) }, { true })
+      expect.equality(zellij.focus(claude()) ~= nil, true)
       expect.equality(rec.keys, { key })
     end)
 
     it("map a non-zero exit to backend_error with the exit code", function()
-      for method, label in pairs({ submit = "send-keys", focus = "focus-pane-id" }) do
+      for _, method in ipairs({ "submit", "focus" }) do
         rec = record({
           ["--session skuA action send-keys --pane-id terminal_1 Enter"] = { code = 1, stdout = "", stderr = "nope\n" },
           ["--session skuA action focus-pane-id terminal_1"] = { code = 1, stdout = "", stderr = "nope\n" },
@@ -1014,7 +999,7 @@ describe("zellij backend", function()
         rec.restore()
         rec = nil
         expect.equality(ok_, nil)
-        expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "zellij", label, 1 })
+        expect.equality({ err.id, err.code }, { "backend_error", 1 })
       end
     end)
   end)
@@ -1056,6 +1041,61 @@ describe("zellij backend", function()
         end),
         true
       )
+    end)
+  end)
+
+  -- A user's is_proc may throw. It runs in proc.matches only, which turns a throw into a backend_error naming the tool.
+  describe("a throwing is_proc", function()
+    before_each(function()
+      fake.reset({
+        claude = {
+          cmd = fake.INSTALLED,
+          is_proc = function()
+            error("boom")
+          end,
+        },
+      }, { zellij = { enabled = false } })
+    end)
+
+    it("keeps an attached session through the liveness check, as for any failing CLI call", function()
+      registry.register(zellij)
+      registry.attach(claude())
+      rec = record({ [PANES_A] = fixture("list_panes_a.json") })
+      registry.check()
+      expect.equality(rec.keys, { PANES_A })
+      expect.equality(#registry.attached(), 1)
+    end)
+
+    it("refuses a send, naming the tool, and writes nothing", function()
+      rec = record({ [PANES_A] = fixture("list_panes_a.json") })
+      local res, err = send(claude(), "hello")
+      expect.equality(res, nil)
+      expect.equality(err.id, "backend_error")
+      expect.equality(err.msg:find("claude", 1, true) ~= nil and err.msg:find("boom", 1, true) ~= nil, true)
+      expect.equality(rec.keys, { PANES_A })
+    end)
+
+    it("fails a listing as backend_error", function()
+      rec = record({ [LIST_SESSIONS] = "skuA\n", [PANES_A] = fixture("list_panes_a.json") })
+      local list, err = zellij.list(tools.all())
+      expect.equality(list, nil)
+      expect.equality(err.id, "backend_error")
+      expect.equality(err.msg:find("claude", 1, true) ~= nil, true)
+    end)
+
+    it("fails start at once, naming the pane left open", function()
+      vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuA"
+      rec = record({
+        ["--session skuA action new-pane --direction right --no-focus --cwd /tmp/sku-proj-a --name sku-claude -- /bin/sh"] = fixture(
+          "new_pane.txt"
+        ),
+        [PANES_A] = fixture("list_panes_a_started.json"),
+      })
+      local session, err = zellij.start(tools.get("claude"), { cwd = "/tmp/sku-proj-a", env = {} })
+      expect.equality(session, nil)
+      expect.equality(err.id, "backend_error")
+      expect.equality(err.msg:find("terminal_6", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
+      expect.equality(#waits, 0)
     end)
   end)
 
@@ -1163,23 +1203,23 @@ describe("zellij backend", function()
         { "node", false },
       }) do
         rec = record({ [PANES_A] = pane_1(case[1]) })
-        expect.equality({ case[1], zellij.is_running(session_of("gemini", "gemini")) }, { case[1], case[2] })
+        expect.equality({ case[1], is_running(session_of("gemini", "gemini")) }, { case[1], case[2] })
         rec.restore()
         rec = nil
       end
       rec = record({ [PANES_A] = pane_1("python3 -m aider") })
-      expect.equality(zellij.is_running(session_of("aider", "aider")), true)
+      expect.equality(is_running(session_of("aider", "aider")), true)
     end)
 
     it("send writes to a pane running the script, and refuses one that runs other code", function()
       local WRITE = write_chars("skuA", "terminal_1", "hello")
       rec = record({ [PANES_A] = pane_1("node /x/bin/gemini --x"), [WRITE] = "" })
-      expect.equality({ zellij.send(session_of("gemini", "gemini"), "hello") }, { true })
+      expect.equality(send(session_of("gemini", "gemini"), "hello") ~= nil, true)
       expect.equality(rec.keys, { PANES_A, WRITE })
       rec.restore()
       rec = record({ [PANES_A] = pane_1("node -e hello"), [WRITE] = "" })
-      local ok_, err = zellij.send(session_of("gemini", "gemini"), "hello")
-      expect.equality({ ok_, err.id, err.cmd }, { nil, "backend_error", "write-chars" })
+      local ok_, err = send(session_of("gemini", "gemini"), "hello")
+      expect.equality({ ok_, err.id }, { nil, "backend_error" })
       expect.equality(rec.keys, { PANES_A })
     end)
 
@@ -1214,14 +1254,14 @@ describe("zellij backend", function()
         expect.equality(waits, { STEP_MS })
         rec.restore()
         rec = record({ [PANES_A] = running })
-        expect.equality(zellij.is_running(session), true)
+        expect.equality(is_running(session), true)
       end)
 
       it("keeps waiting while the interpreter runs another script, and ends at the bound without naming it", function()
         rec = record({ [NEW_PANE_G] = fixture("new_pane.txt"), [PANES_A] = pane_6("node /x/bin/other") })
         local session, err = start()
         expect.equality(session, nil)
-        expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
+        expect.equality(err.id, "backend_error")
         expect.equality(err.msg:find("never showed as gemini", 1, true) ~= nil, true)
         expect.equality(err.msg:find("node", 1, true), nil)
         expect.equality(err.msg:find("other", 1, true), nil)
@@ -1281,7 +1321,7 @@ describe("zellij backend", function()
         for _, case in ipairs(LINES) do
           for _, tool in ipairs({ { "gemini", "gemini" }, { "aider", "aider" } }) do
             rec = record({ [PANES_A] = pane_1(case[1]) })
-            local running = zellij.is_running(session_of(tool[1], tool[2]))
+            local running = is_running(session_of(tool[1], tool[2]))
             expect.equality(running, case[2] == tool[1])
             expect_clean({ running, rec.subs })
             rec.restore()
@@ -1296,8 +1336,8 @@ describe("zellij backend", function()
           local tool = case[2] or "gemini"
           local write = write_chars("skuA", "terminal_1", "text")
           rec = record({ [PANES_A] = pane_1(case[1]), [write] = "" })
-          local ok_, err = zellij.send(session_of(tool, tool), "text")
-          expect.equality(ok_ == true, case[2] ~= nil)
+          local ok_, err = send(session_of(tool, tool), "text")
+          expect.equality(ok_ ~= nil, case[2] ~= nil)
           if err then
             local before = #cap.calls
             errors.notify(err)
@@ -1467,7 +1507,7 @@ describe("zellij backend", function()
         { { code = 2, stdout = "out " .. SECRET, stderr = "boom\n" }, true },
       }) do
         rec = record({ [PANES_A] = case[1] })
-        local result = zellij.is_running(claude())
+        local result = is_running(claude())
         expect.equality(#rec.subs, 1)
         rec.restore()
         rec = nil
@@ -1497,7 +1537,7 @@ describe("zellij backend", function()
         '[{"id":"x","pane_command":"/bin/sh --token ' .. SECRET .. '"}]',
       }) do
         rec = record({ [PANES_A] = input, [write_chars("skuA", "terminal_1", "text")] = "" })
-        local ok_, err = zellij.send(claude(), "text")
+        local ok_, err = send(claude(), "text")
         local wrote_text = vim.tbl_contains(rec.keys, write_chars("skuA", "terminal_1", "text"))
         rec.restore()
         rec = nil

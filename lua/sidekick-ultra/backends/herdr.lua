@@ -2,6 +2,7 @@
 ---server it runs under (`HERDR_SOCKET_PATH` is inherited); no command passes `--session`, `--remote` or `--machine`.
 ---Every command goes through `sidekick-ultra.exec`. Only pids, names, ids, cwds and states are read from herdr's
 ---answers, never argv, cmdline or environment.
+local contract = require("sidekick-ultra.backend")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
 local proc = require("sidekick-ultra.proc")
@@ -45,13 +46,6 @@ local EXECUTABLE = { cursor = "cursor-agent", kiro = "kiro-cli" }
 ---`herdr agent start` waits until the agent is interactive, for at most this long (the server accepts 3 s to 300 s).
 local START_TIMEOUT_MS = 30000
 
----@param cmd string subcommand label for a `backend_error`
----@param msg string
----@return sidekick_ultra.Error
-local function failure(cmd, msg)
-  return errors.new("backend_error", msg, { backend = M.name, cmd = cmd })
-end
-
 ---The `error.code` of the error envelope `{id, error = {code, message}}` that a failed herdr command prints on
 ---stderr and exits 1 (`print_response`, src/cli.rs:745-749). nil when `err` has no stderr line or it is no envelope.
 ---@param err sidekick_ultra.ExecError
@@ -64,38 +58,23 @@ end
 
 ---Run `argv`, decode herdr's `{id, result = {type, ...}}` envelope and return `result[field]`, a table.
 ---@param argv string[]
----@param cmd string
+---@param cmd string the subcommand, named in an error
 ---@param field string
 ---@param timeout_ms? integer
 ---@return table? payload
 ---@return sidekick_ultra.Error? err
 local function query(argv, cmd, field, timeout_ms)
-  local decoded, err = exec.json(argv, { backend = M.name, cmd = cmd, timeout_ms = timeout_ms })
+  local decoded, err = exec.json(argv, { timeout_ms = timeout_ms })
   if err then
     return nil, err
   end
   local payload = type(decoded) == "table" and type(decoded.result) == "table" and decoded.result[field]
   if type(payload) ~= "table" then
-    return nil, failure(cmd, ("herdr %s: response has no result.%s"):format(cmd, field))
+    return nil, errors.new("backend_error", ("herdr %s: response has no result.%s"):format(cmd, field))
   end
   return payload
 end
 
----Run a command whose success carries no data we use.
----@param argv string[]
----@param cmd string
----@return true? ok
----@return sidekick_ultra.Error? err
-local function run(argv, cmd)
-  local _, err = exec.check(argv, { backend = M.name, cmd = cmd })
-  if err then
-    return nil, err
-  end
-  return true
-end
-
----The pid of the foreground process: the `foreground_processes` entry whose pid is the foreground process group,
----else the first one.
 ---@param info table a `PaneProcessInfo`
 ---@return integer? pid
 local function foreground_pid(info)
@@ -133,26 +112,25 @@ local function recorded_process(pane_id, pick)
   return pid, name
 end
 
----Build a session from a `PaneInfo` or `AgentInfo`. Returns nothing (no session, no error) when the pane has no
----cwd or the picked process is not running on this machine.
+---Build a session from a `PaneInfo` or `AgentInfo`. A pane without a cwd is an error; returns nothing (no session, no
+---error) when the picked process is not running on this machine.
 ---@param pane_id string
 ---@param info table
 ---@param tool sidekick_ultra.Tool
 ---@param pick fun(info: table): integer? the foreground pid for discovery, the shell pid for a pane just started
----@param fallback_cwd? string used when herdr reports no cwd
 ---@return sidekick_ultra.Session? session
 ---@return sidekick_ultra.Error? err
-local function session_of(pane_id, info, tool, pick, fallback_cwd)
-  local cwd = info.foreground_cwd or info.cwd or fallback_cwd
-  if type(cwd) ~= "string" then
-    return nil
+local function session_of(pane_id, info, tool, pick)
+  local cwd = info.foreground_cwd or info.cwd
+  if type(cwd) ~= "string" or cwd == "" then
+    return nil, errors.new("backend_error", ("herdr printed no working directory for pane %s"):format(pane_id))
   end
   local pid, proc_name, err = recorded_process(pane_id, pick)
   if not pid then
     return nil, err
   end
   return {
-    id = "herdr:" .. pane_id,
+    id = M.name .. ":" .. pane_id,
     backend = M.name,
     tool = tool.name,
     cwd = cwd,
@@ -192,7 +170,7 @@ function M.list(tools)
   local sessions = {}
   for _, pane in ipairs(panes) do
     if type(pane) ~= "table" or type(pane.pane_id) ~= "string" then
-      return nil, failure("pane list", "herdr pane list: a pane has no pane_id")
+      return nil, errors.new("backend_error", "herdr pane list: a pane has no pane_id")
     end
     local tool = type(pane.agent) == "string" and tools[pane.agent] or nil
     if tool then
@@ -207,7 +185,6 @@ function M.list(tools)
   return sessions
 end
 
----`sku-<tool>-<n>` with the lowest positive n that no existing herdr agent uses.
 ---@param tool_name string
 ---@return string? name
 ---@return sidekick_ultra.Error? err
@@ -250,13 +227,13 @@ end
 function M.start(tool, opts)
   local executable = vim.tbl_contains(KINDS, tool.name) and (EXECUTABLE[tool.name] or tool.name) or nil
   if not executable then
-    return nil, failure("agent start", ("herdr has no agent kind named %s"):format(tool.name))
+    return nil, errors.new("backend_error", ("herdr has no agent kind named %s"):format(tool.name))
   end
   -- herdr launches its own executable for the kind and gets only the arguments, so another command would be ignored.
   if tool.cmd[1] ~= executable then
     return nil,
-      failure(
-        "agent start",
+      errors.new(
+        "backend_error",
         ("herdr starts `%s` for %s, but the tool command is `%s`"):format(executable, tool.name, tool.cmd[1])
       )
   end
@@ -266,10 +243,8 @@ function M.start(tool, opts)
   end
 
   local split = { "herdr", "pane", "split", "--pane", vim.env.HERDR_PANE_ID, "--direction", "right", "--cwd", opts.cwd }
-  local keys = vim.tbl_keys(opts.env)
-  table.sort(keys)
-  for _, key in ipairs(keys) do
-    vim.list_extend(split, { "--env", key .. "=" .. opts.env[key] })
+  for _, pair in ipairs(exec.env_pairs(opts.env)) do
+    vim.list_extend(split, { "--env", pair })
   end
   table.insert(split, "--no-focus")
   local created, split_err = query(split, "pane split", "pane")
@@ -278,7 +253,7 @@ function M.start(tool, opts)
   end
   local new_id = created.pane_id
   if type(new_id) ~= "string" then
-    return nil, failure("pane split", "herdr pane split: the new pane has no pane_id")
+    return nil, errors.new("backend_error", "herdr pane split: the new pane has no pane_id")
   end
 
   local start =
@@ -289,87 +264,73 @@ function M.start(tool, opts)
   end
   local agent, start_err = start_agent(start)
   if not agent then
-    local closed, close_err = run({ "herdr", "pane", "close", new_id }, "pane close")
+    local closed, close_err = exec.check({ "herdr", "pane", "close", new_id })
     if not closed then
       start_err.msg = ("%s (closing the new pane %s also failed: %s)"):format(start_err.msg, new_id, close_err.msg)
     end
     return nil, start_err
   end
 
-  -- The agent may not own the foreground yet, so record the pane's shell: it is running at once and as long as the
-  -- pane. The next discovery replaces the record with the agent's foreground process.
-  local session, session_err = session_of(new_id, agent, tool, function(info)
-    return info.shell_pid
-  end, opts.cwd)
+  -- herdr's answer to `agent start` can lack the cwd, and the agent may not own the foreground yet: the pane was split
+  -- in `opts.cwd`, and its shell is recorded.
+  local session, session_err = session_of(
+    new_id,
+    vim.tbl_extend("keep", agent, { cwd = opts.cwd }),
+    tool,
+    function(info)
+      return info.shell_pid
+    end
+  )
   if not session then
     return nil,
-      session_err or failure("agent start", ("herdr pane %s has no shell process visible to nvim"):format(new_id))
+      session_err or errors.new("backend_error", ("herdr pane %s has no shell process visible to nvim"):format(new_id))
   end
   return session
 end
 
----The pane's `agent_status`, read fresh. A failed or unrecognizable read is `status_unreadable`.
+---Whether the pane's agent is blocked, read fresh. A failed read, or an `agent_status` that is not a known state, is an
+---error.
 ---@param session sidekick_ultra.Session
----@return sidekick_ultra.AgentState? state
+---@return boolean? blocked
 ---@return sidekick_ultra.Error? err
-local function read_state(session)
+local function is_blocked(session)
   local pane, err = query({ "herdr", "pane", "get", session.pane_id }, "pane get", "pane")
   if not pane then
-    return nil,
-      errors.new("status_unreadable", "cannot read the state of herdr pane " .. session.pane_id .. ": " .. err.msg, {
-        backend = M.name,
-        cmd = "pane get",
-        code = err.code,
-      })
+    return nil, err
   end
   if not STATES[pane.agent_status] then
-    return nil,
-      errors.new("status_unreadable", "herdr pane " .. session.pane_id .. " reported no usable agent_status", {
-        backend = M.name,
-        cmd = "pane get",
-      })
+    return nil, errors.new("backend_error", ("herdr pane %s reported no usable agent_status"):format(session.pane_id))
   end
-  return pane.agent_status
+  return pane.agent_status == "blocked"
 end
 
 -- ponytail: the text is one argv element, so it is bounded by the OS argument limit (about 1 MiB on macOS);
 -- herdr's CLI has no stdin form, so chunk the text here if that ever matters.
 ---@param session sidekick_ultra.Session
 ---@param text string
----@return true? ok
+---@return sidekick_ultra.ExecResult? ok
 ---@return sidekick_ultra.Error? err
 function M.send(session, text)
-  local state, err = read_state(session)
-  if not state then
+  local ok, err = contract.guard_send(session, is_blocked)
+  if not ok then
     return nil, err
   end
-  if state == "blocked" then
-    return nil,
-      errors.new(
-        "session_blocked",
-        ("%s in herdr pane %s is blocked; nothing was sent"):format(session.tool, session.pane_id),
-        {
-          backend = M.name,
-          session_id = session.id,
-        }
-      )
-  end
-  return run({ "herdr", "pane", "send-text", session.pane_id, text }, "pane send-text")
+  return exec.check({ "herdr", "pane", "send-text", session.pane_id, text })
 end
 
 ---@param session sidekick_ultra.Session
----@return true? ok
+---@return sidekick_ultra.ExecResult? ok
 ---@return sidekick_ultra.Error? err
 function M.submit(session)
-  return run({ "herdr", "pane", "send-keys", session.pane_id, "Enter" }, "pane send-keys")
+  return exec.check({ "herdr", "pane", "send-keys", session.pane_id, "Enter" })
 end
 
 ---`agent focus`, not `pane focus`: the latter focuses a neighbor and needs a direction.
 ---@param session sidekick_ultra.Session
----@return true? ok
+---@return sidekick_ultra.ExecResult? ok
 ---@return sidekick_ultra.Error? err
 function M.focus(session)
-  return run({ "herdr", "agent", "focus", session.pane_id }, "agent focus")
+  return exec.check({ "herdr", "agent", "focus", session.pane_id })
 end
 
 return M

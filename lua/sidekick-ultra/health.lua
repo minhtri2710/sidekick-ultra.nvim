@@ -17,7 +17,7 @@ local NVIM_FLOOR = "0.11.2"
 local function report_version(name, bin, version)
   local health = vim.health
   local min = version.min
-  local res, err = exec.run({ bin, version.flag }, { backend = name, cmd = "version" })
+  local res, err = exec.run({ bin, version.flag })
   if not res then
     health.warn(("%s: cannot read the version: %s"):format(name, err.msg))
   elseif res.code ~= 0 then

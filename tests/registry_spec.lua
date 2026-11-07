@@ -129,16 +129,6 @@ describe("registry", function()
       expect.equality(sessions[1].id, "rex:codex1")
       expect.equality(cap.ids(), { "backend_error" })
     end)
-
-    it("turns a thrown list into backend_error", function()
-      local b = fake.backend("herdr")
-      b.list = function()
-        error("boom")
-      end
-      registry.register(b)
-      expect.equality(registry.discover(), {})
-      expect.equality(cap.ids(), { "backend_error" })
-    end)
   end)
 
   describe("attached set", function()
@@ -335,7 +325,8 @@ describe("registry", function()
     it("returns the result of the session's backend is_running, and ignores pid and name then", function()
       local b = fake.backend("zellij")
       local calls, answer = {}, true
-      b.is_running = function(session)
+      b.is_running = function(session, tool)
+        expect.equality(tool, require("sidekick-ultra.tools").get(session.tool))
         table.insert(calls, session.id)
         return answer
       end

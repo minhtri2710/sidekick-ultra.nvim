@@ -18,8 +18,6 @@
 ---@class sidekick_ultra.Error
 ---@field id sidekick_ultra.ErrorId
 ---@field msg string human message; tests and callers match on `id`, never on this
----@field backend? string backend name, for `backend_error`
----@field cmd? string backend subcommand, for `backend_error`
 ---@field code? integer exit code, for `backend_error`
 
 local M = {}
