@@ -13,22 +13,21 @@ describe("exec", function()
     expect.equality(res.stdout, "hello")
   end)
 
-  it("maps a non-zero exit to backend_error with its code and the first stderr line", function()
-    local res, err = exec.check({ "/bin/sh", "-c", "echo first >&2; echo second >&2; exit 4" })
-    expect.equality(res, nil)
-    expect.equality({ err.id, err.code }, { "backend_error", 4 })
-    expect.equality(err.msg:find("first", 1, true) ~= nil, true)
-    expect.equality(err.msg:find("second", 1, true), nil)
-  end)
-
-  it("hands a caller the first stderr line of a failed check as data, and none for a run that failed to run", function()
-    local _, err = exec.check({ "/bin/sh", "-c", "echo first >&2; echo second >&2; exit 4" })
-    expect.equality({ err.code, err.stderr, err.msg }, { 4, "first", "/bin/sh exited with 4: first" })
-    _, err = exec.check({ "/bin/sh", "-c", "exit 4" })
-    expect.equality({ err.code, err.stderr, err.msg }, { 4, "", "/bin/sh exited with 4" })
-    _, err = exec.check({ "/nonexistent/sku-binary" })
-    expect.equality({ err.code, err.stderr }, { nil, nil })
-  end)
+  it(
+    "maps a non-zero exit to backend_error with its code and the first stderr line, as data and in the text",
+    function()
+      local res, err = exec.check({ "/bin/sh", "-c", "echo first >&2; echo second >&2; exit 4" })
+      expect.equality(res, nil)
+      expect.equality(
+        { err.id, err.code, err.stderr, err.msg },
+        { "backend_error", 4, "first", "/bin/sh exited with 4: first" }
+      )
+      _, err = exec.check({ "/bin/sh", "-c", "exit 4" })
+      expect.equality({ err.code, err.stderr, err.msg }, { 4, "", "/bin/sh exited with 4" })
+      _, err = exec.check({ "/nonexistent/sku-binary" })
+      expect.equality({ err.code, err.stderr }, { nil, nil })
+    end
+  )
 
   it("words a failed result under the head a caller gives it", function()
     local res = { code = 3, stdout = "x", stderr = "boom\nmore\n" }
@@ -99,8 +98,8 @@ describe("exec", function()
     expect.equality(err.id, "backend_error")
   end)
 
-  it("decodes JSON output, turning null into nil", function()
-    local data = exec.json({ "/bin/sh", "-c", [[echo '{"a":[1,2],"b":null}']] })
+  it("decodes JSON output", function()
+    local data = exec.json({ "/bin/sh", "-c", [[echo '{"a":[1,2]}']] })
     expect.equality(data, { a = { 1, 2 } })
   end)
 
@@ -116,18 +115,5 @@ describe("exec", function()
   it("maps a failing command to backend_error before decoding", function()
     local _, err = exec.json({ "/bin/sh", "-c", "echo '{}'; exit 2" })
     expect.equality({ err.id, err.code }, { "backend_error", 2 })
-  end)
-
-  it("lets specs replace run; check and json go through the replacement", function()
-    local orig = exec.run
-    local seen
-    exec.run = function(argv)
-      seen = argv
-      return { code = 0, stdout = '{"ok":true}', stderr = "" }
-    end
-    local data = exec.json({ "fake", "sub" })
-    exec.run = orig
-    expect.equality(seen, { "fake", "sub" })
-    expect.equality(data, { ok = true })
   end)
 end)

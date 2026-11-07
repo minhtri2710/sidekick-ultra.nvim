@@ -7,6 +7,7 @@ local tools = require("sidekick-ultra.tools")
 
 local expect = MiniTest.expect
 
+local STUB = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/bin/rex"
 local SID = "session:aaaa"
 local SECRET = helper.SECRET
 local ok = helper.ok
@@ -66,7 +67,8 @@ describe("rex backend", function()
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
     bin = dir .. "/rex"
-    vim.fn.writefile({ "#!/bin/sh" }, bin)
+    -- The same stub as tests/bin/rex, so a call that escapes the seam leaves the marker minit checks.
+    vim.fn.writefile(vim.fn.readfile(STUB), bin)
     vim.uv.fs_chmod(bin, 493)
     bin = vim.fn.exepath(bin)
     for _, var in ipairs({ "TERM_PROGRAM", "REX_SESSION", "REX_BLOCK", "PATH" }) do
@@ -475,15 +477,12 @@ describe("rex backend", function()
       expect.equality(vim.inspect({ err, rec.calls }):find(SECRET, 1, true), nil)
     end)
 
-    -- Every command line below holds SECRET; nothing the backend returns or records may hold it.
+    -- Every command line below holds SECRET; nothing the backend returns or records may hold it. Reading the command
+    -- line is proc's, which tmux_spec and zellij_spec check with helper.SECRET_LINES: these two rows check rex's wiring.
     it("never lets a secret in the command line reach a session or a call", function()
       local cases = {
         { "node /x/bin/pi --api-key " .. SECRET, { "pi" } },
-        { "node --require " .. SECRET .. " /x/bin/pi", { "pi" } },
-        { 'node -e "' .. SECRET .. '"', {} },
         { 'node -pe "/x/' .. SECRET .. '/pi"', {} },
-        { "node - /x/" .. SECRET .. "/pi", {} },
-        { "python3 -m aider --token " .. SECRET, {} },
       }
       for _, case in ipairs(cases) do
         expect.equality({ case[1], listed(case[1]) }, { case[1], case[2] })
@@ -647,6 +646,8 @@ describe("rex backend", function()
         ok(fixture("status_bad")),
         ok('{"records":[{"state":5}]}'),
         ok('{"records":["blocked"]}'),
+        -- Every record is checked before the answer: a bad one after a blocked record of this session still fails.
+        ok('{"records":[{"state":"blocked","owner":{"pid":4242}},{"state":5}]}'),
       }
       for _, case in ipairs(cases) do
         rec = record(routes(case))

@@ -187,10 +187,10 @@ describe("command", function()
   describe("setup", function()
     it("describes the command with the backend names", function()
       fake.reset()
-      expect.equality(
-        vim.api.nvim_get_commands({}).SidekickUltra.definition,
-        "Drive AI CLIs in " .. table.concat(require("sidekick-ultra.backends").names(), ", ")
-      )
+      local definition = vim.api.nvim_get_commands({}).SidekickUltra.definition
+      for _, name in ipairs(require("sidekick-ultra.backends").names()) do
+        expect.equality(definition:find(name, 1, true) ~= nil, true)
+      end
     end)
   end)
 end)

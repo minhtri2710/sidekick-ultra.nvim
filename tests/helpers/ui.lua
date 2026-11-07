@@ -3,7 +3,7 @@ local M = {}
 
 function M.capture(choose)
   local orig_select, orig_open = vim.ui.select, vim.ui.open
-  local cap = { selects = {}, opened = {}, open_result = {} }
+  local cap = { selects = {}, opened = {} }
   cap.choose = choose or function(items)
     return items[1]
   end
@@ -13,7 +13,7 @@ function M.capture(choose)
   end
   vim.ui.open = function(url)
     table.insert(cap.opened, url)
-    return cap.open_result[1] or {}, cap.open_result[2]
+    return {}
   end
   function cap.restore()
     vim.ui.select, vim.ui.open = orig_select, orig_open

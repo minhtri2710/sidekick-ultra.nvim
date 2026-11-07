@@ -85,10 +85,9 @@ describe("health", function()
     for _, name in ipairs(NAMES) do
       expect.equality(package.loaded["sidekick-ultra.backends." .. name], nil)
     end
-    expect.equality(has("info", "herdr: disabled"), true)
-    expect.equality(has("info", "rex: disabled"), true)
-    expect.equality(has("info", "tmux: disabled"), true)
-    expect.equality(has("info", "zellij: disabled"), true)
+    for _, name in ipairs(NAMES) do
+      expect.equality(has("info", name .. ": disabled"), true)
+    end
     expect.equality(version_calls, {})
   end)
 
@@ -308,7 +307,7 @@ describe("health", function()
       expect.equality(has("info", "start is unavailable: " .. unavailable_reason()), true)
     end)
 
-    it("is unavailable before setup() ran, as no backend is registered", function()
+    it("is unavailable when no backend is registered", function()
       muxes(true, false)
       fake.reset()
       require("sidekick-ultra.registry").reset()

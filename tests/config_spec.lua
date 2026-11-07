@@ -1,3 +1,4 @@
+local backends = require("sidekick-ultra.backends")
 local config = require("sidekick-ultra.config")
 
 local expect = MiniTest.expect
@@ -16,18 +17,11 @@ describe("config", function()
   end)
 
   it("returns the defaults for no options", function()
-    local cfg = config.validate()
-    expect.equality(cfg, {
-      tools = {},
-      prompts = {},
-      context = {},
-      watch = true,
-      keys = { prefix = "<leader>a" },
-      herdr = { enabled = true },
-      rex = { enabled = true },
-      tmux = { enabled = true },
-      zellij = { enabled = true },
-    })
+    local expected = { tools = {}, prompts = {}, context = {}, watch = true, keys = { prefix = "<leader>a" } }
+    for _, name in ipairs(backends.names()) do
+      expected[name] = { enabled = true }
+    end
+    expect.equality(config.validate(), expected)
   end)
 
   it("accepts keys as a prefix or false, and keeps the default prefix for an empty table", function()
@@ -105,10 +99,7 @@ describe("config", function()
     expect.equality(path_of({ tools = { claude = { cmd = { "a", 1 } } } }), "tools.claude.cmd[2]")
     expect.equality(path_of({ tools = { claude = { env = { A = 1 } } } }), "tools.claude.env.A")
     expect.equality(path_of({ tools = { claude = { url = 1 } } }), "tools.claude.url")
-    expect.equality(path_of({ tools = { claude = { mux_focus = "x" } } }), "tools.claude.mux_focus")
-    expect.equality(path_of({ tools = { claude = { location = "fancy" } } }), "tools.claude.location")
     expect.equality(path_of({ tools = { claude = { is_proc = 4 } } }), "tools.claude.is_proc")
-    expect.equality(path_of({ tools = { claude = { is_proc = "\\(" } } }), "tools.claude.is_proc")
     expect.equality(path_of({ tools = { claude = true } }), "tools.claude")
     expect.equality(path_of({ prompts = { x = 1 } }), "prompts.x")
     expect.equality(path_of({ prompts = { x = { msg = 1 } } }), "prompts.x.msg")
@@ -155,10 +146,9 @@ describe("config", function()
 
   it("lists the allowed keys, sorted, in an unknown-key error", function()
     local _, err = config.validate({ nope = 1 })
-    expect.equality(
-      err.msg:find("allowed: context, herdr, keys, prompts, rex, tmux, tools, watch, zellij", 1, true) ~= nil,
-      true
-    )
+    local allowed = vim.list_extend({ "context", "keys", "prompts", "tools", "watch" }, backends.names())
+    table.sort(allowed)
+    expect.equality(err.msg:find("allowed: " .. table.concat(allowed, ", "), 1, true) ~= nil, true)
     _, err = config.validate({ rex = { nope = 1 } })
     expect.equality(err.msg:find("allowed: bin, enabled, server", 1, true) ~= nil, true)
     _, err = config.validate({ tmux = { nope = 1 } })

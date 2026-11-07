@@ -411,7 +411,7 @@ describe("herdr backend", function()
       })
     end)
 
-    it("waits longer for agent start than the exec default", function()
+    it("waits longer for agent start than herdr's own --timeout", function()
       install(routes())
       herdr.start(tool(), { cwd = "/work/proj", env = {} })
       local start_call = rec.calls[3]

@@ -1,4 +1,6 @@
+local exec = require("sidekick-ultra.exec")
 local expect = MiniTest.expect
+local proc = require("sidekick-ultra.proc")
 local procname = require("sidekick-ultra.procname")
 
 describe("procname", function()
@@ -317,8 +319,23 @@ describe("procname", function()
     end)
 
     -- ponytail ceiling in procname.lua: words split on whitespace, so a path with spaces is misread and fails closed.
-    it("misreads a script path with spaces, which fails closed", function()
-      check({ { "node /x/my tools/bin/gemini", "my" } })
+    it("misreads a script path with spaces, which fails closed: no tool matches", function()
+      local line = "node /x/my tools/bin/gemini"
+      check({ { line, "my" } })
+      local orig = exec.run
+      MiniTest.finally(function()
+        exec.run = orig
+      end)
+      exec.run = function()
+        return { code = 0, stdout = line .. "\n", stderr = "" }
+      end
+      local gemini = {
+        name = "gemini",
+        is_proc = function(info)
+          return info.cmd == "gemini"
+        end,
+      }
+      expect.equality({ proc.tool_of({ gemini = gemini }, 7, { "node" }) }, {})
     end)
   end)
 end)

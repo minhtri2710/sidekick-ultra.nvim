@@ -154,8 +154,16 @@ describe("tools", function()
         expected = "boolean",
         got = "yes",
       })
-      expect.equality(tools.check("claude", { location = "md" }).expected, "one of: plain, claude, escaped")
-      expect.equality(tools.check("claude", { is_proc = "\\(" }).expected, "valid Vim regex")
+      expect.equality(tools.check("claude", { location = "md" }), {
+        path = "tools.claude.location",
+        expected = "one of: plain, claude, escaped",
+        got = "md",
+      })
+      expect.equality(tools.check("claude", { is_proc = "\\(" }), {
+        path = "tools.claude.is_proc",
+        expected = "valid Vim regex",
+        got = "\\(",
+      })
     end)
 
     it("lists the allowed fields for an unknown key", function()

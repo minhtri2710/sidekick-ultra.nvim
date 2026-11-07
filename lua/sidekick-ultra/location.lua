@@ -49,13 +49,13 @@ function M.file(path)
   return { path = path, kind = "file" }
 end
 
----A line record from a 1-based first row and an optional last row, which defaults to the first.
+---A line record from a 1-based first and last row.
 ---@param path string
 ---@param r1 integer
----@param r2? integer
+---@param r2 integer
 ---@return sidekick_ultra.Location
 function M.line(path, r1, r2)
-  return { path = path, kind = "line", r1 = r1, r2 = r2 or r1 }
+  return { path = path, kind = "line", r1 = r1, r2 = r2 }
 end
 
 ---A position record from 1-based start and optional end. The end defaults to the start; on one row it is never

@@ -18,6 +18,13 @@ local TABLE = {
 }
 local PREFIX_DESC = "+sidekick-ultra"
 
+-- The prefix map in n and x, and one map per mode of every row; the lazy.lua triggers are the prefix and one per row.
+local MAP_COUNT, TRIGGER_COUNT, SUFFIXES = 2, 1 + #TABLE, { "" }
+for _, row in ipairs(TABLE) do
+  MAP_COUNT = MAP_COUNT + #row[2]
+  table.insert(SUFFIXES, row[1])
+end
+
 ---@return table map the global map for lhs in mode, or {}
 local function map(mode, lhs)
   return vim.fn.maparg(lhs, mode, false, true)
@@ -34,7 +41,7 @@ local function global(mode, lhs)
   return {}
 end
 
----Every global n/x map the plugin owns, found by its desc (the prefix and the seven of behavior section 5: 11 in all).
+---Every global n/x map the plugin owns, found by its desc (the prefix and the seven of behavior section 5).
 local function ours()
   local descs = { [PREFIX_DESC] = true }
   for _, row in ipairs(TABLE) do
@@ -110,7 +117,7 @@ describe("keys", function()
       calls = {}
       map("n", "<leader>a").callback()
       expect.equality(calls, {})
-      expect.equality(#ours(), 11)
+      expect.equality(#ours(), MAP_COUNT)
     end)
 
     it("moves every map to another prefix and leaves none at the default", function()
@@ -123,7 +130,7 @@ describe("keys", function()
       end
       expect.equality(map("n", "<leader>S").desc, PREFIX_DESC)
       expect.equality(map("n", "<leader>a"), {})
-      expect.equality(#ours(), 11)
+      expect.equality(#ours(), MAP_COUNT)
     end)
 
     it("defines none for keys = false", function()
@@ -136,7 +143,7 @@ describe("keys", function()
       vim.keymap.set("n", "<leader>Zz", mine, { desc = "mine" })
       setup()
       setup({ keys = { prefix = "<leader>S" } })
-      expect.equality(#ours(), 11)
+      expect.equality(#ours(), MAP_COUNT)
       expect.equality(map("n", "<leader>as"), {})
       expect.equality(map("n", "<leader>Ss").desc, "Select Session")
       expect.equality(map("n", "<leader>Zz").callback == mine, true)
@@ -156,7 +163,7 @@ describe("keys", function()
       setup()
       vim.keymap.set("n", "<leader>as", mine, { buffer = 0, desc = "mine" })
       setup({ keys = { prefix = "<leader>S" } })
-      expect.equality(#ours(), 11)
+      expect.equality(#ours(), MAP_COUNT)
       expect.equality(global("n", "<leader>as"), {})
       expect.equality(map("n", "<leader>as").callback == mine, true)
     end)
@@ -169,7 +176,7 @@ describe("keys", function()
       vim.keymap.set("n", "<Tab>", copy, { desc = "mine" })
       for _ = 1, 2 do
         setup()
-        expect.equality(#ours(), 11)
+        expect.equality(#ours(), MAP_COUNT)
         expect.equality(global("n", "<leader>as").callback == copy, true)
       end
       setup({ keys = false })
@@ -181,11 +188,11 @@ describe("keys", function()
       for _, again in ipairs({ { keys = { prefix = "<leader>S" } }, { keys = false } }) do
         vim.g.mapleader = "\\"
         setup()
-        expect.equality(#ours(), 11)
+        expect.equality(#ours(), MAP_COUNT)
         vim.g.mapleader = " "
         setup(again)
-        expect.equality(#ours(), again.keys and 11 or 0)
-        for _, suffix in ipairs({ "", "s", "t", "f", "v", "p", "o", "d" }) do
+        expect.equality(#ours(), again.keys and MAP_COUNT or 0)
+        for _, suffix in ipairs(SUFFIXES) do
           for _, mode in ipairs({ "n", "x" }) do
             expect.equality(global(mode, "\\a" .. suffix), {})
           end
@@ -210,7 +217,7 @@ describe("keys", function()
       expect.equality(alone.resolve(nil), { prefix = "<leader>a" })
       expect.equality(alone.resolve({ prefix = "<leader>S" }), { prefix = "<leader>S" })
       expect.equality(alone.resolve(false), false)
-      expect.equality(#alone.triggers("<leader>S"), 8)
+      expect.equality(#alone.triggers("<leader>S"), TRIGGER_COUNT)
     end)
 
     it("reports the first problem of an invalid option: the key path, and what was expected", function()
@@ -262,7 +269,7 @@ describe("keys", function()
 
     it("uses the prefix from opts.keys", function()
       local list = triggers({ keys = { prefix = "<leader>S" } })
-      expect.equality(#list, 8)
+      expect.equality(#list, TRIGGER_COUNT)
       for _, t in ipairs(list) do
         expect.equality(vim.startswith(t.lhs, "<leader>S"), true)
       end

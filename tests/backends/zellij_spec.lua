@@ -15,9 +15,7 @@ local SECRET = helper.SECRET
 local ok = helper.ok
 -- The real wait, for the one case that must run the event loop while `vim.wait` is faked.
 local real_wait = vim.wait
--- `start` polls the new pane every STEP_MS and gives up WAIT_MS after new-pane returned (START_STEP_MS and
--- START_WAIT_MS in zellij.lua).
-local STEP_MS = 50
+-- `start` gives up WAIT_MS after new-pane returned and starts no poll later (START_WAIT_MS in zellij.lua).
 local WAIT_MS = 2000
 
 ---@param name string file name inside tests/fixtures/zellij
@@ -669,6 +667,28 @@ describe("zellij backend", function()
       end
     end
 
+    ---The polls came one after another, each starting before the deadline.
+    local function polled_in_order()
+      for i, at in ipairs(polls) do
+        expect.equality(at < WAIT_MS, true)
+        expect.equality(i == 1 or at > polls[i - 1], true)
+      end
+    end
+
+    ---`start` blocks the editor, so it ends as soon as the deadline is reached, whatever the step: every wait is as long
+    ---as the first, the run ends right after the last answer (`cost` ms after the last poll began) or after one wait
+    ---that began before the deadline, and it lasted until the deadline.
+    ---@param cost integer how long each answer took
+    local function ends_at_deadline(cost)
+      for _, ms in ipairs(waits) do
+        expect.equality(ms, waits[1])
+      end
+      local after = clock - (polls[#polls] + cost)
+      expect.equality(after == 0 or after == waits[#waits], true)
+      expect.equality(clock >= WAIT_MS, true)
+      expect.equality(after == 0 or clock - after < WAIT_MS, true)
+    end
+
     local function bound_error_names_everything(err)
       expect.equality(err.id, "backend_error")
       for _, part in ipairs({ "claude", "terminal_6", "skuA", "left open", "never showed" }) do
@@ -695,8 +715,9 @@ describe("zellij backend", function()
       local session, err = start({ A = "1" })
       expect.equality(err, nil)
       expect.equality({ session.pane, session.proc_name }, { "terminal_6", "claude" })
-      expect.equality(polls, { 0, STEP_MS, 2 * STEP_MS })
-      expect.equality(waits, { STEP_MS, STEP_MS })
+      expect.equality(#polls, 3)
+      polled_in_order()
+      expect.equality(#waits, 2)
       rec.restore()
       -- The session it returns is running by the plain rule.
       rec = record({ [PANES_A] = started })
@@ -712,16 +733,11 @@ describe("zellij backend", function()
         local session, err = start()
         expect.equality(session, nil)
         bound_error_names_everything(err)
-        expect.equality(clock, WAIT_MS)
         expect.equality(polls[1], 0)
-        expect.equality(polls[#polls] < WAIT_MS, true)
-        expect.equality(polls[#polls] >= WAIT_MS - STEP_MS, true)
-        expect.equality(
-          vim.tbl_filter(function(ms)
-            return ms ~= STEP_MS
-          end, waits),
-          {}
-        )
+        expect.equality(#polls > 1, true)
+        polled_in_order()
+        expect.equality(#waits, #polls)
+        ends_at_deadline(0)
       end
     )
 
@@ -732,8 +748,9 @@ describe("zellij backend", function()
       local session, err = start()
       expect.equality(session, nil)
       bound_error_names_everything(err)
-      expect.equality(polls, { 0, 900 + STEP_MS, 2 * (900 + STEP_MS) })
-      expect.equality(clock, 3 * 900 + 2 * STEP_MS)
+      expect.equality(#polls > 1, true)
+      polled_in_order()
+      ends_at_deadline(900)
     end)
 
     it("fails at once, naming the pane, when the pane exits or vanishes during the wait", function()
@@ -751,7 +768,8 @@ describe("zellij backend", function()
         expect.equality(session, nil)
         expect.equality(err.id, "backend_error")
         expect.equality(err.msg:find("terminal_6", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
-        expect.equality(polls, { 0, STEP_MS })
+        expect.equality(#polls, 2)
+        polled_in_order()
         waits, clock = {}, 0
       end
     end)
@@ -763,7 +781,8 @@ describe("zellij backend", function()
       local session, err = start()
       expect.equality(err, nil)
       expect.equality(session.proc_name, "claude")
-      expect.equality(polls, { 0, STEP_MS, 2 * STEP_MS, 3 * STEP_MS })
+      expect.equality(#polls, 4)
+      polled_in_order()
     end)
 
     it("ends empty answers at the deadline with the no-answer error, each taking its second", function()
@@ -774,9 +793,10 @@ describe("zellij backend", function()
       expect.equality(session, nil)
       expect.equality(err.id, "backend_error")
       expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
-      -- The second poll starts at 1000 + STEP_MS, before the deadline; the third would start after it.
-      expect.equality(polls, { 0, 1000 + STEP_MS })
-      expect.equality(clock, 2 * 1000 + STEP_MS)
+      -- Each answer takes 1000 ms: the second poll starts before the deadline; a third would start after it.
+      expect.equality(#polls, 2)
+      polled_in_order()
+      ends_at_deadline(1000)
     end)
 
     it("stops at once when list-panes fails in the wait", function()
@@ -788,7 +808,7 @@ describe("zellij backend", function()
       local session, err = start()
       expect.equality(session, nil)
       expect.equality({ err.id, err.code }, { "backend_error", 2 })
-      expect.equality(waits, { STEP_MS })
+      expect.equality(#waits, 1)
     end)
 
     it("maps a failing new-pane to backend_error and maps nothing", function()
@@ -1251,7 +1271,7 @@ describe("zellij backend", function()
         local session, err = start()
         expect.equality(err, nil)
         expect.equality(session.proc_name, "gemini")
-        expect.equality(waits, { STEP_MS })
+        expect.equality(#waits, 1)
         rec.restore()
         rec = record({ [PANES_A] = running })
         expect.equality(is_running(session), true)
@@ -1278,7 +1298,7 @@ describe("zellij backend", function()
         })
         local session, err = start()
         expect.equality(err, nil)
-        expect.equality({ session.proc_name, waits }, { "gemini", { STEP_MS, STEP_MS } })
+        expect.equality({ session.proc_name, #waits }, { "gemini", 2 })
       end)
 
       it("fails at once when the pane's command is gone", function()
