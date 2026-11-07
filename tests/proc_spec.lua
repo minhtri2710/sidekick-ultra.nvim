@@ -1,4 +1,5 @@
 local exec = require("sidekick-ultra.exec")
+local helper = require("tests.helpers.backend")
 local proc = require("sidekick-ultra.proc")
 
 local expect = MiniTest.expect
@@ -168,12 +169,12 @@ describe("proc", function()
       "is a backend_error for any other ps failure, naming the pid, the exit code and the first stderr line",
       function()
         local tools = { pi = tool({}, "pi") }
-        ps({ code = 3, stdout = "node /x/bin/pi --key SECRET\n", stderr = "ps: boom\nsecond\n" })
+        ps({ code = 3, stdout = "node /x/bin/pi --key " .. helper.SECRET .. "\n", stderr = "ps: boom\nsecond\n" })
         local name, err = proc.tool_of(tools, 7, { "node" })
         expect.equality(name, nil)
         expect.equality({ err.id, err.code }, { "backend_error", 3 })
         expect.equality(err.msg, "ps exited with 3 for pid 7: ps: boom")
-        expect.equality(vim.inspect(err):find("SECRET", 1, true), nil)
+        expect.equality(vim.inspect(err):find(helper.SECRET, 1, true), nil)
         ps({ code = 1, stdout = "x\n", stderr = "" })
         _, err = proc.tool_of(tools, 7, { "node" })
         expect.equality(err.msg, "ps exited with 1 for pid 7")

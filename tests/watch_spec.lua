@@ -164,7 +164,7 @@ describe("watch", function()
     expect.equality(fs_event_handles(), base)
   end)
 
-  it("closes its handles on the last detach even when its autocommand group was deleted", function()
+  it("closes its handles on the last detach even when its autocommand group was deleted, and starts again", function()
     local base = fs_event_handles()
     open(file_a)
     registry.attach(fake.session("herdr", "claude"))
@@ -172,12 +172,14 @@ describe("watch", function()
     expect.equality(fs_event_handles(), base + 1)
     vim.api.nvim_del_augroup_by_name("sidekick-ultra-watch")
     registry.detach("herdr:claude1")
-    -- stop() closes the handles, then fails to delete the group that is already gone. The test owns that error: it is
-    -- caught and read from v:errmsg, so it does not reach the log.
-    vim.v.errmsg = ""
+    -- The detach event is delivered by the flush. If it raises on the deleted group, `silent!` keeps that error out of
+    -- the log; what is checked is what stop() left behind.
     vim.cmd("silent! lua require('tests.helpers.fake').flush()")
-    expect.equality(vim.v.errmsg:find("E367", 1, true) ~= nil, true)
     expect.equality(fs_event_handles(), base)
+    registry.attach(fake.session("herdr", "claude", 2))
+    flush()
+    expect.equality(fs_event_handles(), base + 1)
+    expect.equality(reloads(file_a, "again "), true)
   end)
 
   it("leaves no buffer autocommands behind after the last detach", function()

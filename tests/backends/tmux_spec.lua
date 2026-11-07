@@ -62,6 +62,8 @@ local function fake_procs(procs)
   end, visits
 end
 
+local STUB = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/bin/tmux"
+
 describe("tmux backend", function()
   local rec, restore_procs, dir
   local env = {}
@@ -118,7 +120,7 @@ describe("tmux backend", function()
     it("is the tmux found on PATH, with PATH as its source", function()
       local bin = dir .. "/tmux"
       -- Never run (available() only looks the name up), but if it ever is, it leaves the marker minit fails on.
-      vim.fn.writefile({ "#!/bin/sh", 'echo "stub reached" >&2', ': > "$HOME/.sku-stub-reached"', "exit 97" }, bin)
+      vim.fn.writefile(vim.fn.readfile(STUB), bin)
       vim.uv.fs_chmod(bin, 493)
       vim.env.PATH = dir
       expect.equality({ tmux.available() }, { true, vim.fn.exepath(bin), "PATH" })

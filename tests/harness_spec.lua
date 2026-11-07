@@ -9,6 +9,9 @@ describe("test harness", function()
     -- The run's own HOME carries the marker that fails the suite, so these deliberate calls use another one.
     local home = vim.fn.tempname()
     vim.fn.mkdir(home, "p")
+    MiniTest.finally(function()
+      vim.fn.delete(home, "rf")
+    end)
     for _, name in ipairs(MUXES) do
       vim.fn.delete(home .. "/.sku-stub-reached")
       local res = require("sidekick-ultra.exec").run({ name, "anything" }, { env = { HOME = home } })
@@ -16,7 +19,6 @@ describe("test harness", function()
       expect.equality(res.stderr:find("stub reached", 1, true) ~= nil, true)
       expect.equality(vim.uv.fs_stat(home .. "/.sku-stub-reached") ~= nil, true)
     end
-    vim.fn.delete(home, "rf")
     expect.equality(vim.uv.fs_stat(vim.env.HOME .. "/.sku-stub-reached"), nil)
   end)
 

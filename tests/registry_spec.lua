@@ -121,7 +121,7 @@ describe("registry", function()
     end)
 
     it("isolates a backend whose list fails: one error, the other backend still lists", function()
-      local err = require("sidekick-ultra.errors").new("backend_error", "x", { backend = "herdr", cmd = "pane list" })
+      local err = require("sidekick-ultra.errors").new("backend_error", "x")
       registry.register(fake.backend("herdr", { list_err = err }))
       registry.register(fake.backend("rex", { sessions = { fake.session("rex", "codex") } }))
       local sessions = registry.discover()
@@ -391,7 +391,7 @@ describe("registry", function()
       expect.equality({ select({ "herdr", "tmux" }, "herdr") }, { "herdr" })
     end)
 
-    it("picks by TERM_PROGRAM among several, and zellij never matches it (it sets none)", function()
+    it("picks by TERM_PROGRAM among several, and refuses when it is unset", function()
       expect.equality({ select({ "herdr", "rex", "tmux" }, "rex") }, { "rex" })
       -- zellij inside tmux: tmux is outermost but TERM_PROGRAM (inherited) names it; zellij is not chosen.
       expect.equality({ select({ "tmux", "zellij" }, "tmux") }, { "tmux" })

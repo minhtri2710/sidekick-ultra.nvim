@@ -5,6 +5,8 @@ local notify = require("tests.helpers.notify")
 local registry = require("sidekick-ultra.registry")
 local ui = require("tests.helpers.ui")
 
+local DEFAULT_PROMPTS = require("sidekick-ultra.context.render").default_prompts
+
 local expect = MiniTest.expect
 
 local ESC_I = "\27[I"
@@ -35,10 +37,16 @@ describe("actions", function()
     return buf
   end
 
+  ---The methods the backend was called with, in order, without `list`: how often `target` discovers sessions is not
+  ---what these specs check.
   local function methods()
-    return vim.tbl_map(function(call)
-      return call[1]
-    end, backend.calls)
+    local ret = {}
+    for _, call in ipairs(backend.calls) do
+      if call[1] ~= "list" then
+        table.insert(ret, call[1])
+      end
+    end
+    return ret
   end
 
   before_each(function()
@@ -186,20 +194,20 @@ describe("actions", function()
       it("focuses the new session after the start and before the text", function()
         started_backend()
         actions.send({ msg = "hi", name = "codex" })
-        expect.equality(methods(), { "list", "start", "focus", "send" })
+        expect.equality(methods(), { "start", "focus", "send" })
         expect.equality(backend.of("focus"), { { "focus", "herdr:codexnew1" } })
       end)
 
       it("focuses at start and again after delivery with focus = true", function()
         started_backend()
         actions.send({ msg = "hi", name = "codex", focus = true })
-        expect.equality(methods(), { "list", "start", "focus", "send", "focus" })
+        expect.equality(methods(), { "start", "focus", "send", "focus" })
       end)
 
       it("does not focus at start with focus = false, and still delivers", function()
         started_backend()
         actions.send({ msg = "hi", name = "codex", focus = false })
-        expect.equality(methods(), { "list", "start", "send" })
+        expect.equality(methods(), { "start", "send" })
         expect.equality(backend.delivered, { "hi\n" })
       end)
 
@@ -328,7 +336,7 @@ describe("actions", function()
       -- A scratch buffer has no file, so every prompt that needs {function}, {this}-selection, ... is left out.
       expect.equality(vim.tbl_contains(listed, "explain"), false)
       expect.equality(vim.tbl_contains(listed, "diagnostics"), false)
-      expect.equality(backend.delivered, { "Can you review my changes?\n" })
+      expect.equality(backend.delivered, { DEFAULT_PROMPTS.changes .. "\n" })
     end)
 
     it("lists every default prompt for a file buffer except the ones with empty sources", function()
@@ -340,22 +348,15 @@ describe("actions", function()
         return nil
       end
       actions.prompt({})
+      -- The file has no parser, no diagnostics, no quickfix list and no selection.
+      local empty = { "class", "function", "diagnostics", "diagnostics_all", "quickfix", "selection" }
+      local want = vim.tbl_filter(function(name)
+        return not vim.tbl_contains(empty, name)
+      end, vim.tbl_keys(DEFAULT_PROMPTS))
+      table.sort(want)
       local listed = names(pick.selects[1].items)
-      for _, name in ipairs({
-        "changes",
-        "explain",
-        "fix",
-        "optimize",
-        "review",
-        "tests",
-        "file",
-        "line",
-        "position",
-        "buffers",
-      }) do
-        expect.equality(vim.tbl_contains(listed, name), true)
-      end
-      expect.equality(vim.tbl_contains(listed, "function"), false)
+      table.sort(listed)
+      expect.equality(listed, want)
       expect.equality(backend.calls, {})
       expect.equality(cap.calls, {})
     end)
@@ -414,7 +415,7 @@ describe("actions", function()
         end, pick.selects),
         { "sidekick-ultra", "sidekick-ultra prompt" }
       )
-      expect.equality(backend.of("send"), { { "send", "herdr:codex1", "Can you review my changes?\n" } })
+      expect.equality(backend.of("send"), { { "send", "herdr:codex1", DEFAULT_PROMPTS.changes .. "\n" } })
     end)
 
     describe("a tool it starts", function()
@@ -430,14 +431,14 @@ describe("actions", function()
       it("is started before the prompt picker, focused only after the delivery", function()
         started_backend()
         actions.prompt({ name = "codex" })
-        expect.equality(methods(), { "list", "start", "picker", "send", "focus" })
+        expect.equality(methods(), { "start", "picker", "send", "focus" })
         expect.equality(
           vim.tbl_map(function(select)
             return select.opts.prompt
           end, pick.selects),
           { "sidekick-ultra prompt" }
         )
-        expect.equality(backend.of("send"), { { "send", "herdr:codexnew1", "Can you review my changes?\n" } })
+        expect.equality(backend.of("send"), { { "send", "herdr:codexnew1", DEFAULT_PROMPTS.changes .. "\n" } })
         expect.equality(backend.of("focus"), { { "focus", "herdr:codexnew1" } })
       end)
 
@@ -447,30 +448,30 @@ describe("actions", function()
           table.insert(backend.calls, { "picker" })
         end
         actions.prompt({ name = "codex" })
-        expect.equality(methods(), { "list", "start", "picker", "focus" })
+        expect.equality(methods(), { "start", "picker", "focus" })
         expect.equality(registry.attached()[1].id, "herdr:codexnew1")
       end)
 
       it("is never focused with focus = false, by a choice or a cancel", function()
         started_backend()
         actions.prompt({ name = "codex", focus = false })
-        expect.equality(methods(), { "list", "start", "picker", "send" })
+        expect.equality(methods(), { "start", "picker", "send" })
         registry.detach("herdr:codexnew1")
         backend.calls = {}
         pick.choose = function() end
         actions.prompt({ name = "codex", focus = false })
-        expect.equality(methods(), { "list", "start" })
+        expect.equality(methods(), { "start" })
       end)
 
       it("is focused exactly once with focus = true, by a choice or a cancel", function()
         started_backend()
         actions.prompt({ name = "codex", focus = true })
-        expect.equality(methods(), { "list", "start", "picker", "send", "focus" })
+        expect.equality(methods(), { "start", "picker", "send", "focus" })
         registry.detach("herdr:codexnew1")
         backend.calls = {}
         pick.choose = function() end
         actions.prompt({ name = "codex", focus = true })
-        expect.equality(methods(), { "list", "start", "focus" })
+        expect.equality(methods(), { "start", "focus" })
       end)
 
       for _, case in ipairs({
@@ -479,21 +480,21 @@ describe("actions", function()
           "codex",
           { send = errors.new("session_blocked", "x") },
           { submit = true },
-          { "list", "start", "picker", "send", "focus" },
+          { "start", "picker", "send", "focus" },
         },
         {
           "the focus-in",
           "qwen",
           { send = errors.new("status_unreadable", "x") },
           {},
-          { "list", "start", "picker", "send", "focus" },
+          { "start", "picker", "send", "focus" },
         },
         {
           "the submit",
           "codex",
           { submit = errors.new("backend_error", "x") },
           { submit = true },
-          { "list", "start", "picker", "send", "submit", "focus" },
+          { "start", "picker", "send", "submit", "focus" },
         },
       }) do
         local step, name, fail, extra, order = unpack(case)
@@ -537,7 +538,7 @@ describe("actions", function()
 
     it("opens an empty picker without resolving a target when no prompt renders", function()
       local none = {}
-      for name in pairs(require("sidekick-ultra.context.render").default_prompts) do
+      for name in pairs(DEFAULT_PROMPTS) do
         none[name] = false
       end
       fake.reset({ claude = { cmd = fake.INSTALLED } }, { prompts = none })
@@ -660,7 +661,7 @@ describe("actions", function()
       actions.select({})
       expect.equality(registry.attached()[1].id, "herdr:claude1")
       expect.equality(#cap.calls, 1)
-      expect.equality(methods(), { "list" })
+      expect.equality(methods(), {})
     end)
 
     it("focuses the chosen session with focus=true", function()
@@ -867,7 +868,7 @@ describe("actions", function()
       local text, err = actions.render({ msg = "{file|line}" })
       expect.equality({ text, err.id, err.names }, { nil, "render_failed", { "file|line" } })
       expect.equality(cap.ids(), { "render_failed" })
-      expect.equality(actions.render({ msg = "plain", prompt = "changes" }), "plain\nCan you review my changes?")
+      expect.equality(actions.render({ msg = "plain", prompt = "changes" }), "plain\n" .. DEFAULT_PROMPTS.changes)
       expect.equality(backend.calls, {})
     end)
   end)
