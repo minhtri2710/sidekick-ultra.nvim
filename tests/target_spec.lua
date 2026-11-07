@@ -247,6 +247,16 @@ describe("target", function()
       expect.equality({ cap.ids(), registry.attached(), b.calls }, { { "no_match", "no_match" }, {}, {} })
     end)
 
+    it("attaches again a session listed as attached that a setup detached", function()
+      two_attached()
+      local state = target.states({ name = "claude", started = true })[1]
+      local b = registry.backend("herdr")
+      registry.reset()
+      registry.register(b)
+      expect.equality(target.attach_state(state).id, "herdr:claude1")
+      expect.equality({ cap.ids(), #registry.attached() }, { {}, 1 })
+    end)
+
     it("reports a failing start", function()
       registry.register(fake.backend("herdr", { is_inside = true, start_err = errors.new("backend_error", "x") }))
       expect.equality(target.attach_state(target.states({ name = "codex" })[1]), nil)
@@ -256,9 +266,9 @@ describe("target", function()
 
   describe("with_target", function()
     ---The id of the session the callback got, and its tool.
-    local function run(opts)
+    local function run(filter)
       local got
-      target.with_target(opts, function(state)
+      target.with_target(filter, function(state)
         got = { state.session.id, state.tool.name }
       end)
       return got
@@ -269,7 +279,7 @@ describe("target", function()
       pick.choose = function(items)
         return items[1]
       end
-      expect.equality(run({ attach = true }), { "herdr:claude1", "claude" })
+      expect.equality(run({}), { "herdr:claude1", "claude" })
       expect.equality(#pick.selects, 1)
       expect.equality(#registry.attached(), 1)
     end)
@@ -287,37 +297,22 @@ describe("target", function()
       local function record(state, started)
         table.insert(got, { state.session.id, started or false })
       end
-      target.with_target({ attach = true, filter = { name = "codex" } }, record)
-      target.with_target({ attach = true, filter = { name = "claude" } }, record)
-      target.with_target({ filter = { name = "claude" } }, record)
+      target.with_target({ name = "codex" }, record)
+      target.with_target({ name = "claude" }, record)
+      target.with_target({ name = "claude" }, record)
       expect.equality(got, { { "herdr:codexnew1", true }, { "herdr:claude1", false }, { "herdr:claude1", false } })
       expect.equality(b.of("focus"), {})
     end)
 
-    it("checks that the attached sessions still run before it chooses among them", function()
-      local b = fake.backend("herdr")
-      registry.register(b)
-      local s = fake.session("herdr", "claude")
-      registry.attach(s)
-      s.proc_name = "gone"
-      expect.equality(run({}), nil)
-      expect.equality({ cap.ids(), #b.of("list") }, { { "no_match" }, 1 })
-    end)
-
-    it("reports no_match when nothing is attached and the action may not attach", function()
-      expect.equality(run({}), nil)
-      expect.equality(cap.ids(), { "no_match" })
-    end)
-
     it("reports no_match when the filter leaves no state", function()
-      expect.equality(run({ attach = true, filter = { name = "nope" } }), nil)
+      expect.equality(run({ name = "nope" }), nil)
       expect.equality(cap.ids(), { "no_match" })
     end)
 
     it("acts on the only attached match without UI", function()
       registry.register(fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } }))
       registry.attach(registry.discover()[1])
-      expect.equality(run({ attach = true }), { "herdr:claude1", "claude" })
+      expect.equality(run({}), { "herdr:claude1", "claude" })
       expect.equality(#pick.selects, 0)
     end)
 
@@ -326,9 +321,15 @@ describe("target", function()
       pick.choose = function(items)
         return items[2]
       end
-      expect.equality(run({ attach = true }), { "herdr:codex1", "codex" })
+      expect.equality(run({}), { "herdr:codex1", "codex" })
       expect.equality(#pick.selects, 1)
       expect.equality(#pick.selects[1].items, 2)
+    end)
+
+    it("narrows the attached matches with the filter", function()
+      two_attached()
+      expect.equality(run({ name = "codex" }), { "herdr:codex1", "codex" })
+      expect.equality(#pick.selects, 0)
     end)
 
     it("does not reach the callback with a session that a setup detached while the pick was open", function()
@@ -342,18 +343,12 @@ describe("target", function()
       expect.equality(run({}), nil)
       expect.equality({ cap.ids(), registry.attached() }, { { "no_match" }, {} })
     end)
-
-    it("narrows the attached matches with the filter", function()
-      two_attached()
-      expect.equality(run({ filter = { name = "codex" } }), { "herdr:codex1", "codex" })
-      expect.equality(#pick.selects, 0)
-    end)
   end)
 
   describe("with_attached", function()
-    local function run(filter)
+    local function run(filter, opts)
       local got = {}
-      target.with_attached(filter, function(state)
+      target.with_attached(filter, opts or {}, function(state)
         table.insert(got, state.session.id)
       end)
       return got
@@ -366,11 +361,12 @@ describe("target", function()
       expect.equality(#pick.selects, 0)
     end)
 
-    it("reports no_match when no attached session matches", function()
+    it("reports no_match when no attached session matches, one or all", function()
       expect.equality(run(), {})
+      expect.equality(run({}, { one = true }), {})
       two_attached()
       expect.equality(run({ name = "ghost" }), {})
-      expect.equality(cap.ids(), { "no_match", "no_match" })
+      expect.equality(cap.ids(), { "no_match", "no_match", "no_match" })
     end)
 
     it("checks that the attached sessions still run first", function()
@@ -379,7 +375,51 @@ describe("target", function()
       local s = fake.session("herdr", "claude")
       registry.attach(s)
       s.proc_name = "gone"
-      expect.equality({ run(), cap.ids(), #b.of("list") }, { {}, { "no_match" }, 1 })
+      expect.equality({ run({}, { one = true }), cap.ids(), #b.of("list") }, { {}, { "no_match" }, 1 })
+    end)
+
+    it("with one picks among several attached matches and passes only that one", function()
+      two_attached()
+      pick.choose = function(items)
+        return items[2]
+      end
+      expect.equality(run({}, { one = true }), { "herdr:codex1" })
+      expect.equality(#pick.selects[1].items, 2)
+    end)
+
+    it("with one does not reach the callback with a session that a setup detached while the pick was open", function()
+      two_attached()
+      local b = registry.backend("herdr")
+      pick.choose = function(items)
+        fake.reset({ claude = { cmd = fake.INSTALLED }, codex = { cmd = fake.INSTALLED } })
+        registry.register(b)
+        return items[2]
+      end
+      expect.equality(run({}, { one = true }), {})
+      expect.equality({ cap.ids(), registry.attached() }, { { "no_match" }, {} })
+    end)
+  end)
+
+  describe("current", function()
+    it("returns the state with the tool's current spec, not the one listed", function()
+      local state = target.states({ name = "claude", started = false })[1]
+      fake.reset({ claude = { cmd = fake.INSTALLED, location = "escaped" } })
+      expect.equality({ state.tool.location, target.current(state).tool.location }, { "claude", "escaped" })
+    end)
+
+    it("accepts a started session that was not attached", function()
+      registry.register(fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } }))
+      local state = target.states({ started = true })[1]
+      expect.equality({ target.current(state).session.id, cap.ids() }, { "herdr:claude1", {} })
+    end)
+
+    it("refuses a session that was attached and that a setup detached", function()
+      two_attached()
+      local state = target.states({ name = "claude", started = true })[1]
+      local b = registry.backend("herdr")
+      registry.reset()
+      registry.register(b)
+      expect.equality({ target.current(state), cap.ids() }, { nil, { "no_match" } })
     end)
   end)
 end)

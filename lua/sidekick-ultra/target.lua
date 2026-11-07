@@ -27,10 +27,6 @@ local M = {}
 ---@field cwd? boolean
 ---@field backend? string
 
----@class sidekick_ultra.TargetOpts
----@field filter? sidekick_ultra.Filter
----@field attach? boolean the action may attach (or start) a session when none is attached
-
 ---@param path string
 ---@return string
 local function normalize(path)
@@ -39,7 +35,7 @@ end
 
 ---@param session sidekick_ultra.Session
 ---@param attached boolean
----@return sidekick_ultra.State?
+---@return sidekick_ultra.State
 local function session_state(session, attached)
   return {
     name = session.tool,
@@ -177,51 +173,82 @@ function M.pick(states, opts, cb)
   end)
 end
 
----Whether `state`, which a picker returned some time after it was listed, is still usable: its session's backend is
----registered and its tool configured. A `setup` that ran while the picker was open can have removed either. Reports
----the reason and returns false when it is not.
----@param state sidekick_ultra.State
+local function no_match()
+  errors.notify(errors.new("no_match", "no attached session matches"))
+end
+
+---Whether `id` is an attached session.
+---@param id string
 ---@return boolean
-local function usable(state)
+local function is_attached(id)
+  for _, session in ipairs(registry.attached()) do
+    if session.id == id then
+      return true
+    end
+  end
+  return false
+end
+
+---A state a picker returned some time after it was listed, as it is now: a `setup` that ran while the picker was open
+---can have removed the session's backend or the tool. Needs the session's backend registered and the tool configured.
+---Reports the reason when it fails.
+---@param state sidekick_ultra.State
+---@return sidekick_ultra.State? fresh `state` with the tool's current spec
+local function refreshed(state)
   local session = state.session
   if session and not registry.backend(session.backend) then
     errors.notify(errors.new("backend_error", "backend not registered: " .. session.backend))
-    return false
+    return nil
   end
-  if not tools.get(state.name) then
+  local tool = tools.get(state.name)
+  if not tool then
     errors.notify(errors.new("no_match", "tool no longer configured: " .. state.name))
-    return false
+    return nil
   end
-  return true
+  return vim.tbl_extend("force", state, { tool = tool })
 end
 
----Attach the chosen state, starting its tool first when it has no session. A state that is no longer usable (see
----`usable`) is refused with a notification. A missing tool is `not_installed` (its url is opened when it has one).
+---The check every callback runs that acts on a picked attached session without attaching it: `refreshed`, and a
+---session that was attached must still be attached, as a `setup` that ran while the picker was open detaches them.
+---Reports the reason when it fails.
+---@param state sidekick_ultra.State
+---@return sidekick_ultra.State? current nil when `state` is no longer current
+function M.current(state)
+  local fresh = refreshed(state)
+  if fresh and state.attached and not is_attached(state.session.id) then
+    no_match()
+    return nil
+  end
+  return fresh
+end
+
+---Attach the chosen state, starting its tool first when it has no session. A state that is not `refreshed` is refused
+---with a notification; one that was attached and has been detached since is attached again. A missing tool is
+---`not_installed` (its url is opened when it has one).
 ---@param state sidekick_ultra.State
 ---@return sidekick_ultra.Session? session
 ---@return boolean? started the session was started by this call
 function M.attach_state(state)
-  if not usable(state) then
+  local current = refreshed(state)
+  if not current then
     return nil
   end
-  if not state.installed then
-    errors.notify(
-      errors.new("not_installed", state.name .. " is not installed", { tool = state.name, url = state.tool.url })
-    )
-    if state.tool.url then
-      local obj, err = vim.ui.open(state.tool.url)
+  if not current.installed then
+    errors.notify(errors.new("not_installed", current.name .. " is not installed"))
+    if current.tool.url then
+      local obj, err = vim.ui.open(current.tool.url)
       if obj then
-        errors.info("Opened " .. state.tool.url)
+        errors.info("Opened " .. current.tool.url)
       else
-        errors.message(vim.log.levels.WARN, ("Could not open %s: %s"):format(state.tool.url, tostring(err)))
+        errors.message(vim.log.levels.WARN, ("Could not open %s: %s"):format(current.tool.url, tostring(err)))
       end
     end
     return nil
   end
-  local session, started = state.session, false
+  local session, started = current.session, false
   if not session then
     local err
-    session, err = registry.start(state.tool)
+    session, err = registry.start(current.tool)
     if not session then
       errors.notify(err)
       return nil
@@ -234,54 +261,51 @@ function M.attach_state(state)
   return session, started
 end
 
-local function no_match()
-  errors.notify(errors.new("no_match", "no attached session matches"))
-end
-
----Resolve the one state an action acts on and pass it to `cb`:
----no attached match and the action may attach: pick over every matching state and attach it;
----several attached matches: pick one of them, which must still be attached when the pick returns; otherwise the only
----attached match.
----`cb` also gets `started`: true when this call started the tool of the state it passes.
----@param opts sidekick_ultra.TargetOpts
----@param cb fun(state: sidekick_ultra.State, started?: boolean)
-function M.with_target(opts, cb)
-  local matching = attached_states(opts.filter)
-  if #matching == 0 then
-    if not opts.attach then
-      no_match()
-      return
-    end
-    M.pick(M.states(opts.filter), { auto = true }, function(state)
-      local session, started = M.attach_state(state)
-      if session then
-        cb(session_state(session, true), started)
-      end
-    end)
-  else
-    M.pick(matching, { auto = true }, function(state)
-      for _, session in ipairs(registry.attached()) do
-        if session.id == state.session.id then
-          cb(state)
-          return
-        end
-      end
-      no_match()
-    end)
-  end
-end
-
----Pass every attached state that matches `filter` to `cb`.
----@param filter? sidekick_ultra.Filter
+---Pick one of the attached `matching` states (the only one without UI) and pass its current state to `cb`.
+---@param matching sidekick_ultra.State[]
 ---@param cb fun(state: sidekick_ultra.State)
-function M.with_attached(filter, cb)
+local function pick_attached(matching, cb)
+  M.pick(matching, { auto = true }, function(state)
+    local current = M.current(state)
+    if current then
+      cb(current)
+    end
+  end)
+end
+
+---Resolve the one state an action acts on and pass it to `cb`: the attached match (the one chosen among several),
+---or with no attached match a pick over every matching state, attached and started here.
+---`cb` also gets `started`: true when this call started the tool of the state it passes.
+---@param filter? sidekick_ultra.Filter
+---@param cb fun(state: sidekick_ultra.State, started?: boolean)
+function M.with_target(filter, cb)
+  local matching = attached_states(filter)
+  if #matching > 0 then
+    pick_attached(matching, cb)
+    return
+  end
+  M.pick(M.states(filter), { auto = true }, function(state)
+    local session, started = M.attach_state(state)
+    if session then
+      cb(session_state(session, true), started)
+    end
+  end)
+end
+
+---Pass the attached states that match `filter` to `cb`: every one, or with `opts.one` the one chosen among them.
+---@param filter? sidekick_ultra.Filter
+---@param opts { one?: boolean }
+---@param cb fun(state: sidekick_ultra.State)
+function M.with_attached(filter, opts, cb)
   local matching = attached_states(filter)
   if #matching == 0 then
     no_match()
-    return
-  end
-  for _, state in ipairs(matching) do
-    cb(state)
+  elseif opts.one then
+    pick_attached(matching, cb)
+  else
+    for _, state in ipairs(matching) do
+      cb(state)
+    end
   end
 end
 

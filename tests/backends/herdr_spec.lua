@@ -486,7 +486,7 @@ describe("herdr backend", function()
       expect.equality(#rec.calls, 4)
     end)
 
-    it("returns backend_error without closing the pane when a blocked agent's shell is not visible here", function()
+    it("returns backend_error and closes the pane when a blocked agent's shell is not visible here", function()
       install(routes({
         ["agent start"] = failing("agent_start_not_ready"),
         ["pane process-info"] = process_info("process_info_claude", { [4200] = GONE_PID }),
@@ -494,8 +494,9 @@ describe("herdr backend", function()
       local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality(session, nil)
       expect.equality(err.id, "backend_error")
-      expect.equality(#rec.calls, 4)
+      expect.equality(#rec.calls, 5)
       expect.equality(argvs()[4][3], "process-info")
+      expect.equality(argvs()[5], { "herdr", "pane", "close", "w1:p4" })
     end)
 
     it("closes exactly the pane it just split for every agent start failure, and returns the start error", function()
@@ -530,23 +531,15 @@ describe("herdr backend", function()
       expect.equality(#rec.calls, 4)
     end)
 
-    it("returns backend_error when the shell pid is not a process here, and leaves the pane", function()
+    it("returns backend_error and closes the pane when the shell pid is not a process here", function()
       install(routes({ ["pane process-info"] = process_info("process_info_claude", { [4200] = GONE_PID }) }))
       local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality(session, nil)
       expect.equality(err.id, "backend_error")
-      expect.equality(
-        vim.tbl_contains(
-          vim.tbl_map(function(argv)
-            return argv[3]
-          end, argvs()),
-          "close"
-        ),
-        false
-      )
+      expect.equality(argvs()[#rec.calls], { "herdr", "pane", "close", "w1:p4" })
     end)
 
-    it("returns backend_error when process-info has no shell pid", function()
+    it("returns backend_error and closes the pane when process-info has no shell pid", function()
       install(routes({
         ["pane process-info"] = patched("process_info_claude", function(data)
           data.result.process_info.shell_pid = nil
@@ -555,6 +548,16 @@ describe("herdr backend", function()
       local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       expect.equality(session, nil)
       expect.equality(err.id, "backend_error")
+      expect.equality(argvs()[#rec.calls], { "herdr", "pane", "close", "w1:p4" })
+    end)
+
+    it("says when the close of the pane of a start that failed after the agent started failed too", function()
+      install(routes({
+        ["pane process-info"] = process_info("process_info_claude", { [4200] = GONE_PID }),
+        ["pane close"] = failing("error"),
+      }))
+      local _, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
+      expect.equality(err.msg:find("closing the new pane w1:p4 also failed", 1, true) ~= nil, true)
     end)
   end)
 

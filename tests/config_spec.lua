@@ -127,7 +127,10 @@ describe("config", function()
     expect.equality(path_of({ context = { [""] = fn } }), "context.")
     expect.equality(path_of({ context = { this = fn } }), "context.this")
     local _, err = config.validate({ context = { this = fn } })
-    expect.equality(err.msg:find("context.this: ", 1, true), 1)
+    expect.equality(
+      err.msg,
+      "context.this: expected a placeholder name (letters, digits and underscores, and not `this`), got string"
+    )
     expect.equality(config.validate({ context = { my_src2 = fn } }).context.my_src2, fn)
   end)
 

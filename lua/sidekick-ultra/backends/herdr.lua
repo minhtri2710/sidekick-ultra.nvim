@@ -1,7 +1,6 @@
 ---The herdr backend: sessions are herdr panes whose detected agent kind is a configured tool. nvim talks to the
 ---server it runs under (`HERDR_SOCKET_PATH` is inherited); no command passes `--session`, `--remote` or `--machine`.
----Every command goes through `sidekick-ultra.exec`. Only pids, names, ids, cwds and states are read from herdr's
----answers, never argv, cmdline or environment.
+---Only pids, names, ids, cwds and states are read from herdr's answers, never argv, cmdline or environment.
 local contract = require("sidekick-ultra.backend")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
@@ -57,20 +56,19 @@ local function envelope_code(err)
 end
 
 ---Run `argv`, decode herdr's `{id, result = {type, ...}}` envelope and return `result[field]`, a table.
----@param argv string[]
----@param cmd string the subcommand, named in an error
+---@param argv string[] `herdr <group> <subcommand> ...`: the group and subcommand are named in an error
 ---@param field string
 ---@param timeout_ms? integer
 ---@return table? payload
 ---@return sidekick_ultra.Error? err
-local function query(argv, cmd, field, timeout_ms)
+local function query(argv, field, timeout_ms)
   local decoded, err = exec.json(argv, { timeout_ms = timeout_ms })
   if err then
     return nil, err
   end
   local payload = type(decoded) == "table" and type(decoded.result) == "table" and decoded.result[field]
   if type(payload) ~= "table" then
-    return nil, errors.new("backend_error", ("herdr %s: response has no result.%s"):format(cmd, field))
+    return nil, errors.new("backend_error", ("herdr %s %s: response has no result.%s"):format(argv[2], argv[3], field))
   end
   return payload
 end
@@ -89,15 +87,16 @@ local function foreground_pid(info)
   return type(chosen) == "table" and chosen.pid or nil
 end
 
----A pane's process chosen by `pick`, with the name this machine's process table gives that pid: the value
----`is_running` compares against later. Returns nothing when `pick` finds no pid or the pid is not visible here.
+---A pane's process chosen by `pick`, with the name this machine's process table gives that pid: the value the
+---contract's liveness rule compares against later. Returns nothing when `pick` finds no pid or the pid is not visible
+---here.
 ---@param pane_id string
 ---@param pick fun(info: table): integer?
 ---@return integer? pid
 ---@return string? proc_name
 ---@return sidekick_ultra.Error? err
 local function recorded_process(pane_id, pick)
-  local info, err = query({ "herdr", "pane", "process-info", "--pane", pane_id }, "pane process-info", "process_info")
+  local info, err = query({ "herdr", "pane", "process-info", "--pane", pane_id }, "process_info")
   if not info then
     return nil, nil, err
   end
@@ -160,7 +159,7 @@ end
 function M.list(tools)
   -- Without --workspace herdr lists the panes of every workspace. With no herdr server running (`server_not_running`,
   -- src/cli/server_not_running.rs) there are no panes.
-  local panes, err = query({ "herdr", "pane", "list" }, "pane list", "panes")
+  local panes, err = query({ "herdr", "pane", "list" }, "panes")
   if not panes then
     if envelope_code(err) == "server_not_running" then
       return {}
@@ -189,7 +188,7 @@ end
 ---@return string? name
 ---@return sidekick_ultra.Error? err
 local function agent_name(tool_name)
-  local agents, err = query({ "herdr", "agent", "list" }, "agent list", "agents")
+  local agents, err = query({ "herdr", "agent", "list" }, "agents")
   if not agents then
     return nil, err
   end
@@ -213,11 +212,24 @@ end
 ---@return table? agent the started agent's `AgentInfo`, or `{agent_status = "blocked"}` for `agent_not_ready`
 ---@return sidekick_ultra.Error? err
 local function start_agent(argv)
-  local agent, err = query(argv, "agent start", "agent", START_TIMEOUT_MS + exec.DEFAULT_TIMEOUT_MS)
+  local agent, err = query(argv, "agent", START_TIMEOUT_MS + exec.DEFAULT_TIMEOUT_MS)
   if not agent and envelope_code(err) == "agent_not_ready" then
     return { agent_status = "blocked" }
   end
   return agent, err
+end
+
+---Close the pane of a start that failed after the split and return `err`, which says when the close failed too.
+---@param pane_id string
+---@param err sidekick_ultra.Error
+---@return nil
+---@return sidekick_ultra.Error err
+local function close_failed(pane_id, err)
+  local closed, close_err = exec.check({ "herdr", "pane", "close", pane_id })
+  if not closed then
+    err.msg = ("%s (closing the new pane %s also failed: %s)"):format(err.msg, pane_id, close_err.msg)
+  end
+  return nil, err
 end
 
 ---@param tool sidekick_ultra.Tool
@@ -247,7 +259,7 @@ function M.start(tool, opts)
     vim.list_extend(split, { "--env", pair })
   end
   table.insert(split, "--no-focus")
-  local created, split_err = query(split, "pane split", "pane")
+  local created, split_err = query(split, "pane")
   if not created then
     return nil, split_err
   end
@@ -264,11 +276,7 @@ function M.start(tool, opts)
   end
   local agent, start_err = start_agent(start)
   if not agent then
-    local closed, close_err = exec.check({ "herdr", "pane", "close", new_id })
-    if not closed then
-      start_err.msg = ("%s (closing the new pane %s also failed: %s)"):format(start_err.msg, new_id, close_err.msg)
-    end
-    return nil, start_err
+    return close_failed(new_id, start_err)
   end
 
   -- herdr's answer to `agent start` can lack the cwd, and the agent may not own the foreground yet: the pane was split
@@ -282,8 +290,10 @@ function M.start(tool, opts)
     end
   )
   if not session then
-    return nil,
+    return close_failed(
+      new_id,
       session_err or errors.new("backend_error", ("herdr pane %s has no shell process visible to nvim"):format(new_id))
+    )
   end
   return session
 end
@@ -294,7 +304,7 @@ end
 ---@return boolean? blocked
 ---@return sidekick_ultra.Error? err
 local function is_blocked(session)
-  local pane, err = query({ "herdr", "pane", "get", session.pane_id }, "pane get", "pane")
+  local pane, err = query({ "herdr", "pane", "get", session.pane_id }, "pane")
   if not pane then
     return nil, err
   end

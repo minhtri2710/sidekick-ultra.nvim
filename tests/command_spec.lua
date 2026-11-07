@@ -82,7 +82,7 @@ describe("command", function()
         expect.equality({ parse(line) }, { nil, "invalid_args" })
       end
       local _, err = command.parse("send nope=1")
-      expect.equality(err.arg, "nope")
+      expect.equality(err.msg, "unknown argument nope for send")
     end)
   end)
 

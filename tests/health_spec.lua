@@ -237,6 +237,13 @@ describe("health", function()
     end
     check()
     expect.equality(advice("warn", "older than 3.7"), "Upgrade tmux to 3.7 or newer")
+    local older = {}
+    for _, line in ipairs(report) do
+      if line.kind == "warn" and line.msg:find("older", 1, true) then
+        table.insert(older, line.msg)
+      end
+    end
+    expect.equality(older, { "tmux: tmux 3.6 is older than 3.7" })
   end)
 
   it("never judges the zellij version", function()

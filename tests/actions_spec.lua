@@ -590,6 +590,18 @@ describe("actions", function()
       expect.equality(cap.calls[1].msg, "backend not registered: herdr")
     end)
 
+    it("delivers nothing to a session that a setup detached while the prompt picker was open", function()
+      attached({ "claude" })
+      pick.choose = function(items)
+        local item = choose("changes")(items)
+        registry.reset()
+        registry.register(backend)
+        return item
+      end
+      actions.prompt({})
+      expect.equality({ cap.ids(), backend.delivered, registry.attached() }, { { "no_match" }, {}, {} })
+    end)
+
     it("delivers to the session picked first when several are attached, with no second pick", function()
       file_buffer()
       attached({ "claude", "gemini" })
@@ -752,6 +764,20 @@ describe("actions", function()
       pick.choose = function() end
       expect.no_error(actions.focus, {})
       expect.no_error(require("sidekick-ultra.status").cli)
+    end)
+
+    it("attaches, and focuses, a session listed as attached that a setup detached while its picker was open", function()
+      attached({ "claude" })
+      pick.choose = function(items)
+        registry.reset()
+        registry.register(backend)
+        return vim.tbl_filter(function(item)
+          return item.session ~= nil
+        end, items)[1]
+      end
+      actions.select({ focus = true })
+      expect.equality(cap.ids(), {})
+      expect.equality({ #registry.attached(), methods() }, { 1, { "focus" } })
     end)
 
     it("applies the name filter to the picker", function()

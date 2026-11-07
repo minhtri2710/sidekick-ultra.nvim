@@ -1,5 +1,4 @@
----Which configured tool a process runs, for the backends that see processes (rex, tmux, zellij). herdr names the
----agent itself and does not come here.
+---Process names, and which configured tool a program name or a process runs.
 ---
 ---A process's own words are tried in the order the backend gives them; the interpreter's own name is not one of
 ---them, as it says nothing about which tool runs. The script is tried last, and only when no other word matched.
@@ -11,7 +10,7 @@ local M = {}
 
 ---What a tool's `is_proc` is asked about; built only in `matches`.
 ---@class sidekick_ultra.ProcInfo
----@field pid? integer the process id; absent only for zellij, which reports none (0.45.1)
+---@field pid? integer the process id; absent when the backend sees no pid
 ---@field cmd string one program name, never a path or a command line: the process's name, the basename of its argv0,
 ---   or for a node or python interpreter the name of the script it runs (see procname). An empty name is never tested.
 

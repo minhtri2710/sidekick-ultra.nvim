@@ -116,9 +116,7 @@ function M.discover()
     if list then
       for _, session in ipairs(list) do
         if by_id[session.id] then
-          errors.notify(
-            errors.new("duplicate_session", "duplicate session id " .. session.id, { session_id = session.id })
-          )
+          errors.notify(errors.new("duplicate_session", "duplicate session id " .. session.id))
         else
           by_id[session.id] = session
           table.insert(listed, session)

@@ -1,6 +1,5 @@
----The tmux backend: sessions are tmux panes. Every command is `tmux [-S <socket>] <subcommand>`, run through the exec
----seam. The shapes were probed against tmux 3.8; what the live run must still settle is listed in
----tests/fixtures/tmux/UNVERIFIED.txt.
+---The tmux backend: sessions are tmux panes. Every command is `tmux [-S <socket>] <subcommand>`. The shapes were probed
+---against tmux 3.8; what the live run must still settle is listed in tests/fixtures/tmux/UNVERIFIED.txt.
 ---
 ---tmux reports a pane's root process (`pane_pid`), not an agent, so a tool is found by walking that process's tree in
 ---nvim (`nvim_get_proc_children`, `nvim_get_proc`). Only a process whose name is a node or python interpreter costs a
@@ -189,6 +188,28 @@ local function shell_word(word)
   return "'" .. word:gsub("'", "'\\''") .. "'"
 end
 
+---The session record of the pane `start` just split, whose root process is `root`.
+---@param tool sidekick_ultra.Tool
+---@param opts sidekick_ultra.StartOpts
+---@param pane string
+---@param root integer
+---@return sidekick_ultra.Session? session
+---@return sidekick_ultra.Error? err
+local function started_session(tool, opts, pane, root)
+  local _, pid, proc_name, find_err = find_tool(root, { [tool.name] = tool })
+  if find_err then
+    return nil, find_err
+  end
+  if not pid then
+    proc_name = proc.name(root)
+    if not proc_name then
+      return nil, errors.new("backend_error", ("pane %s is not visible to this nvim"):format(pane))
+    end
+    pid = root
+  end
+  return session_of(tool.name, pane, opts.cwd, pid, proc_name)
+end
+
 ---Split a new pane to the right of nvim's own pane, without focus, running the tool.
 ---With several command words tmux runs them directly as argv; with one it goes through `sh -c`, so that word is
 ---shell-escaped.
@@ -213,20 +234,12 @@ function M.start(tool, opts)
   if not pane then
     return nil, errors.new("backend_error", "tmux printed no id for the new pane")
   end
-  root = tonumber(root) --[[@as integer]]
 
-  local _, pid, proc_name, find_err = find_tool(root, { [tool.name] = tool })
-  if find_err then
-    return nil, errors.new("backend_error", ("%s; pane %s was left open"):format(find_err.msg, pane))
+  local session, session_err = started_session(tool, opts, pane, tonumber(root) --[[@as integer]])
+  if session_err then
+    session_err.msg = ("%s; pane %s was left open"):format(session_err.msg, pane)
   end
-  if not pid then
-    proc_name = proc.name(root)
-    if not proc_name then
-      return nil, errors.new("backend_error", ("pane %s is not visible to this nvim; it was left open"):format(pane))
-    end
-    pid = root
-  end
-  return session_of(tool.name, pane, opts.cwd, pid, proc_name)
+  return session, session_err
 end
 
 ---Leave any mode the pane is in (copy mode after a scroll-back). In a mode the pane takes keys and pastes for the mode,
