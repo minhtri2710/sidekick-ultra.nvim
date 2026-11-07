@@ -279,6 +279,7 @@ local function run()
       focused[pane.pane_id] = pane.focused
     end
     check("start left the new pane unfocused", focused[session.pane_id] == false, focused)
+    check("start left nvim's pane focused", focused[vim.env.HERDR_PANE_ID] == true, focused)
     if session.state == "blocked" then
       -- agent_not_ready: the agent is running but blocked during startup, so the guard rightly refuses to send.
       log("UNVERIFIABLE start: agent blocked at startup; rediscovery, send and submit not exercised")

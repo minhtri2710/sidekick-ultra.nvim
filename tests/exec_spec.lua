@@ -26,7 +26,7 @@ describe("exec", function()
 
   it("hands a caller the first stderr line of a failed check as data, and none for a run that failed to run", function()
     local _, err = exec.check({ "/bin/sh", "-c", "echo first >&2; echo second >&2; exit 4" })
-    expect.equality({ err.code, err.stderr }, { 4, "first" })
+    expect.equality({ err.code, err.stderr, err.msg }, { 4, "first", "/bin/sh exited with 4: first" })
     _, err = exec.check({ "/bin/sh", "-c", "exit 4" })
     expect.equality({ err.code, err.stderr, err.msg }, { 4, "", "/bin/sh exited with 4" })
     _, err = exec.check({ "/nonexistent/sku-binary" })
@@ -52,6 +52,18 @@ describe("exec", function()
   it("puts an environment in front of a command as /usr/bin/env K=V with the keys sorted, or nothing", function()
     expect.equality(exec.env_prefix({ SKU_B = "2", SKU_A = "a=1" }), { "/usr/bin/env", "SKU_A=a=1", "SKU_B=2" })
     expect.equality(exec.env_prefix({}), {})
+  end)
+
+  it("keeps no output: none of the loaded modules holds what a command printed", function()
+    local secret = require("tests.helpers.backend").SECRET
+    local res = exec.run({ "/bin/sh", "-c", "echo " .. secret })
+    expect.equality(res.stdout, secret .. "\n")
+    for name, mod in pairs(package.loaded) do
+      if type(name) == "string" and name:find("^sidekick%-ultra") then
+        expect.equality({ name, vim.inspect(mod):find(secret, 1, true) }, { name, nil })
+      end
+    end
+    expect.equality(vim.fn.execute("messages"):find(secret, 1, true), nil)
   end)
 
   it("maps a timeout to backend_error", function()

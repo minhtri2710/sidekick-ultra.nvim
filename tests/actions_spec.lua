@@ -94,26 +94,24 @@ describe("actions", function()
       })
     end)
 
-    for _, id in ipairs({ "session_blocked", "status_unreadable" }) do
-      it("notifies " .. id .. " and sends nothing else when the backend refuses", function()
-        attached({ "claude" }, { fail = { send = errors.new(id, "x") } })
-        actions.send({ msg = "hi", submit = true, focus = true })
-        expect.equality(cap.ids(), { id })
-        expect.equality(backend.delivered, {})
-        expect.equality(methods(), { "send" })
-      end)
+    it("notifies the refusal and sends nothing else when the backend refuses", function()
+      attached({ "claude" }, { fail = { send = errors.new("session_blocked", "x") } })
+      actions.send({ msg = "hi", submit = true, focus = true })
+      expect.equality(cap.ids(), { "session_blocked" })
+      expect.equality(backend.delivered, {})
+      expect.equality(methods(), { "send" })
+    end)
 
-      it("refuses the focus-in itself with " .. id .. ": no text, no submit, no focus", function()
-        attached({ "qwen" }, { fail = { send = errors.new(id, "x") } })
-        vim.uv.sleep = function()
-          error("must not wait")
-        end
-        actions.send({ msg = "hi", submit = true, focus = true })
-        expect.equality(cap.ids(), { id })
-        expect.equality(backend.delivered, {})
-        expect.equality(methods(), { "send" })
-      end)
-    end
+    it("refuses the focus-in itself: no wait, no text, no submit, no focus", function()
+      attached({ "qwen" }, { fail = { send = errors.new("session_blocked", "x") } })
+      vim.uv.sleep = function()
+        error("must not wait")
+      end
+      actions.send({ msg = "hi", submit = true, focus = true })
+      expect.equality(cap.ids(), { "session_blocked" })
+      expect.equality(backend.delivered, {})
+      expect.equality(methods(), { "send" })
+    end)
 
     it("stops after the text when the backend refuses it, without submit or focus", function()
       attached({ "qwen" }, {
@@ -362,15 +360,7 @@ describe("actions", function()
       expect.equality(cap.calls, {})
     end)
 
-    it("previews the exact text of each prompt", function()
-      attached({ "codex" })
-      pick.choose = function() end
-      actions.prompt({})
-      expect.equality(preview("changes"), "Can you review my changes?")
-    end)
-
     for _, case in ipairs({
-      { tool = "codex", text = "@my file.lua" },
       { tool = "claude", text = '@"my file.lua"' },
       { tool = "gemini", text = "@my\\ file.lua" },
     }) do

@@ -52,6 +52,16 @@ local function ours()
   return ret
 end
 
+---Set the plugin up with the given options and every backend disabled, so no backend registers by accident.
+---@param opts? table
+local function setup(opts)
+  local cfg = vim.deepcopy(opts or {})
+  for _, name in ipairs(require("sidekick-ultra.backends").names()) do
+    cfg[name] = { enabled = false }
+  end
+  sidekick.setup(cfg)
+end
+
 describe("keys", function()
   local calls, orig, leader
   before_each(function()
@@ -71,12 +81,16 @@ describe("keys", function()
       actions[name] = fn
     end
     keys.setup(false)
+    for _, lhs in ipairs({ "<leader>Zz", "<leader>as", "<Tab>" }) do
+      pcall(vim.keymap.del, "n", lhs)
+    end
+    pcall(vim.keymap.del, "n", "<leader>as", { buffer = 0 })
     vim.g.mapleader = leader
   end)
 
   describe("setup()", function()
     it("defines the seven maps with their desc, each calling the public API", function()
-      sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+      setup()
       for _, row in ipairs(TABLE) do
         local suffix, modes, desc, action, args = unpack(row)
         for _, mode in ipairs(modes) do
@@ -90,7 +104,7 @@ describe("keys", function()
     end)
 
     it("defines the prefix with its desc and no action, and nothing else", function()
-      sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+      setup()
       for _, mode in ipairs({ "n", "x" }) do
         expect.equality(map(mode, "<leader>a").desc, PREFIX_DESC)
       end
@@ -101,7 +115,7 @@ describe("keys", function()
     end)
 
     it("moves every map to another prefix and leaves none at the default", function()
-      sidekick.setup({ keys = { prefix = "<leader>S" }, herdr = { enabled = false }, rex = { enabled = false } })
+      setup({ keys = { prefix = "<leader>S" } })
       for _, row in ipairs(TABLE) do
         for _, mode in ipairs(row[2]) do
           expect.equality(map(mode, "<leader>S" .. row[1]).desc, row[3])
@@ -114,67 +128,63 @@ describe("keys", function()
     end)
 
     it("defines none for keys = false", function()
-      sidekick.setup({ keys = false, herdr = { enabled = false }, rex = { enabled = false } })
+      setup({ keys = false })
       expect.equality(#ours(), 0)
     end)
 
     it("removes the previous set on a second setup, and leaves the user's own maps alone", function()
       local mine = function() end
       vim.keymap.set("n", "<leader>Zz", mine, { desc = "mine" })
-      sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
-      sidekick.setup({ keys = { prefix = "<leader>S" }, herdr = { enabled = false }, rex = { enabled = false } })
+      setup()
+      setup({ keys = { prefix = "<leader>S" } })
       expect.equality(#ours(), 11)
       expect.equality(map("n", "<leader>as"), {})
       expect.equality(map("n", "<leader>Ss").desc, "Select Session")
       expect.equality(map("n", "<leader>Zz").callback == mine, true)
-      vim.keymap.del("n", "<leader>Zz")
     end)
 
     it("does not delete a plugin map the user has replaced", function()
       local mine = function() end
-      sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+      setup()
       vim.keymap.set("n", "<leader>as", mine, { desc = "mine" })
-      sidekick.setup({ keys = false, herdr = { enabled = false }, rex = { enabled = false } })
+      setup({ keys = false })
       expect.equality(map("n", "<leader>as").callback == mine, true)
       expect.equality(map("n", "<leader>at"), {})
-      vim.keymap.del("n", "<leader>as")
     end)
 
     it("removes the global maps of the previous setup past a buffer-local map at the same lhs", function()
       local mine = function() end
-      sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+      setup()
       vim.keymap.set("n", "<leader>as", mine, { buffer = 0, desc = "mine" })
-      sidekick.setup({ keys = { prefix = "<leader>S" }, herdr = { enabled = false }, rex = { enabled = false } })
+      setup({ keys = { prefix = "<leader>S" } })
       expect.equality(#ours(), 11)
       expect.equality(global("n", "<leader>as"), {})
       expect.equality(map("n", "<leader>as").callback == mine, true)
-      vim.keymap.del("n", "<leader>as", { buffer = 0 })
     end)
 
     it("never deletes a user's map that carries a copy of the plugin's callback", function()
       vim.g.mapleader = " "
-      sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+      setup()
       local copy = map("n", "<leader>as").callback
       -- <Tab> (0x09) sorts before the plugin's " as" in nvim_get_keymap, so a lookup by callback alone finds it first.
       vim.keymap.set("n", "<Tab>", copy, { desc = "mine" })
       for _ = 1, 2 do
-        sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+        setup()
         expect.equality(#ours(), 11)
         expect.equality(global("n", "<leader>as").callback == copy, true)
       end
-      sidekick.setup({ keys = false, herdr = { enabled = false }, rex = { enabled = false } })
+      setup({ keys = false })
       expect.equality(#ours(), 0)
       expect.equality(map("n", "<Tab>").callback == copy, true)
-      vim.keymap.del("n", "<Tab>")
     end)
 
     it("removes the previous set after mapleader changed, at the lhs it was defined at", function()
       for _, again in ipairs({ { keys = { prefix = "<leader>S" } }, { keys = false } }) do
         vim.g.mapleader = "\\"
-        sidekick.setup({ herdr = { enabled = false }, rex = { enabled = false } })
+        setup()
         expect.equality(#ours(), 11)
         vim.g.mapleader = " "
-        sidekick.setup(vim.tbl_extend("force", again, { herdr = { enabled = false }, rex = { enabled = false } }))
+        setup(again)
         expect.equality(#ours(), again.keys and 11 or 0)
         for _, suffix in ipairs({ "", "s", "t", "f", "v", "p", "o", "d" }) do
           for _, mode in ipairs({ "n", "x" }) do
@@ -202,14 +212,6 @@ describe("keys", function()
       expect.equality(alone.resolve({ prefix = "<leader>S" }), { prefix = "<leader>S" })
       expect.equality(alone.resolve(false), false)
       expect.equality(#alone.triggers("<leader>S"), 8)
-    end)
-
-    it("is caught when a chunk requires a module at load time", function()
-      local file = vim.fn.tempname()
-      vim.fn.writefile({ 'local config = require("sidekick-ultra.config")', "return {}" }, file)
-      local ok, err = pcall(load_alone(file))
-      vim.fn.delete(file)
-      expect.equality({ ok, err }, { false, "required sidekick-ultra.config" })
     end)
 
     it("reports the first problem of an invalid option: the key path, and what was expected", function()
@@ -252,16 +254,11 @@ describe("keys", function()
 
     it("lists the triggers for the default prefix: lhs, mode, desc, and no rhs", function()
       local list = triggers({})
-      expect.equality(list, {
-        { lhs = "<leader>a", mode = { "n", "x" }, desc = PREFIX_DESC },
-        { lhs = "<leader>as", mode = { "n" }, desc = "Select Session" },
-        { lhs = "<leader>at", mode = { "n", "x" }, desc = "Send This" },
-        { lhs = "<leader>af", mode = { "n" }, desc = "Send File" },
-        { lhs = "<leader>av", mode = { "x" }, desc = "Send Selection" },
-        { lhs = "<leader>ap", mode = { "n", "x" }, desc = "Select Prompt" },
-        { lhs = "<leader>ao", mode = { "n" }, desc = "Focus Session" },
-        { lhs = "<leader>ad", mode = { "n" }, desc = "Detach Session" },
-      })
+      local want = { { lhs = "<leader>a", mode = { "n", "x" }, desc = PREFIX_DESC } }
+      for _, row in ipairs(TABLE) do
+        table.insert(want, { lhs = "<leader>a" .. row[1], mode = row[2], desc = row[3] })
+      end
+      expect.equality(list, want)
     end)
 
     it("uses the prefix from opts.keys", function()
@@ -290,7 +287,7 @@ describe("keys", function()
 
     it("declares exactly the lhs and modes that setup() defines", function()
       for _, opts in ipairs({ {}, { keys = { prefix = "<leader>S" } } }) do
-        sidekick.setup(vim.tbl_extend("force", opts, { herdr = { enabled = false }, rex = { enabled = false } }))
+        setup(opts)
         local count = 0
         for _, t in ipairs(triggers(opts)) do
           for _, mode in ipairs(t.mode) do

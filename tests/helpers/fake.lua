@@ -123,6 +123,21 @@ function M.reset(tools, extra)
   require("sidekick-ultra").setup(vim.tbl_extend("force", cfg, extra or {}))
 end
 
+---Wait until every callback scheduled so far has run. The registry fires the attach and detach events through
+---`vim.schedule`, so after `attach` or `detach` this is the point where their subscribers have seen the event.
+function M.flush()
+  local done = false
+  vim.schedule(function()
+    done = true
+  end)
+  assert(
+    vim.wait(3000, function()
+      return done
+    end, 1),
+    "scheduled callbacks did not run"
+  )
+end
+
 ---An executable that makes a tool count as installed.
 M.INSTALLED = { "/bin/sh" }
 

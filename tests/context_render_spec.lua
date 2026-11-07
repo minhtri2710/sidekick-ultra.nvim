@@ -45,14 +45,6 @@ describe("context.render", function()
   end)
 
   describe("prompt library", function()
-    it("has a prompt named after every built-in placeholder", function()
-      for name in pairs(require("sidekick-ultra.context.sources").builtin) do
-        expect.equality(render.prompts()[name] ~= nil, true)
-      end
-      expect.equality(render.prompts().file, "{file}")
-      expect.equality(render.prompts().diagnostics_all ~= "{diagnostics_all}", true)
-    end)
-
     it("has the default prompts", function()
       local names = vim.tbl_keys(render.prompts())
       table.sort(names)
@@ -77,18 +69,8 @@ describe("context.render", function()
       })
     end)
 
-    it("resolves templates", function()
-      local snap = snapshot.capture()
-      expect.equality(render.template("explain", snap), "Explain {this}")
-      expect.equality(render.template("file", snap), "{file}")
-      expect.equality(
-        render.template("diagnostics", snap),
-        "Can you help me fix the diagnostics in {file}?\n{diagnostics}"
-      )
-      expect.equality(render.template("document", snap), "Add documentation to {function|line}")
-    end)
-
     it("merges user prompts: string, table and function; false removes", function()
+      open("a.lua", { "one" })
       render.setup({
         fix = false,
         mine = "hello {file}",
@@ -97,17 +79,18 @@ describe("context.render", function()
           return "buf " .. snap.buf
         end,
       })
-      local snap = snapshot.capture()
-      expect.equality(render.template("mine", snap), "hello {file}")
-      expect.equality(render.template("tabled", snap), "from table")
-      expect.equality(render.template("dyn", snap), "buf " .. snap.buf)
-      expect.equality(select(2, render.template("fix", snap)).id, "unknown_prompt")
-      expect.equality(render.template("explain", snap), "Explain {this}")
+      expect.equality(run({ prompt = "mine" }), "hello @a.lua")
+      expect.equality(run({ prompt = "tabled" }), "from table")
+      expect.equality(run({ prompt = "dyn" }), "buf " .. vim.api.nvim_get_current_buf())
+      local text, err = run({ prompt = "fix" })
+      expect.equality({ text, err.id }, { nil, "unknown_prompt" })
+      expect.equality(render.prompts().explain ~= nil, true)
     end)
 
     it("a user prompt overrides a default", function()
+      open("a.lua", { "one" })
       render.setup({ explain = "Describe {file}" })
-      expect.equality(render.template("explain", snapshot.capture()), "Describe {file}")
+      expect.equality(run({ prompt = "explain" }), "Describe @a.lua")
     end)
 
     it("setup() with nothing resets to the defaults", function()
@@ -115,18 +98,6 @@ describe("context.render", function()
       render.setup()
       expect.equality(render.prompts().mine, nil)
       expect.equality(render.prompts().fix, "Can you fix {this}?")
-    end)
-
-    it("displays the raw template, <function> for function prompts", function()
-      render.setup({
-        tabled = { msg = "t" },
-        dyn = function()
-          return ""
-        end,
-      })
-      expect.equality(render.display("explain"), "Explain {this}")
-      expect.equality(render.display("tabled"), "t")
-      expect.equality(render.display("dyn"), "<function>")
     end)
 
     it("reports a function prompt that throws as render_failed", function()

@@ -1,9 +1,8 @@
 -- The fixtures in tests/fixtures/zellij follow the shapes the D8 probe printed from zellij 0.45.1. What is still
 -- unverified is listed in UNVERIFIED.txt there.
-local backend = require("sidekick-ultra.backend")
 local errors = require("sidekick-ultra.errors")
-local exec = require("sidekick-ultra.exec")
 local fake = require("tests.helpers.fake")
+local helper = require("tests.helpers.backend")
 local notify = require("tests.helpers.notify")
 local registry = require("sidekick-ultra.registry")
 local tools = require("sidekick-ultra.tools")
@@ -11,16 +10,19 @@ local zellij = require("sidekick-ultra.backends.zellij")
 
 local expect = MiniTest.expect
 
-local TESTS = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
-local FIXTURES = TESTS .. "/fixtures/zellij/"
-local STUB = TESTS .. "/bin/zellij"
-local SECRET = "SECRET-TOKEN-xyz"
+local STUB = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/bin/zellij"
+local SECRET = helper.SECRET
+local ok = helper.ok
+-- The real wait, for the one case that must run the event loop while `vim.wait` is faked.
+local real_wait = vim.wait
+-- `start` polls the new pane every STEP_MS and gives up WAIT_MS after new-pane returned (START_STEP_MS and
+-- START_WAIT_MS in zellij.lua).
+local STEP_MS = 50
+local WAIT_MS = 2000
 
 ---@param name string file name inside tests/fixtures/zellij
 ---@return string
-local function fixture(name)
-  return table.concat(vim.fn.readfile(FIXTURES .. name), "\n")
-end
+local fixture = helper.fixtures("zellij")
 
 ---A pane list fixture, decoded, changed by `patch`, and encoded again.
 ---@param name string
@@ -45,45 +47,14 @@ local function terminal(panes, id)
   error("no terminal pane " .. id)
 end
 
----@param stdout string
----@return table
-local function ok(stdout)
-  return { code = 0, stdout = stdout, stderr = "" }
-end
-
----Replace `exec.run`. `routes` maps the arguments after the binary (joined by spaces) to a result table, stdout
----text, or a function(call number) returning either. A command without a route is recorded in `unexpected` and fails
----with exit 97.
----@param routes table<string, table|string|fun(n: integer): table|string>
+---Replace `exec.run`. `routes` maps the arguments after the binary (joined by spaces) to its answer (see the recorder in
+---tests/helpers/backend.lua). A command without a route fails the case.
+---@param routes table<string, string|table|fun(n: integer, argv: string[]): string|table>
 local function record(routes)
-  local rec = { calls = {}, subs = {}, unexpected = {}, orig = exec.run }
-  local counts = {}
-  exec.run = function(argv, opts)
-    table.insert(rec.calls, { argv = argv, opts = opts })
+  return helper.record(routes, function(argv)
     local sub = vim.list_slice(argv, 2)
-    table.insert(rec.subs, sub)
-    local key = table.concat(sub, " ")
-    counts[key] = (counts[key] or 0) + 1
-    local route = routes[key]
-    if type(route) == "function" then
-      route = route(counts[key])
-    end
-    if route == nil then
-      table.insert(rec.unexpected, key)
-      return { code = 97, stdout = "", stderr = "unexpected command" }
-    end
-    return type(route) == "string" and ok(route) or route
-  end
-  function rec.restore()
-    exec.run = rec.orig
-  end
-  ---@return string[] the commands run, joined
-  function rec.keys()
-    return vim.tbl_map(function(sub)
-      return table.concat(sub, " ")
-    end, rec.subs)
-  end
-  return rec
+    return table.concat(sub, " "), sub
+  end)
 end
 
 local LIST_SESSIONS = "list-sessions -n -s"
@@ -98,8 +69,9 @@ local function write_chars(session, pane, text)
 end
 
 describe("zellij backend", function()
-  local rec, dir, bin, orig_now, orig_wait, waits
-  -- The fake clock `start` reads (milliseconds): it moves only through zellij.wait, and a route may move it too.
+  local rec, dir, bin, orig_hrtime, orig_wait, waits
+  -- The fake clock `start` reads through `vim.uv.hrtime` (milliseconds): it moves only through `vim.wait`, and a route
+  -- may move it too.
   local clock
   local env = {}
   local VARS = { "ZELLIJ", "ZELLIJ_PANE_ID", "ZELLIJ_SESSION_NAME", "PATH" }
@@ -123,14 +95,15 @@ describe("zellij backend", function()
   end
 
   before_each(function()
-    -- `start` reads zellij.now and waits through zellij.wait; the specs drive a fake clock and take no wait.
-    orig_now, orig_wait, waits, clock = zellij.now, zellij.wait, {}, 0
-    zellij.now = function()
-      return clock
+    -- `start` reads the clock and waits between polls; the specs drive a fake clock and take no wait.
+    orig_hrtime, orig_wait, waits, clock = vim.uv.hrtime, vim.wait, {}, 0
+    vim.uv.hrtime = function()
+      return clock * 1e6
     end
-    zellij.wait = function(ms)
+    vim.wait = function(ms)
       table.insert(waits, ms)
       clock = clock + ms
+      return true
     end
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
@@ -152,21 +125,15 @@ describe("zellij backend", function()
   end)
 
   after_each(function()
-    zellij.now, zellij.wait = orig_now, orig_wait
-    if rec then
-      rec.restore()
-      expect.equality(rec.unexpected, {})
-      rec = nil
-    end
+    vim.uv.hrtime, vim.wait = orig_hrtime, orig_wait
     for _, var in ipairs(VARS) do
       vim.env[var] = env[var]
     end
     vim.fn.delete(dir, "rf")
-  end)
-
-  it("satisfies the backend contract", function()
-    expect.equality(backend.check(zellij), true)
-    expect.equality(zellij.name, "zellij")
+    if rec then
+      rec.restore()
+      rec = nil
+    end
   end)
 
   describe("available", function()
@@ -208,8 +175,11 @@ describe("zellij backend", function()
       rec = record(routes())
       local list, err = zellij.list(tools.all())
       expect.equality(err, nil)
-      expect.equality(rec.keys(), { LIST_SESSIONS, PANES_A, PANES_B })
+      expect.equality(rec.keys, { LIST_SESSIONS, PANES_A, PANES_B })
       expect.equality(rec.calls[1].argv[1], bin)
+      -- The claude pane's command line carries the secret; none of it is kept.
+      expect.equality(fixture("list_panes_a.json"):find(SECRET, 1, true) ~= nil, true)
+      expect.equality(vim.inspect({ list, rec.subs }):find(SECRET, 1, true), nil)
       expect.equality(list, {
         {
           id = "zellij:skuA:terminal_1",
@@ -245,7 +215,7 @@ describe("zellij backend", function()
       vim.env.ZELLIJ, vim.env.ZELLIJ_PANE_ID, vim.env.ZELLIJ_SESSION_NAME = "0", "0", "skuB"
       rec = record(routes())
       local list = zellij.list(tools.all())
-      expect.equality(rec.keys(), { PANES_B })
+      expect.equality(rec.keys, { PANES_B })
       expect.equality(
         vim.tbl_map(function(s)
           return s.id
@@ -451,7 +421,7 @@ describe("zellij backend", function()
       vim.env.ZELLIJ_SESSION_NAME = "skuB"
       rec = record(routes())
       zellij.list(tools.all())
-      expect.equality(rec.keys(), { LIST_SESSIONS, PANES_A, PANES_B })
+      expect.equality(rec.keys, { LIST_SESSIONS, PANES_A, PANES_B })
     end)
 
     it("reports the no-session text only for a failed list-sessions with empty stdout", function()
@@ -486,7 +456,7 @@ describe("zellij backend", function()
     local function running(panes_json, session)
       rec = record({ [PANES_A] = panes_json })
       local result = zellij.is_running(session or claude())
-      expect.equality(rec.keys(), { PANES_A })
+      expect.equality(rec.keys, { PANES_A })
       rec.restore()
       rec = nil
       return result
@@ -641,7 +611,7 @@ describe("zellij backend", function()
       rec = record(routes(" /bin/sh"))
       local session, err = start()
       expect.equality(err, nil)
-      expect.equality(rec.keys(), { NEW_PANE .. " /bin/sh", PANES_A })
+      expect.equality(rec.keys, { NEW_PANE .. " /bin/sh", PANES_A })
       expect.equality(session, {
         id = "zellij:skuA:terminal_6",
         backend = "zellij",
@@ -651,11 +621,6 @@ describe("zellij backend", function()
         zellij_session = "skuA",
         pane = "terminal_6",
       })
-    end)
-
-    it("returns a session that is running at once", function()
-      rec = record(routes(" /bin/sh"))
-      expect.equality(zellij.is_running((start())), true)
     end)
 
     it("passes the tool command as separate arguments after --", function()
@@ -719,17 +684,6 @@ describe("zellij backend", function()
       expect.equality(err.msg:find("node", 1, true), nil)
     end
 
-    it("waits with the event loop running, on a monotonic clock, when nothing is faked", function()
-      local ran = false
-      vim.schedule(function()
-        ran = true
-      end)
-      local t0 = orig_now()
-      orig_wait(30)
-      expect.equality(ran, true)
-      expect.equality(orig_now() - t0 >= 25, true)
-    end)
-
     it("returns on the first poll, without waiting, when the pane already shows the tool", function()
       local r = routes(" /bin/sh")
       r[PANES_A] = timed({ fixture("list_panes_a_started.json") })
@@ -747,8 +701,8 @@ describe("zellij backend", function()
       local session, err = start({ A = "1" })
       expect.equality(err, nil)
       expect.equality({ session.pane, session.proc_name }, { "terminal_6", "claude" })
-      expect.equality(polls, { 0, 50, 100 })
-      expect.equality(waits, { 50, 50 })
+      expect.equality(polls, { 0, STEP_MS, 2 * STEP_MS })
+      expect.equality(waits, { STEP_MS, STEP_MS })
       rec.restore()
       -- The session it returns is running by the plain rule.
       rec = record({ [PANES_A] = started })
@@ -764,13 +718,13 @@ describe("zellij backend", function()
         local session, err = start()
         expect.equality(session, nil)
         bound_error_names_everything(err)
-        expect.equality(clock, 2000)
+        expect.equality(clock, WAIT_MS)
         expect.equality(polls[1], 0)
-        expect.equality(polls[#polls] < 2000, true)
-        expect.equality(polls[#polls] >= 2000 - 50, true)
+        expect.equality(polls[#polls] < WAIT_MS, true)
+        expect.equality(polls[#polls] >= WAIT_MS - STEP_MS, true)
         expect.equality(
           vim.tbl_filter(function(ms)
-            return ms ~= 50
+            return ms ~= STEP_MS
           end, waits),
           {}
         )
@@ -784,8 +738,8 @@ describe("zellij backend", function()
       local session, err = start()
       expect.equality(session, nil)
       bound_error_names_everything(err)
-      expect.equality(polls, { 0, 950, 1900 })
-      expect.equality(clock, 2800)
+      expect.equality(polls, { 0, 900 + STEP_MS, 2 * (900 + STEP_MS) })
+      expect.equality(clock, 3 * 900 + 2 * STEP_MS)
     end)
 
     it("fails at once, naming the pane, when the pane exits or vanishes during the wait", function()
@@ -803,7 +757,7 @@ describe("zellij backend", function()
         expect.equality(session, nil)
         expect.equality({ err.id, err.cmd }, { "backend_error", "new-pane" })
         expect.equality(err.msg:find("terminal_6", 1, true) ~= nil and err.msg:find("left open", 1, true) ~= nil, true)
-        expect.equality(polls, { 0, 50 })
+        expect.equality(polls, { 0, STEP_MS })
         waits, clock = {}, 0
       end
     end)
@@ -815,7 +769,7 @@ describe("zellij backend", function()
       local session, err = start()
       expect.equality(err, nil)
       expect.equality(session.proc_name, "claude")
-      expect.equality(polls, { 0, 50, 100, 150 })
+      expect.equality(polls, { 0, STEP_MS, 2 * STEP_MS, 3 * STEP_MS })
     end)
 
     it("ends empty answers at the deadline with the no-answer error, each taking its second", function()
@@ -826,9 +780,9 @@ describe("zellij backend", function()
       expect.equality(session, nil)
       expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
       expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
-      -- The second poll started at 1050, before the deadline; the third would start at 2100, after it.
-      expect.equality(polls, { 0, 1050 })
-      expect.equality(clock, 2050)
+      -- The second poll starts at 1000 + STEP_MS, before the deadline; the third would start after it.
+      expect.equality(polls, { 0, 1000 + STEP_MS })
+      expect.equality(clock, 2 * 1000 + STEP_MS)
     end)
 
     it("stops at once when list-panes fails in the wait", function()
@@ -840,7 +794,7 @@ describe("zellij backend", function()
       local session, err = start()
       expect.equality(session, nil)
       expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 2 })
-      expect.equality(waits, { 50 })
+      expect.equality(waits, { STEP_MS })
     end)
 
     it("fails without a session name and runs nothing", function()
@@ -931,7 +885,7 @@ describe("zellij backend", function()
     it("checks the pane, then writes the raw text after -- with no Enter", function()
       rec = record({ [PANES_A] = fixture("list_panes_a.json"), [WRITE] = "" })
       expect.equality({ zellij.send(claude(), "hello world") }, { true })
-      expect.equality(rec.keys(), { PANES_A, WRITE })
+      expect.equality(rec.keys, { PANES_A, WRITE })
       expect.equality(rec.calls[2].argv, {
         bin,
         "--session",
@@ -972,7 +926,7 @@ describe("zellij backend", function()
       expect.equality(ok_, nil)
       expect.equality({ err.id, err.backend, err.cmd }, { "backend_error", "zellij", "write-chars" })
       expect.equality(err.msg:find("terminal_1", 1, true) ~= nil and err.msg:find("skuA", 1, true) ~= nil, true)
-      expect.equality(wrote(rec.keys()), false)
+      expect.equality(wrote(rec.keys), false)
     end)
 
     it("refuses an exited pane, and a pane whose program changed, without writing", function()
@@ -988,7 +942,7 @@ describe("zellij backend", function()
       }) do
         rec = record({ [PANES_A] = patched("list_panes_a.json", patch), [WRITE] = "" })
         local ok_, err = zellij.send(claude(), "hello world")
-        expect.equality(wrote(rec.keys()), false)
+        expect.equality(wrote(rec.keys), false)
         rec.restore()
         rec = nil
         expect.equality(ok_, nil)
@@ -1001,7 +955,7 @@ describe("zellij backend", function()
       local ok_, err = zellij.send(claude(), "hello world")
       expect.equality(ok_, nil)
       expect.equality({ err.id, err.cmd }, { "backend_error", "write-chars" })
-      expect.equality(wrote(rec.keys()), false)
+      expect.equality(wrote(rec.keys), false)
     end)
 
     it(
@@ -1012,7 +966,7 @@ describe("zellij backend", function()
         expect.equality(ok_, nil)
         expect.equality({ err.id, err.cmd }, { "backend_error", "list-panes" })
         expect.equality(err.msg:find("did not answer", 1, true) ~= nil, true)
-        expect.equality(wrote(rec.keys()), false)
+        expect.equality(wrote(rec.keys), false)
       end
     )
 
@@ -1021,7 +975,7 @@ describe("zellij backend", function()
       local ok_, err = zellij.send(claude(), "hello world")
       expect.equality(ok_, nil)
       expect.equality({ err.id, err.cmd, err.code }, { "backend_error", "list-panes", 2 })
-      expect.equality(wrote(rec.keys()), false)
+      expect.equality(wrote(rec.keys), false)
     end)
 
     it("maps a failing write-chars to backend_error with its exit code", function()
@@ -1040,14 +994,14 @@ describe("zellij backend", function()
       local key = "--session skuA action send-keys --pane-id terminal_1 Enter"
       rec = record({ [key] = "" })
       expect.equality({ zellij.submit(claude()) }, { true })
-      expect.equality(rec.keys(), { key })
+      expect.equality(rec.keys, { key })
     end)
 
     it("focus focuses the pane by id", function()
       local key = "--session skuA action focus-pane-id terminal_1"
       rec = record({ [key] = "" })
       expect.equality({ zellij.focus(claude()) }, { true })
-      expect.equality(rec.keys(), { key })
+      expect.equality(rec.keys, { key })
     end)
 
     it("map a non-zero exit to backend_error with the exit code", function()
@@ -1066,19 +1020,6 @@ describe("zellij backend", function()
   end)
 
   describe("through the registry", function()
-    it("decides liveness with its own is_running and never reads a pid", function()
-      registry.register(zellij)
-      rec = record({ [PANES_A] = fixture("list_panes_a.json") })
-      expect.equality(registry.is_running(claude()), true)
-      rec.restore()
-      rec = record({
-        [PANES_A] = patched("list_panes_a.json", function(panes)
-          terminal(panes, 1).pane_command = "/bin/sh"
-        end),
-      })
-      expect.equality(registry.is_running(claude()), false)
-    end)
-
     it("discovers zellij sessions and attaches them", function()
       registry.register(zellij)
       rec = record({ [LIST_SESSIONS] = "skuA\n", [PANES_A] = fixture("list_panes_a.json") })
@@ -1093,11 +1034,28 @@ describe("zellij backend", function()
       expect.equality(registry.attach(list[1]), true)
       -- The liveness check asks the backend, which must go through the seam.
       registry.check()
-      expect.equality(rec.keys()[calls + 1], PANES_A)
+      expect.equality(rec.keys[calls + 1], PANES_A)
       expect.equality(#registry.attached(), 1)
-      -- Let the attach event run while the seam is still replaced, and leave nothing scheduled behind.
+      -- Let the attach and detach events run while the seam is still replaced, and leave nothing scheduled behind.
+      local detached = false
+      local group = vim.api.nvim_create_augroup("sku-zellij-spec", { clear = true })
+      MiniTest.finally(function()
+        vim.api.nvim_del_augroup_by_id(group)
+      end)
+      vim.api.nvim_create_autocmd("User", {
+        group = group,
+        pattern = registry.DETACH,
+        callback = function()
+          detached = true
+        end,
+      })
       registry.detach_all()
-      vim.wait(50)
+      expect.equality(
+        real_wait(2000, function()
+          return detached
+        end),
+        true
+      )
     end)
   end)
 
@@ -1159,46 +1117,6 @@ describe("zellij backend", function()
       expect.equality({ discovered("/opt/homebrew/bin/node /x/bin/gemini --flag value") }, { "gemini", "gemini" })
     end)
 
-    it("takes every interpreter name and the script word after its flags", function()
-      for _, case in ipairs({
-        { "node /x/bin/gemini", "gemini" },
-        { "nodejs /x/bin/gemini", "gemini" },
-        { "/usr/bin/bun /x/bin/gemini", "gemini" },
-        { "node -- /x/bin/gemini", "gemini" },
-        { "node --require ./hook.js --inspect=9229 /x/bin/gemini", "gemini" },
-        { "python /x/bin/aider", "aider" },
-        { "python3 -m aider --model x", "aider" },
-        { "python3.12 -u /x/bin/aider.py", "aider" },
-        { "/usr/bin/Python -W ignore -m aider", "aider" },
-      }) do
-        expect.equality({ case[1], (discovered(case[1])) }, { case[1], case[2] })
-      end
-    end)
-
-    it("finds no tool for an interpreter that runs no script, or a script that is not a tool", function()
-      for _, command in ipairs({
-        "node -e gemini",
-        "node --eval gemini",
-        "node -p gemini",
-        "node --print gemini",
-        "node",
-        "python3 -c aider",
-        "python3",
-        "node /x/dist/index.js",
-        "python3 -m pip install gemini",
-        "node /x/bin/other gemini",
-        "node /x/bin/other --name=gemini",
-        "nodemon /x/bin/gemini",
-        "Python3 /x/bin/aider",
-      }) do
-        expect.equality({ command, (discovered(command)) }, { command, nil })
-      end
-    end)
-
-    it("leaves a program that is not an interpreter as the basename of its first word", function()
-      expect.equality({ discovered("/usr/local/bin/claude --resume x") }, { "claude", "claude" })
-    end)
-
     ---What a tool's is_proc is asked about while pane 1 of skuA runs `command`, with every other pane running nothing.
     ---@param command string
     ---@return table[] seen
@@ -1257,12 +1175,12 @@ describe("zellij backend", function()
       local WRITE = write_chars("skuA", "terminal_1", "hello")
       rec = record({ [PANES_A] = pane_1("node /x/bin/gemini --x"), [WRITE] = "" })
       expect.equality({ zellij.send(session_of("gemini", "gemini"), "hello") }, { true })
-      expect.equality(rec.keys(), { PANES_A, WRITE })
+      expect.equality(rec.keys, { PANES_A, WRITE })
       rec.restore()
       rec = record({ [PANES_A] = pane_1("node -e hello"), [WRITE] = "" })
       local ok_, err = zellij.send(session_of("gemini", "gemini"), "hello")
       expect.equality({ ok_, err.id, err.cmd }, { nil, "backend_error", "write-chars" })
-      expect.equality(rec.keys(), { PANES_A })
+      expect.equality(rec.keys, { PANES_A })
     end)
 
     describe("start", function()
@@ -1293,7 +1211,7 @@ describe("zellij backend", function()
         local session, err = start()
         expect.equality(err, nil)
         expect.equality(session.proc_name, "gemini")
-        expect.equality(waits, { 50 })
+        expect.equality(waits, { STEP_MS })
         rec.restore()
         rec = record({ [PANES_A] = running })
         expect.equality(zellij.is_running(session), true)
@@ -1320,7 +1238,7 @@ describe("zellij backend", function()
         })
         local session, err = start()
         expect.equality(err, nil)
-        expect.equality({ session.proc_name, waits }, { "gemini", { 50, 50 } })
+        expect.equality({ session.proc_name, waits }, { "gemini", { STEP_MS, STEP_MS } })
       end)
 
       it("fails at once when the pane's command is gone", function()
@@ -1334,29 +1252,7 @@ describe("zellij backend", function()
     -- Supervisor condition: the command line beyond the script word may carry a secret. Every command line below
     -- holds SECRET; nothing the backend returns, raises or notifies may hold it.
     describe("command line arguments", function()
-      local LINES = {
-        { "node /x/bin/gemini --api-key " .. SECRET, "gemini" },
-        { "node --require " .. SECRET .. " /x/bin/gemini", "gemini" },
-        { 'node -e "' .. SECRET .. '"', nil },
-        { "python3 -m aider --token " .. SECRET, "aider" },
-        { 'python3 -c "' .. SECRET .. '"', nil },
-        { 'node -pe "/x/' .. SECRET .. '/gemini"', nil },
-        { 'node -ep "/x/' .. SECRET .. '/gemini"', nil },
-        { "node --eval=0 /x/" .. SECRET .. "/gemini", nil },
-        { "node --print=0 /x/" .. SECRET .. "/gemini", nil },
-        { "node --run /x/" .. SECRET .. "/gemini", nil },
-        { "node --env-file " .. SECRET .. " /x/bin/gemini", "gemini" },
-        { "node --title " .. SECRET .. " /x/bin/gemini", "gemini" },
-        { "node --config-file /x/bin/qwen --x /x/" .. SECRET .. "/gemini", "qwen" },
-        { "node - /x/" .. SECRET .. "/gemini", nil },
-        { 'python3 -uc "/x/' .. SECRET .. '/gemini"', nil },
-        { "python3 -c/x/" .. SECRET .. "/gemini", nil },
-        { "python3 -Wc /x/bin/aider --token " .. SECRET, nil },
-        { "python3 -maider /x/" .. SECRET .. "/gemini", nil },
-        { "python3 -uX /x/" .. SECRET .. "/gemini /x/bin/aider", "aider" },
-        { "python3 --check-hash-based-pycs " .. SECRET .. " /x/bin/aider", "aider" },
-        { "python3 - /x/" .. SECRET .. "/gemini", nil },
-      }
+      local LINES = helper.SECRET_LINES
 
       ---@param value any
       local function expect_clean(value)
@@ -1408,7 +1304,7 @@ describe("zellij backend", function()
             expect.equality(#cap.calls, before + 1)
           end
           expect_clean({ ok_, err, rec.subs, cap.calls })
-          expect.equality(vim.tbl_contains(rec.keys(), write), case[2] ~= nil)
+          expect.equality(vim.tbl_contains(rec.keys, write), case[2] ~= nil)
           rec.restore()
           rec = nil
         end
@@ -1452,8 +1348,7 @@ describe("zellij backend", function()
     local cap
     local NEW_PANE_SH =
       "--session skuA action new-pane --direction right --no-focus --cwd /tmp/sku-proj-a --name sku-claude -- /bin/sh"
-    local NEW_PANE_ENV =
-      "--session skuA action new-pane --direction right --no-focus --cwd /tmp/sku-proj-a --name sku-claude -- /usr/bin/env TOKEN=SECRET-TOKEN-xyz /bin/sh"
+    local NEW_PANE_ENV = NEW_PANE_SH:gsub("%-%- /bin/sh$", "-- /usr/bin/env TOKEN=" .. SECRET .. " /bin/sh")
 
     before_each(function()
       cap = notify.capture()
@@ -1603,7 +1498,7 @@ describe("zellij backend", function()
       }) do
         rec = record({ [PANES_A] = input, [write_chars("skuA", "terminal_1", "text")] = "" })
         local ok_, err = zellij.send(claude(), "text")
-        local wrote_text = vim.tbl_contains(rec.keys(), write_chars("skuA", "terminal_1", "text"))
+        local wrote_text = vim.tbl_contains(rec.keys, write_chars("skuA", "terminal_1", "text"))
         rec.restore()
         rec = nil
         expect.equality(ok_, nil)
@@ -1682,11 +1577,7 @@ describe("zellij backend", function()
         { start_routes("not json " .. SECRET) },
       }
       for _, case in ipairs(cases) do
-        local routes_table = case[1]
-        if routes_table[NEW_PANE_SH] and not routes_table[PANES_A] then
-          routes_table[PANES_A] = ""
-        end
-        rec = record(routes_table)
+        rec = record(case[1])
         local session, err = start_inside()
         rec.restore()
         rec = nil

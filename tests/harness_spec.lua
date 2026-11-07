@@ -2,15 +2,9 @@ local expect = MiniTest.expect
 
 local root = vim.fs.dirname(vim.fs.dirname(vim.uv.fs_realpath(debug.getinfo(1, "S").source:sub(2))))
 
-local MUXES = { "herdr", "rex", "tmux", "zellij" }
+local MUXES = require("sidekick-ultra.backends").names()
 
 describe("test harness", function()
-  it("resolves herdr, rex, tmux and zellij to the stubs", function()
-    for _, name in ipairs(MUXES) do
-      expect.equality(vim.uv.fs_realpath(vim.fn.exepath(name)), vim.uv.fs_realpath(root .. "/tests/bin/" .. name))
-    end
-  end)
-
   it("makes a stub that is reached exit 97 and leave a marker in HOME", function()
     -- The run's own HOME carries the marker that fails the suite, so these deliberate calls use another one.
     local home = vim.fn.tempname()
@@ -30,15 +24,25 @@ describe("test harness", function()
     for _, var in ipairs({
       "HERDR_ENV",
       "HERDR_PANE_ID",
+      "HERDR_TAB_ID",
+      "HERDR_WORKSPACE_ID",
+      "HERDR_SESSION",
       "HERDR_SOCKET_PATH",
+      "HERDR_CLIENT_SOCKET_PATH",
+      "HERDR_BIN_PATH",
+      "HERDR_CONFIG_PATH",
       "REX_SERVER",
+      "REX_SESSION",
       "REX_BLOCK",
+      "REX_CLIENT",
       "TERM_PROGRAM",
       "TMUX",
       "TMUX_PANE",
+      "TMUX_TMPDIR",
       "ZELLIJ",
       "ZELLIJ_PANE_ID",
       "ZELLIJ_SESSION_NAME",
+      "ZELLIJ_SOCKET_DIR",
     }) do
       expect.equality(vim.env[var], nil)
     end

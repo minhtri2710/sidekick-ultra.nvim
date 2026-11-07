@@ -53,9 +53,10 @@
 ---foreground (or shell) process, with the name read through `vim.api.nvim_get_proc(pid)`, so the session counts as
 ---running at once and is not auto-detached before the tool has started. The next discovery replaces the record by id.
 ---@field start fun(tool: sidekick_ultra.Tool, opts: sidekick_ultra.StartOpts): sidekick_ultra.Session?, sidekick_ultra.Error?
----Deliver `text` as literal input, with no implicit Enter. The blocked guard lives here: re-read the session's
----state first, and refuse with `session_blocked` when it is blocked or `status_unreadable` when the state cannot
----be read. A refusal must send nothing.
+---Deliver `text` as literal input, with no implicit Enter. A backend that reads an agent state (herdr, rex) guards
+---here: re-read the session's state first, and refuse with `session_blocked` when it is blocked or
+---`status_unreadable` when the state cannot be read. A refusal must send nothing. tmux and zellij read no state, so
+---they have no such guard.
 ---@field send fun(session: sidekick_ultra.Session, text: string): true?, sidekick_ultra.Error?
 ---Send Enter.
 ---@field submit fun(session: sidekick_ultra.Session): true?, sidekick_ultra.Error?

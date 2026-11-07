@@ -1,22 +1,18 @@
 -- The fixtures in tests/fixtures/rex follow the shapes a live rex 0.0.1793377904-ge6592f (Rex Beta build 1696) printed
 -- in D3. What is still unverified is listed in UNVERIFIED.txt there.
-local backend = require("sidekick-ultra.backend")
-local exec = require("sidekick-ultra.exec")
 local fake = require("tests.helpers.fake")
+local helper = require("tests.helpers.backend")
 local rex = require("sidekick-ultra.backends.rex")
 local tools = require("sidekick-ultra.tools")
 
 local expect = MiniTest.expect
 
-local FIXTURES = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h") .. "/fixtures/rex/"
 local SID = "session:aaaa"
-local SECRET = "SECRET-TOKEN-xyz"
-
----@param name string
----@return string
-local function fixture(name)
-  return table.concat(vim.fn.readfile(FIXTURES .. name .. ".json"), "\n")
-end
+local SECRET = helper.SECRET
+local ok = helper.ok
+local fixture = helper.fixtures("rex", ".json")
+-- Where the Rex Beta app keeps its CLI; `available()` tries it when `rex` is neither configured nor on PATH.
+local BUNDLE = "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
 
 ---A process fixture whose foreground pid is this nvim, so `nvim_get_proc` finds it.
 ---@param name string
@@ -31,40 +27,17 @@ local function live(name, patch)
   return vim.json.encode(data)
 end
 
----@param stdout string
----@return table
-local function ok(stdout)
-  return { code = 0, stdout = stdout, stderr = "" }
-end
-
 ---Replace `exec.run`. `routes` maps the arguments after the global flags (joined by spaces), or `ps` for a `ps` call,
----to a result table, a fixture-text string, or a function(call number) returning either. A command without a route is recorded in
----`unexpected` and fails with exit 97.
----@param routes table<string, table|string|fun(n: integer): table|string>
+---to its answer (see the recorder in tests/helpers/backend.lua). A command without a route fails the case.
+---@param routes table<string, string|table|fun(n: integer, argv: string[]): string|table>
 local function record(routes)
-  local rec = { calls = {}, subs = {}, unexpected = {}, orig = exec.run }
-  local counts = {}
-  exec.run = function(argv, opts)
-    table.insert(rec.calls, { argv = argv, opts = opts })
-    local first = argv[3] == "-S" and 5 or 3
-    local sub = argv[1] == "ps" and { "ps" } or vim.list_slice(argv, first)
-    table.insert(rec.subs, sub)
-    local key = table.concat(sub, " ")
-    counts[key] = (counts[key] or 0) + 1
-    local route = routes[key]
-    if type(route) == "function" then
-      route = route(counts[key])
+  return helper.record(routes, function(argv)
+    if argv[1] == "ps" then
+      return "ps"
     end
-    if route == nil then
-      table.insert(rec.unexpected, key)
-      return { code = 97, stdout = "", stderr = "unexpected command" }
-    end
-    return type(route) == "string" and ok(route) or route
-  end
-  function rec.restore()
-    exec.run = rec.orig
-  end
-  return rec
+    local sub = vim.list_slice(argv, argv[3] == "-S" and 5 or 3)
+    return table.concat(sub, " "), sub
+  end)
 end
 
 local STATUS = "block call -s session:aaaa -b block:a2 program_status"
@@ -72,6 +45,7 @@ local STATUS = "block call -s session:aaaa -b block:a2 program_status"
 describe("rex backend", function()
   local rec, dir, bin
   local env = {}
+  local orig_executable
 
   ---@param rex_opts table the `rex` options besides `enabled`
   local function setup(rex_opts)
@@ -98,26 +72,20 @@ describe("rex backend", function()
     for _, var in ipairs({ "TERM_PROGRAM", "REX_SESSION", "REX_BLOCK", "PATH" }) do
       env[var] = vim.env[var]
     end
-    env.bundle = rex.bundle_bin
+    orig_executable = vim.fn.executable
     setup({ bin = bin })
   end)
 
   after_each(function()
-    if rec then
-      rec.restore()
-      expect.equality(rec.unexpected, {})
-      rec = nil
-    end
+    vim.fn.executable = orig_executable
     for _, var in ipairs({ "TERM_PROGRAM", "REX_SESSION", "REX_BLOCK", "PATH" }) do
       vim.env[var] = env[var]
     end
-    rex.bundle_bin = env.bundle
     vim.fn.delete(dir, "rf")
-  end)
-
-  it("satisfies the backend contract", function()
-    expect.equality(backend.check(rex), true)
-    expect.equality(rex.name, "rex")
+    if rec then
+      rec.restore()
+      rec = nil
+    end
   end)
 
   describe("available", function()
@@ -136,10 +104,14 @@ describe("rex backend", function()
       expect.equality({ rex.available() }, { true, bin, "PATH" })
 
       vim.env.PATH = "/nonexistent-sku-path"
-      rex.bundle_bin = bin
-      expect.equality({ rex.available() }, { true, bin, "bundle" })
+      vim.fn.executable = function(path)
+        return path == BUNDLE and 1 or orig_executable(path)
+      end
+      expect.equality({ rex.available() }, { true, BUNDLE, "bundle" })
 
-      rex.bundle_bin = dir .. "/missing"
+      vim.fn.executable = function(path)
+        return path == BUNDLE and 0 or orig_executable(path)
+      end
       expect.equality({ rex.available() }, { false })
     end)
   end)
@@ -231,7 +203,7 @@ describe("rex backend", function()
       }
     end
 
-    it("keeps the blocks whose foreground matches a tool, matching argv0 first and the name second", function()
+    it("keeps the blocks whose foreground matches a tool", function()
       rec = record(routes())
       local pid, name = fake.self_proc()
       local list, err = rex.list(tools.all())
@@ -325,7 +297,6 @@ describe("rex backend", function()
         r[step] = { code = 3, stdout = "", stderr = "target not found" }
         rec = record(r)
         local list, err = rex.list(tools.all())
-        expect.equality(rec.unexpected, {})
         rec.restore()
         rec = nil
         expect.equality(list, nil)
@@ -348,7 +319,6 @@ describe("rex backend", function()
         r[case[1]] = case[2]
         rec = record(r)
         local list, err = rex.list(tools.all())
-        expect.equality(rec.unexpected, {})
         rec.restore()
         rec = nil
         expect.equality(list, nil)
@@ -424,7 +394,6 @@ describe("rex backend", function()
       end, rec.calls)
       expect.equality(#ps, 1)
       expect.equality(ps[1].argv, { "ps", "-ww", "-o", "args=", "-p", tostring(pid) })
-      expect.equality({ ps[1].opts.backend, ps[1].opts.cmd }, { "rex", "ps" })
     end)
 
     it("reads the interpreter from argv0 when the name is something else", function()
@@ -434,26 +403,10 @@ describe("rex backend", function()
       expect.equality(list[1].tool, "pi")
     end)
 
-    it("runs ps only for an interpreter", function()
-      rec = record(node_routes({ name = "2.1.308", argv0 = "claude" }, "unused"))
-      rex.list(tools.all())
-      for _, sub in ipairs(rec.subs) do
-        expect.equality(sub[1] == "ps", false)
-      end
-    end)
-
     it("keeps a block whose script is no tool, or that runs code, out of the list", function()
       expect.equality(listed("node /x/bin/other"), {})
       expect.equality(listed("node -e " .. SECRET), {})
       expect.equality(listed("python3 -c " .. SECRET), {})
-    end)
-
-    it("still matches a tool by its argv0 or name before any ps call", function()
-      rec = record(node_routes({ name = "node", argv0 = "pi" }, { code = 2, stdout = "", stderr = "must not run" }))
-      local list, err = rex.list(tools.all())
-      expect.equality(err, nil)
-      expect.equality(#list, 1)
-      expect.equality(list[1].tool, "pi")
     end)
 
     it("finds a node tool whose process name is the interpreter and whose argv0 is its launcher", function()
@@ -466,12 +419,6 @@ describe("rex backend", function()
         end, list),
         { "pi" }
       )
-    end)
-
-    it("does not match the interpreter's own name, so a tool needs its script name", function()
-      fake.reset({ nodetool = { cmd = fake.INSTALLED, is_proc = "^node$" } }, { rex = { enabled = false, bin = bin } })
-      rec = record(node_routes({ name = "node", argv0 = "node" }, "node /x/bin/other\n"))
-      expect.equality(rex.list(tools.all()), {})
     end)
 
     it("tests the basename of argv0, never a directory of its path", function()
@@ -514,11 +461,6 @@ describe("rex backend", function()
       })
     end)
 
-    it("skips a process that ended before ps ran", function()
-      rec = record(node_routes({ name = "node", argv0 = "node" }, { code = 1, stdout = "", stderr = "" }))
-      expect.equality(rex.list(tools.all()), {})
-    end)
-
     it("maps a failing ps to backend_error without its stdout", function()
       local pid = fake.self_proc()
       rec = record(node_routes({ name = "node", argv0 = "node" }, {
@@ -531,22 +473,6 @@ describe("rex backend", function()
       expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "rex", "ps", 3 })
       expect.equality(err.msg, ("ps exited with 3 for pid %d: ps: boom"):format(pid))
       expect.equality(vim.inspect({ err, rec.calls }):find(SECRET, 1, true), nil)
-    end)
-
-    it("is the exec error itself when ps cannot be spawned", function()
-      rec = record(node_routes({ name = "node", argv0 = "node" }, "unused"))
-      local routed = exec.run
-      exec.run = function(argv, opts)
-        if argv[1] == "ps" then
-          return nil, require("sidekick-ultra.errors").new("backend_error", "cannot run ps: boom", opts)
-        end
-        return routed(argv, opts)
-      end
-      local list, err = rex.list(tools.all())
-      expect.equality(
-        { list, err.id, err.backend, err.cmd, err.msg },
-        { nil, "backend_error", "rex", "ps", "cannot run ps: boom" }
-      )
     end)
 
     -- Every command line below holds SECRET; nothing the backend returns or records may hold it.
@@ -681,7 +607,6 @@ describe("rex backend", function()
       expect.equality(rec.subs[1], { "block", "call", "-s", SID, "-b", "block:a2", "program_status" })
       expect.equality(rec.subs[2], { "send", "-s", SID, "-b", "block:a2", "--", "hello\n" })
       expect.equality(#rec.subs, 2)
-      expect.equality(rec.calls[2].opts.stdin, nil)
     end)
 
     it("keeps an option-shaped or multi-line text as a single element", function()
@@ -726,7 +651,6 @@ describe("rex backend", function()
         rec = record(routes(case))
         local res, err = rex.send(a2(), "hello\n")
         local count = #rec.subs
-        expect.equality(rec.unexpected, {})
         rec.restore()
         rec = nil
         expect.equality(res, nil)

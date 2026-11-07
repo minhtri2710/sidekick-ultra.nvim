@@ -7,7 +7,6 @@ local M = {}
 
 local NAME = "SidekickUltra"
 
----Subcommands and the keys each accepts, with the value type of each key.
 ---@type table<string, table<string, "string"|"boolean">>
 local SUBS = {
   select = { name = "string", focus = "boolean" },

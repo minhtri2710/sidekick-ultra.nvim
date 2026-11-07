@@ -2,7 +2,7 @@ local expect = MiniTest.expect
 local location = require("sidekick-ultra.location")
 
 describe("location", function()
-  local dir, orig_cwd
+  local dir, other, orig_cwd
 
   ---@param name string
   ---@param lines string[]
@@ -17,6 +17,8 @@ describe("location", function()
     orig_cwd = vim.fn.getcwd()
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
+    other = vim.fn.tempname()
+    vim.fn.mkdir(other, "p")
     vim.cmd.cd(dir)
   end)
 
@@ -24,6 +26,7 @@ describe("location", function()
     vim.cmd("silent! %bwipeout!")
     vim.cmd.cd(orig_cwd)
     vim.fn.delete(dir, "rf")
+    vim.fn.delete(other, "rf")
   end)
 
   describe("text", function()
@@ -138,14 +141,10 @@ describe("location", function()
     end)
 
     it("is absolute outside the cwd", function()
-      local other = vim.fn.tempname()
-      vim.fn.mkdir(other, "p")
       vim.fn.writefile({ "x" }, other .. "/b.lua")
       vim.cmd.edit(other .. "/b.lua")
       local buf = vim.api.nvim_get_current_buf()
       expect.equality(location.path(buf, vim.fn.getcwd()), vim.api.nvim_buf_get_name(buf))
-      vim.cmd("silent! %bwipeout!")
-      vim.fn.delete(other, "rf")
     end)
 
     it("is [No Name] for an unnamed buffer", function()

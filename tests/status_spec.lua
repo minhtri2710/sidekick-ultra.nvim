@@ -4,12 +4,6 @@ local status = require("sidekick-ultra.status")
 
 local expect = MiniTest.expect
 
-local function settle()
-  vim.wait(50, function()
-    return false
-  end)
-end
-
 describe("status", function()
   local orig_now, now
   before_each(function()
@@ -34,7 +28,7 @@ describe("status", function()
     -- Prime a fresh cache first: only the attach event can then update it.
     expect.equality(status.cli(), {})
     registry.attach(s)
-    settle()
+    fake.flush()
     expect.equality(status.cli(), {
       { id = "herdr:claude1", tool = "claude", cwd = s.cwd, backend = "herdr", state = "working" },
     })
@@ -44,16 +38,16 @@ describe("status", function()
     local s = fake.session("rex", "claude")
     s.state = nil
     registry.attach(s)
-    settle()
+    fake.flush()
     expect.equality(status.cli()[1].state, nil)
   end)
 
   it("refreshes on the detach event", function()
     registry.attach(fake.session("herdr", "claude"))
-    settle()
+    fake.flush()
     expect.equality(#status.cli(), 1)
     registry.detach("herdr:claude1")
-    settle()
+    fake.flush()
     expect.equality(status.cli(), {})
   end)
 
@@ -63,7 +57,7 @@ describe("status", function()
     local s = fake.session("herdr", "claude")
     s.proc_name = "gone"
     registry.attach(s)
-    settle()
+    fake.flush()
     expect.equality(#status.cli(), 1)
     expect.equality(b.of("list"), {})
   end)
@@ -71,7 +65,7 @@ describe("status", function()
   it("serves the cache for 5 s, then refreshes and auto-detaches dead sessions", function()
     local s = fake.session("herdr", "claude")
     registry.attach(s)
-    settle()
+    fake.flush()
     expect.equality(#status.cli(), 1)
     s.proc_name = "gone"
     now = now + 4000

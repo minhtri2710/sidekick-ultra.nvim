@@ -17,15 +17,10 @@ local M = { name = "zellij" }
 local START_WAIT_MS = 2000
 local START_STEP_MS = 50
 
----Milliseconds on a monotonic clock. A field with `wait`, so tests can drive both with a fake clock.
-M.now = function()
+---Milliseconds on a monotonic clock.
+---@return number
+local function now()
   return vim.uv.hrtime() / 1e6
-end
-
----Wait `ms` while the event loop keeps running (the exec calls of this backend already do the same through
----`vim.system():wait()`).
-M.wait = function(ms)
-  vim.wait(ms)
 end
 
 ---The binary `available()` found when `setup()` ran; every command runs it.
@@ -299,7 +294,7 @@ function M.start(tool, opts)
 
   -- Return only once the pane shows the tool as its program, so the session is running at once: the env wrapper, a
   -- shell or a script's interpreter show first. An empty answer is asked again within the bound.
-  local deadline = M.now() + START_WAIT_MS
+  local deadline = now() + START_WAIT_MS
   local last_err
   while true do
     local panes, panes_err, silent = panes_of(session)
@@ -326,11 +321,11 @@ function M.start(tool, opts)
         return session_of(tool.name, session, seen, program)
       end
     end
-    if M.now() >= deadline then
+    if now() >= deadline then
       break
     end
-    M.wait(START_STEP_MS)
-    if M.now() >= deadline then
+    vim.wait(START_STEP_MS)
+    if now() >= deadline then
       break
     end
   end
@@ -341,8 +336,8 @@ function M.start(tool, opts)
     )
 end
 
----`write-chars` to a missing pane exits 0 and drops the text (probe P-Z7), so check the pane first. This takes the
----place of the blocked-status guard of the other backends: zellij has no agent status.
+---`write-chars` to a missing pane exits 0 and drops the text (probe P-Z7), so check the pane first. zellij has no
+---agent status, so `send` has no blocked guard (herdr and rex have one).
 ---@param session sidekick_ultra.Session
 ---@param text string
 function M.send(session, text)

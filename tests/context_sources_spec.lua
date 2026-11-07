@@ -6,7 +6,7 @@ local sources = require("sidekick-ultra.context.sources")
 local builtin = sources.builtin
 
 describe("context.sources", function()
-  local dir, orig_cwd
+  local dir, other, orig_cwd
   local ns = vim.api.nvim_create_namespace("sku-test")
 
   ---@param name string
@@ -36,6 +36,8 @@ describe("context.sources", function()
     orig_cwd = vim.fn.getcwd()
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
+    other = vim.fn.tempname()
+    vim.fn.mkdir(other, "p")
     vim.cmd.cd(dir)
   end)
 
@@ -46,7 +48,10 @@ describe("context.sources", function()
     vim.cmd("silent! %bwipeout!")
     vim.cmd.cd(orig_cwd)
     vim.fn.delete(dir, "rf")
-    vim.treesitter.query.set("lua", "textobjects", "")
+    vim.fn.delete(other, "rf")
+    for _, lang in ipairs({ "lua", "c" }) do
+      vim.treesitter.query.set(lang, "textobjects", "")
+    end
   end)
 
   describe("locations", function()
@@ -96,12 +101,9 @@ describe("context.sources", function()
     end)
 
     it("falls back to the absolute path outside the cwd", function()
-      local other = vim.fn.tempname()
-      vim.fn.mkdir(other, "p")
       vim.fn.writefile({ "x" }, other .. "/b.lua")
       vim.cmd.edit(other .. "/b.lua")
       expect.equality(run("file"), { "@" .. vim.api.nvim_buf_get_name(0) })
-      vim.fn.delete(other, "rf")
     end)
   end)
 
@@ -350,60 +352,55 @@ describe("context.sources", function()
       expect.equality(run("function"), { "function inner @a.lua :L2:C3" })
     end)
 
-    describe("node_name", function()
-      local function node(spec)
-        local n = {}
-        function n:field(name)
-          return spec.fields and spec.fields[name] and { spec.fields[name] } or {}
-        end
-        function n:named_child_count()
-          return #(spec.children or {})
-        end
-        function n:named_child(i)
-          return spec.children[i + 1]
-        end
-        function n:type()
-          return spec.type or "node"
-        end
-        return n
-      end
-      local function text_of(n)
-        return n.text
+    describe("the name", function()
+      ---The text `function` yields at `cursor` of `lines`, with `query` as the buffer language's textobjects.
+      local function named(file, lang, query, lines, cursor, word)
+        vim.treesitter.query.set(lang, "textobjects", query)
+        open(file, lines)
+        vim.bo.filetype = lang
+        vim.api.nvim_win_set_cursor(0, cursor)
+        return run(word or "function")
       end
 
-      it("prefers the name field, then identifier, then field", function()
-        local name = node({})
-        name.text = "N"
-        local ident = node({})
-        ident.text = "I"
-        local field = node({})
-        field.text = "F"
-        expect.equality(
-          sources.node_name(node({ fields = { name = name, identifier = ident, field = field } }), text_of),
-          "N"
+      it("is the whole name field, however it is written", function()
+        local got = named(
+          "a.lua",
+          "lua",
+          "(function_declaration) @function.outer",
+          { "function M.foo() end" },
+          { 1, 12 }
         )
-        expect.equality(sources.node_name(node({ fields = { identifier = ident, field = field } }), text_of), "I")
-        expect.equality(sources.node_name(node({ fields = { field = field } }), text_of), "F")
+        expect.equality(got, { "function M.foo @a.lua :L1:C1" })
       end)
 
-      it("falls back to the first identifier-type named child", function()
-        local a = node({ type = "parameters" })
-        a.text = "(x)"
-        local b = node({ type = "property_identifier" })
-        b.text = "method"
-        expect.equality(sources.node_name(node({ children = { a, b } }), text_of), "method")
+      it("is the field child when the node has no name field", function()
+        local got = named("a.lua", "lua", "(dot_index_expression) @function.outer", { "local x = a.b" }, { 1, 12 })
+        expect.equality(got, { "function b @a.lua :L1:C11" })
       end)
 
-      it("returns nil without a name", function()
-        local a = node({ type = "block" })
-        expect.equality(sources.node_name(node({ children = { a } }), text_of), nil)
+      it("is the first identifier child when the node has no name, identifier or field", function()
+        local got = named(
+          "a.c",
+          "c",
+          "(function_declarator) @function.outer",
+          { "int main(void) {", "  return 0;", "}" },
+          { 1, 5 }
+        )
+        expect.equality(got, { "function main @a.c :L1:C5" })
       end)
-    end)
 
-    it("describe keeps the word and location when there is no name", function()
-      local loc = { path = "a.lua", kind = "position", r1 = 1, c1 = 1 }
-      expect.equality(location.format(sources.describe("function", "f", loc)), "function f @a.lua :L1:C1")
-      expect.equality(location.format(sources.describe("class", nil, loc)), "class @a.lua :L1:C1")
+      it("is left out, with the word and the location kept, when the node has none", function()
+        local lines = { "local f = function() return 1 end" }
+        local query = "(function_definition) @%s.outer"
+        expect.equality(
+          named("a.lua", "lua", query:format("function"), lines, { 1, 12 }),
+          { "function @a.lua :L1:C11" }
+        )
+        expect.equality(
+          named("b.lua", "lua", query:format("class"), lines, { 1, 12 }, "class"),
+          { "class @b.lua :L1:C11" }
+        )
+      end)
     end)
   end)
 end)

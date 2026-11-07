@@ -11,6 +11,10 @@ local function path_of(opts)
 end
 
 describe("config", function()
+  after_each(function()
+    config.setup({})
+  end)
+
   it("returns the defaults for no options", function()
     local cfg = config.validate()
     expect.equality(cfg, {
@@ -113,6 +117,19 @@ describe("config", function()
     expect.equality(path_of({ context = { x = false } }), "context.x")
   end)
 
+  it("rejects a key that is not a string, with its text", function()
+    local _, err = config.validate({ "x" })
+    expect.equality(err.msg, "1: expected string key, got number")
+    _, err = config.validate({ tools = { claude = { "x" } } })
+    expect.equality(err.msg, "tools.claude.1: expected string key, got number")
+  end)
+
+  it("reports the first bad key in key order", function()
+    expect.equality(path_of({ zeta = 1, alpha = 2 }), "alpha")
+    expect.equality(path_of({ tools = { claude = { zeta = 1, alpha = 2 } } }), "tools.claude.alpha")
+    expect.equality(path_of({ tools = { claude = { [1] = "x", nope = 1 } } }), "tools.claude.1")
+  end)
+
   it("lists the allowed keys, sorted, in an unknown-key error", function()
     local _, err = config.validate({ nope = 1 })
     expect.equality(
@@ -164,7 +181,6 @@ describe("config", function()
     expect.equality(second.tools.claude.env.A, "1")
     expect.equality(second.context.mine == fn, true)
     expect.equality(vim.tbl_count(second.tools), 1)
-    config.setup({})
   end)
 
   it("raises from setup naming the key path, and keeps the previous configuration", function()
@@ -173,7 +189,5 @@ describe("config", function()
     expect.equality(ok, false)
     expect.equality(err:find("tools.claude.cmd", 1, true) ~= nil, true)
     expect.equality(config.get().watch, false)
-    config.setup({})
-    expect.equality(config.get().watch, true)
   end)
 end)

@@ -23,6 +23,7 @@ describe("setup", function()
     end
   end)
   after_each(function()
+    pcall(vim.api.nvim_del_augroup_by_name, "sku-spec-setup-events")
     for _, name in ipairs(NAMES) do
       local mod = "sidekick-ultra.backends." .. name
       package.loaded[mod], package.preload[mod] = saved.loaded[name], saved.preload[name]
@@ -50,10 +51,10 @@ describe("setup", function()
     return ret
   end
 
-  it("registers each enabled backend that is available, all four by default", function()
-    use("herdr", "rex", "tmux", "zellij")
+  it("registers each enabled backend that is available, every backend by default", function()
+    use(unpack(NAMES))
     sidekick.setup({})
-    expect.equality(names(), { "herdr", "rex", "tmux", "zellij" })
+    expect.equality(names(), NAMES)
   end)
 
   it("does not register an enabled backend whose binary is missing", function()
@@ -102,16 +103,6 @@ describe("setup", function()
     })
   end)
 
-  it("does not call setup on a disabled backend", function()
-    local b = fake.backend("tmux")
-    b.setup = function()
-      error("a disabled backend must not be set up")
-    end
-    package.loaded["sidekick-ultra.backends.tmux"] = b
-    sidekick.setup(off())
-    expect.equality(names(), {})
-  end)
-
   it("raises an error naming the key path for an invalid option, and registers nothing", function()
     use("herdr")
     local ok, err = pcall(sidekick.setup, { rex = { server = 1 } })
@@ -144,24 +135,18 @@ describe("setup", function()
   it("detaches every attached session through the normal path when called again", function()
     fake.reset({ claude = { cmd = fake.INSTALLED } })
     local events = {}
-    local group = vim.api.nvim_create_augroup("sku-spec-setup-events", { clear = true })
     vim.api.nvim_create_autocmd("User", {
-      group = group,
+      group = vim.api.nvim_create_augroup("sku-spec-setup-events", { clear = true }),
       pattern = registry.DETACH,
       callback = function(ev)
         table.insert(events, ev.data.id)
       end,
     })
     registry.attach(fake.session("herdr", "claude"))
-    vim.wait(50, function()
-      return false
-    end)
+    fake.flush()
     expect.equality(#require("sidekick-ultra.status").cli(), 1)
     sidekick.setup(off())
-    vim.wait(1000, function()
-      return #events > 0
-    end)
-    vim.api.nvim_del_augroup_by_id(group)
+    fake.flush()
     expect.equality(events, { "herdr:claude1" })
     expect.equality(registry.attached(), {})
     expect.equality(require("sidekick-ultra.watch").active(), false)

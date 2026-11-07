@@ -250,7 +250,7 @@ end
 ---@param node {field: fun(self, name: string): table[], named_child_count: fun(self): integer, named_child: fun(self, i: integer): table, type: fun(self): string}
 ---@param text_of fun(node: table): string
 ---@return string?
-function M.node_name(node, text_of)
+local function node_name(node, text_of)
   for _, field in ipairs({ "name", "identifier", "field" }) do
     local child = node:field(field)[1]
     if child then
@@ -269,7 +269,7 @@ end
 ---@param name? string
 ---@param loc sidekick_ultra.Location
 ---@return sidekick_ultra.Line
-function M.describe(word, name, loc)
+local function describe(word, name, loc)
   return { name and (word .. " " .. name .. " ") or (word .. " "), loc }
 end
 
@@ -301,11 +301,11 @@ local function textobject(word)
       return
     end
     local srow, scol = node:range()
-    local name = M.node_name(node, function(n)
+    local name = node_name(node, function(n)
       return vim.treesitter.get_node_text(n, snap.buf)
     end)
     local loc = { path = location.path(snap.buf, snap.cwd), kind = "position", r1 = srow + 1, c1 = scol + 1 }
-    return { M.describe(word, name, loc) }
+    return { describe(word, name, loc) }
   end
 end
 
