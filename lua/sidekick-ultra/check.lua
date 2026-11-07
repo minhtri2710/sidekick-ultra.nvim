@@ -1,4 +1,4 @@
----The option table check, and the problem record every option check returns.
+---The option table check, and the problem record the entry checks of tools, render, sources and keys return.
 
 ---A problem found while validating the options: `path` is the full key path. A key that is not allowed has `allowed`
 ---(the allowed keys, sorted); any other problem has `expected` and the offending `got`. `config` turns it into the

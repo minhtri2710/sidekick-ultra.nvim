@@ -49,6 +49,19 @@ local function session_state(session, attached)
   }
 end
 
+---@param tool sidekick_ultra.Tool
+---@return sidekick_ultra.State
+local function tool_state(tool)
+  return {
+    name = tool.name,
+    tool = tool,
+    installed = tools.installed(tool),
+    started = false,
+    attached = false,
+    cwd = true,
+  }
+end
+
 ---@param state sidekick_ultra.State
 ---@param filter? sidekick_ultra.Filter
 ---@return boolean
@@ -115,14 +128,7 @@ function M.states(filter)
     add(session_state(session, attached[session.id] == true))
   end
   for _, tool in ipairs(tools.list()) do
-    add({
-      name = tool.name,
-      tool = tool,
-      installed = tools.installed(tool),
-      started = false,
-      attached = false,
-      cwd = true,
-    })
+    add(tool_state(tool))
   end
   return sort(ret)
 end
@@ -205,7 +211,7 @@ local function refreshed(state)
     errors.notify(errors.new("no_match", "tool no longer configured: " .. state.name))
     return nil
   end
-  return vim.tbl_extend("force", state, { tool = tool, installed = session ~= nil or tools.installed(tool) })
+  return session and session_state(session, state.attached) or tool_state(tool)
 end
 
 ---The check every callback runs that acts on a picked attached session without attaching it: `refreshed`, and the

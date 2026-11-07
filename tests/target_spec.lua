@@ -162,16 +162,14 @@ describe("target", function()
     end)
 
     it("labels sessions with tool, backend and shortened cwd, and tools with just the name", function()
-      registry.register(fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } }))
+      local session = fake.session("herdr", "claude", 1, { cwd = vim.env.HOME .. "/project" })
+      registry.register(fake.backend("herdr", { sessions = { session } }))
       local started_state = target.states({ started = true })[1]
       local tool_state = target.states({ started = false, name = "claude" })[1]
       target.pick({ started_state, tool_state }, {}, function() end)
       local format_item = pick.selects[1].opts.format_item
       local started = format_item(started_state)
-      expect.equality(
-        started:find("claude [herdr] " .. vim.fn.fnamemodify(vim.fn.getcwd(), ":~"), 1, true) ~= nil,
-        true
-      )
+      expect.equality(started:find("claude [herdr] ~/project", 1, true) ~= nil, true)
       local tool = format_item(tool_state)
       expect.equality(tool:find("claude", 1, true) ~= nil and tool:find("[", 1, true) == nil, true)
     end)

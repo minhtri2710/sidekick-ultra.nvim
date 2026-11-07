@@ -1,4 +1,5 @@
 local contract = require("sidekick-ultra.backend")
+local exec = require("sidekick-ultra.exec")
 local fake = require("tests.helpers.fake")
 local helper = require("tests.helpers.backend")
 local herdr = require("sidekick-ultra.backends.herdr")
@@ -515,11 +516,12 @@ describe("herdr backend", function()
       end
     end)
 
-    it("words invalid JSON from agent start as it does for another herdr query", function()
+    it("words invalid JSON from agent start and pane list as exec does", function()
       install(routes({ ["agent start"] = "not json", ["pane list"] = "not json" }))
       local _, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
       local _, listed = herdr.list({})
-      expect.equality(err.msg, listed.msg)
+      local _, raw = exec.json({ "herdr", "pane", "list" })
+      expect.equality({ err.msg, listed.msg }, { raw.msg, raw.msg })
     end)
 
     it("still returns the start error when the cleanup close fails too", function()

@@ -136,13 +136,13 @@ describe("context.render", function()
     it("reports a function prompt that throws as render_failed", function()
       render.setup({
         bad = function()
-          error("boom")
+          error("boom\nsecond line")
         end,
       })
       local text, err = run({ prompt = "bad" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(says(err, { "bad", "boom" }), true)
+      expect.equality(says(err, { "bad", "boom" }, { "second line", "\n" }), true)
     end)
   end)
 
@@ -290,6 +290,7 @@ describe("context.render", function()
       expect.equality(text, nil)
       expect.equality(err.id, "unknown_context")
       expect.equality(says(err, { "nope", "other" }, { "present" }), true)
+      expect.equality(select(2, err.msg:gsub("nope", "")), 1)
     end)
 
     it("names the empty placeholder expressions", function()
@@ -345,6 +346,23 @@ describe("context.render", function()
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
       expect.equality(says(err, { "(boom: ", "kaput" }, { "second line", "\n" }), true)
+    end)
+
+    it("names the cause of a source only for the expressions that failed, once", function()
+      render.setup(nil, {
+        boom = function()
+          error("kaput")
+        end,
+        full = function()
+          return "x"
+        end,
+        none = function() end,
+      })
+      local _, rescued = run({ msg = "{boom|full} {none}" })
+      expect.equality(says(rescued, { "for: none" }, { "boom", "kaput" }), true)
+
+      local _, twice = run({ msg = "{boom} {boom|none}" })
+      expect.equality(select(2, twice.msg:gsub("kaput", "")), 1)
     end)
 
     it("counts a source returning a malformed list as empty and keeps the cause", function()
