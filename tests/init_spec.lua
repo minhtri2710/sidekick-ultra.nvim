@@ -5,7 +5,7 @@ local sidekick = require("sidekick-ultra")
 
 local expect = MiniTest.expect
 
-local NAMES = { "herdr", "rex", "tmux", "zellij" }
+local NAMES = require("sidekick-ultra.backends").names()
 
 describe("setup", function()
   local saved
@@ -77,6 +77,39 @@ describe("setup", function()
     use("rex", "tmux", "zellij")
     sidekick.setup({ herdr = { enabled = false }, tmux = { enabled = false } })
     expect.equality(names(), { "rex", "zellij" })
+  end)
+
+  it("gives each enabled backend its options through setup, before it asks available()", function()
+    local order = {}
+    for _, name in ipairs({ "rex", "tmux" }) do
+      local b = fake.backend(name)
+      b.setup = function(opts)
+        table.insert(order, { name, "setup", opts })
+      end
+      local available = b.available
+      b.available = function()
+        table.insert(order, { name, "available" })
+        return available()
+      end
+      package.loaded["sidekick-ultra.backends." .. name] = b
+    end
+    sidekick.setup({ herdr = { enabled = false }, zellij = { enabled = false }, rex = { bin = "/x/rex" } })
+    expect.equality(order, {
+      { "rex", "setup", { enabled = true, bin = "/x/rex" } },
+      { "rex", "available" },
+      { "tmux", "setup", { enabled = true } },
+      { "tmux", "available" },
+    })
+  end)
+
+  it("does not call setup on a disabled backend", function()
+    local b = fake.backend("tmux")
+    b.setup = function()
+      error("a disabled backend must not be set up")
+    end
+    package.loaded["sidekick-ultra.backends.tmux"] = b
+    sidekick.setup(off())
+    expect.equality(names(), {})
   end)
 
   it("raises an error naming the key path for an invalid option, and registers nothing", function()

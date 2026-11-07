@@ -177,7 +177,7 @@ One entry per attached session, with `state` set when the backend reports one. T
 
 ## Health
 
-`:checkhealth sidekick-ultra` reports the Neovim version, each backend (enabled, binary path and where it came from, server settings by variable name only), for tmux and zellij also whether Neovim runs inside them and their version (`tmux -V`, `zellij --version`), whether `tmux.socket` is set, whether Neovim runs inside any of the four multiplexers, whether the textobjects queries are available, and which tools are installed.
+`:checkhealth sidekick-ultra` reports the Neovim version, each backend (enabled, binary path and where it came from, server settings by variable name only), whether Neovim runs inside it, for tmux and zellij also their version (`tmux -V`, `zellij --version`), whether `rex.server` and `tmux.socket` are set, whether start is available (the backend `start` would use, or why there is none), whether the textobjects queries are available, and which tools are installed.
 
 ## Development
 

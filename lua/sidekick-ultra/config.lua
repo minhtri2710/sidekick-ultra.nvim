@@ -25,21 +25,24 @@
 ---@field expected string
 ---@field msg string
 
+local backends = require("sidekick-ultra.backends")
+local keys = require("sidekick-ultra.keys")
+
 local M = {}
 
 ---@return sidekick_ultra.Config
 local function defaults()
-  return {
+  local cfg = {
     tools = {},
     prompts = {},
     context = {},
     watch = true,
-    keys = { prefix = require("sidekick-ultra.keys").DEFAULT_PREFIX },
-    herdr = { enabled = true },
-    rex = { enabled = true },
-    tmux = { enabled = true },
-    zellij = { enabled = true },
+    keys = keys.resolve(nil),
   }
+  for _, backend in ipairs(backends.all) do
+    cfg[backend.name] = { enabled = true }
+  end
+  return cfg
 end
 
 local LOCATIONS = { "plain", "claude", "escaped" }
@@ -56,11 +59,19 @@ end
 ---@param t table
 ---@return string[]
 local function sorted_keys(t)
-  local keys = vim.tbl_keys(t)
-  table.sort(keys, function(a, b)
+  local names = vim.tbl_keys(t)
+  table.sort(names, function(a, b)
     return tostring(a) < tostring(b)
   end)
-  return keys
+  return names
+end
+
+---@param path string
+---@param allowed string[] sorted
+---@return sidekick_ultra.ConfigError
+local function unknown_key(path, allowed)
+  local names = table.concat(allowed, ", ")
+  return { path = path, expected = "one of: " .. names, msg = ("%s: unknown key (allowed: %s)"):format(path, names) }
 end
 
 ---Check that `value` is a table whose keys are all in `allowed` (a set); an `allowed` of nil allows any string key.
@@ -74,8 +85,7 @@ local function check_table(path, value, allowed)
     if type(key) ~= "string" then
       return fail(full, "string key", key)
     elseif allowed and not allowed[key] then
-      local keys = table.concat(sorted_keys(allowed), ", ")
-      return { path = full, expected = "one of: " .. keys, msg = ("%s: unknown key (allowed: %s)"):format(full, keys) }
+      return unknown_key(full, sorted_keys(allowed))
     end
   end
 end
@@ -168,8 +178,11 @@ end
 function M.validate(opts)
   opts = opts or {}
   local cfg = defaults()
-  local err =
-    check_table("", opts, set("tools", "prompts", "context", "watch", "keys", "herdr", "rex", "tmux", "zellij"))
+  local top = set("tools", "prompts", "context", "watch", "keys")
+  for _, backend in ipairs(backends.all) do
+    top[backend.name] = true
+  end
+  local err = check_table("", opts, top)
   if err then
     return nil, err
   end
@@ -182,23 +195,14 @@ function M.validate(opts)
     cfg.watch = opts.watch
   end
 
-  if opts.keys ~= nil then
-    if opts.keys == false then
-      cfg.keys = false
-    elseif type(opts.keys) ~= "table" then
-      return nil, fail("keys", "table or false", opts.keys)
-    else
-      err = check_table("keys", opts.keys, set("prefix"))
-      if err then
-        return nil, err
-      end
-      local prefix = opts.keys.prefix
-      if prefix ~= nil and (type(prefix) ~= "string" or prefix == "") then
-        return nil, fail("keys.prefix", "non-empty string", prefix)
-      end
-      cfg.keys.prefix = prefix or cfg.keys.prefix
+  local resolved, problem = keys.resolve(opts.keys)
+  if not resolved and problem then
+    if problem.allowed then
+      return nil, unknown_key(problem.path, problem.allowed)
     end
+    return nil, fail(problem.path, problem.expected, problem.got)
   end
+  cfg.keys = resolved
 
   for _, section in ipairs({ "tools", "prompts", "context" }) do
     local value = opts[section]
@@ -230,26 +234,25 @@ function M.validate(opts)
     end
   end
 
-  local backends = {
-    herdr = set("enabled"),
-    rex = set("enabled", "bin", "server"),
-    tmux = set("enabled", "socket"),
-    zellij = set("enabled"),
-  }
-  for _, name in ipairs({ "herdr", "rex", "tmux", "zellij" }) do
-    local value = opts[name]
+  for _, backend in ipairs(backends.all) do
+    local name, value = backend.name, opts[backend.name]
     if value ~= nil then
-      err = check_table(name, value, backends[name])
+      local allowed = set("enabled")
+      for key in pairs(backend.options) do
+        allowed[key] = true
+      end
+      err = check_table(name, value, allowed)
       if err then
         return nil, err
       end
       for key, field in pairs(value) do
-        err = check_type(name .. "." .. key, field, key == "enabled" and "boolean" or "string")
+        local option = backend.options[key]
+        err = check_type(name .. "." .. key, field, option and option.type or "boolean")
         if err then
           return nil, err
         end
-        if key == "socket" and field == "" then
-          return nil, fail("tmux.socket", "non-empty string", field)
+        if option and option.non_empty and field == "" then
+          return nil, fail(name .. "." .. key, "non-empty " .. option.type, field)
         end
         cfg[name][key] = field
       end

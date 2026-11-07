@@ -1,13 +1,15 @@
----The contract between the core and a mux backend (herdr, rex, tmux, zellij). A backend is a module that returns a table with
----these fields; `sidekick-ultra.registry` registers it and the core calls it. A backend runs every external command
----through `sidekick-ultra.exec` and reports every failure as a `sidekick_ultra.Error` (usually `backend_error`).
+---The contract between the core and a mux backend. A backend is a module that returns a table with these fields;
+---`sidekick-ultra.registry` registers it and the core calls it. A backend runs every external command through
+---`sidekick-ultra.exec` and reports every failure as a `sidekick_ultra.Error` (usually `backend_error`).
 ---
----Backend modules live at `sidekick-ultra.backends.<name>` and are required by `setup()` when `<name>.enabled` is
----true (the default). `setup()` registers the module only when `available()` returns true.
+---Backend modules live at `sidekick-ultra.backends.<name>`. The names, the options each takes and the facts health
+---reports are in the backend table, `sidekick-ultra.backends` (`backends/init.lua`). `setup()` requires the module when
+---`<name>.enabled` is true (the default), calls its `setup(opts)` with the validated options, and registers the module
+---only when `available()` returns true.
 ---Run commands with `exec.run` / `exec.check` / `exec.json` (`opts.backend` and `opts.cmd` name the backend and the
 ---subcommand in the resulting `backend_error`); build errors with `errors.new(id, msg, extra)`.
----A backend reads its own options from `require("sidekick-ultra.config").get()[name]` (`herdr = {enabled}`,
----`rex = {enabled, bin, server}`, `tmux = {enabled, socket}`, `zellij = {enabled}`); the core only validates them.
+---A backend gets its options once, through `setup(opts)`, and keeps them in module state until the next `setup()`
+---replaces them. It never reads `sidekick-ultra.config`.
 
 ---A running instance of a tool. A plain record: the core never calls methods on it; it passes it back to the
 ---backend that produced it. Backends may add their own fields (pane or block ids, session ids).
@@ -34,6 +36,10 @@
 ---@class sidekick_ultra.Backend
 ---@field name string unique backend name, also the id prefix. When several backends are inside, `start` picks the one
 ---   whose `name` equals `TERM_PROGRAM`: herdr, rex and tmux set it to their name, zellij does not set it.
+---Optional. Called by `setup()` before `available()` with the backend's validated options table (`enabled` and the
+---options the backend table lists). Replaces the options of an earlier call. A backend that resolves its binary does it
+---here, once, and runs that path afterwards.
+---@field setup? fun(opts: table)
 ---Whether the backend can run at all (binary found). Returns the binary path and, when it knows, where the path
 ---came from (for example "option", "PATH", "bundle"). Used by `setup()` and `:checkhealth`.
 ---@field available fun(): boolean, string?, string?
@@ -86,8 +92,10 @@ function M.check(backend)
       return false, ("backend %s: %s must be a function"):format(backend.name, field)
     end
   end
-  if backend.is_running ~= nil and type(backend.is_running) ~= "function" then
-    return false, ("backend %s: is_running must be a function"):format(backend.name)
+  for _, field in ipairs({ "setup", "is_running" }) do
+    if backend[field] ~= nil and type(backend[field]) ~= "function" then
+      return false, ("backend %s: %s must be a function"):format(backend.name, field)
+    end
   end
   return true
 end

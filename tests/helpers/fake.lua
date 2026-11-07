@@ -108,13 +108,10 @@ end
 ---@param tools? table<string, table>
 ---@param extra? table more setup options
 function M.reset(tools, extra)
-  local cfg = {
-    herdr = { enabled = false },
-    rex = { enabled = false },
-    tmux = { enabled = false },
-    zellij = { enabled = false },
-    tools = {},
-  }
+  local cfg = { tools = {} }
+  for _, name in ipairs(require("sidekick-ultra.backends").names()) do
+    cfg[name] = { enabled = false }
+  end
   for _, name in ipairs(require("sidekick-ultra.tools").builtin_names()) do
     cfg.tools[name] = false
   end

@@ -107,10 +107,8 @@ describe("tmux backend", function()
 
   ---@param tmux_opts? table the `tmux` options besides `enabled`
   local function setup(tmux_opts)
-    fake.reset(
-      { claude = { cmd = fake.INSTALLED }, codex = { cmd = fake.INSTALLED } },
-      { tmux = vim.tbl_extend("force", { enabled = false }, tmux_opts or {}) }
-    )
+    fake.reset({ claude = { cmd = fake.INSTALLED }, codex = { cmd = fake.INSTALLED } }, { tmux = { enabled = false } })
+    tmux.setup(tmux_opts or {})
   end
 
   ---Install a fake process table (replacing any earlier one); returns the visit counts.
@@ -155,8 +153,6 @@ describe("tmux backend", function()
     expect.equality(backend.check(tmux), true)
     expect.equality(tmux.name, "tmux")
     expect.equality(tmux.is_running, nil)
-    -- paste-buffer -S, which send needs, arrived in tmux 3.7; health warns below this.
-    expect.equality(tmux.MIN_VERSION, { 3, 7 })
   end)
 
   describe("available", function()

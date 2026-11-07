@@ -1,7 +1,5 @@
----sidekick-ultra.nvim: drive AI CLIs that run in herdr panes, rex blocks, tmux panes or zellij panes.
+---sidekick-ultra.nvim: drive AI CLIs that run in the panes or blocks of a terminal multiplexer (the backends).
 local M = {}
-
-local BACKENDS = { "herdr", "rex", "tmux", "zellij" }
 
 ---Validate the options, register the enabled and available backends, create `:SidekickUltra` and define the default
 ---keymaps. Raises an error naming the key path when the options are invalid. Calling it again first detaches every
@@ -14,9 +12,12 @@ function M.setup(opts)
   local registry = require("sidekick-ultra.registry")
   registry.detach_all()
   registry.reset()
-  for _, name in ipairs(BACKENDS) do
-    if cfg[name].enabled then
-      local backend = require("sidekick-ultra.backends." .. name)
+  for _, info in ipairs(require("sidekick-ultra.backends").all) do
+    if cfg[info.name].enabled then
+      local backend = require("sidekick-ultra.backends." .. info.name)
+      if backend.setup then
+        backend.setup(cfg[info.name])
+      end
       if backend.available() then
         registry.register(backend)
       end
