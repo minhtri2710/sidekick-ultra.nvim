@@ -220,21 +220,21 @@ function M.build(opts, snap)
     return nil, errors.new("unknown_context", "unknown context: " .. table.concat(unknown, ", "))
   end
 
-  local memo, causes = {}, {}
+  local memo, cause = {}, {}
   local function value(name)
     if memo[name] == nil then
       local ok, ret = pcall(function()
         return as_segments(active[name](snap))
       end)
       if not ok then
-        table.insert(causes, ("%s: %s"):format(name, first_line(ret)))
+        cause[name] = first_line(ret)
       end
       memo[name] = ok and ret or false
     end
     return memo[name]
   end
 
-  local resolved, failed = {}, {}
+  local resolved, failed, causes, named = {}, {}, {}, {}
   for _, e in ipairs(exprs) do
     for _, name in ipairs(e.names) do
       resolved[e.expr] = value(name)
@@ -244,6 +244,12 @@ function M.build(opts, snap)
     end
     if not resolved[e.expr] then
       table.insert(failed, e.expr)
+      for _, name in ipairs(e.names) do
+        if cause[name] and not named[name] then
+          named[name] = true
+          table.insert(causes, ("%s: %s"):format(name, cause[name]))
+        end
+      end
     end
   end
   if #failed > 0 then
