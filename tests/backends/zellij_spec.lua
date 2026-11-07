@@ -1078,7 +1078,7 @@ describe("zellij backend", function()
           detached = true
         end,
       })
-      registry.detach_all()
+      registry.reset()
       expect.equality(
         real_wait(2000, function()
           return detached

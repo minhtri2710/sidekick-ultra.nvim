@@ -91,7 +91,6 @@ describe("config", function()
     expect.equality(path_of({ tmux = { enabled = "yes" } }), "tmux.enabled")
     expect.equality(path_of({ tmux = { socket = 3 } }), "tmux.socket")
     expect.equality(path_of({ tmux = { socket = false } }), "tmux.socket")
-    expect.equality(path_of({ tmux = { socket = "" } }), "tmux.socket")
     expect.equality(path_of({ zellij = { enabled = 1 } }), "zellij.enabled")
     expect.equality(path_of({ tmux = true }), "tmux")
     expect.equality(path_of({ zellij = "on" }), "zellij")
@@ -111,6 +110,7 @@ describe("config", function()
   it("rejects an empty string for every backend string option", function()
     expect.equality(path_of({ rex = { server = "" } }), "rex.server")
     expect.equality(path_of({ rex = { bin = "" } }), "rex.bin")
+    expect.equality(path_of({ tmux = { socket = "" } }), "tmux.socket")
     local _, err = config.validate({ rex = { server = "" } })
     expect.equality(err.msg, "rex.server: expected non-empty string, got string")
   end)
@@ -132,6 +132,15 @@ describe("config", function()
       "context.this: expected a placeholder name (letters, digits and underscores, and not `this`), got string"
     )
     expect.equality(config.validate({ context = { my_src2 = fn } }).context.my_src2, fn)
+  end)
+
+  it("reports the problem of tools before prompts, and prompts before context", function()
+    local bad = { tools = { claude = true }, prompts = { x = 1 }, context = { x = "a" } }
+    expect.equality(path_of(bad), "tools.claude")
+    bad.tools = nil
+    expect.equality(path_of(bad), "prompts.x")
+    bad.prompts = nil
+    expect.equality(path_of(bad), "context.x")
   end)
 
   it("rejects a key that is not a string, with its text", function()

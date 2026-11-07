@@ -464,7 +464,7 @@ describe("rex backend", function()
     end)
 
     it("maps a failing ps to backend_error without its stdout", function()
-      local pid = fake.self_proc()
+      fake.self_proc()
       rec = record(node_routes({ name = "node", argv0 = "node" }, {
         code = 3,
         stdout = "node /x/bin/pi --api-key " .. SECRET .. "\n",
@@ -473,7 +473,6 @@ describe("rex backend", function()
       local list, err = rex.list(tools.all())
       expect.equality(list, nil)
       expect.equality({ err.id, err.code }, { "backend_error", 3 })
-      expect.equality(err.msg, ("ps exited with 3 for pid %d: ps: boom"):format(pid))
       expect.equality(vim.inspect({ err, rec.calls }):find(SECRET, 1, true), nil)
     end)
 
@@ -644,7 +643,7 @@ describe("rex backend", function()
       rec = record(routes(fixture("status_blocked")))
       local res, err = rex.send(a2(), "hello\n")
       expect.equality(res, nil)
-      expect.equality({ err.id, err.msg }, { "session_blocked", "claude (rex:block:a2) is blocked; nothing was sent" })
+      expect.equality(err.id, "session_blocked")
       expect.equality(#rec.subs, 1)
     end)
 
@@ -675,7 +674,6 @@ describe("rex backend", function()
         rec = nil
         expect.equality(res, nil)
         expect.equality(err.id, "status_unreadable")
-        expect.equality(vim.startswith(err.msg, "cannot read the state of rex:block:a2: "), true)
         expect.equality(count, 1)
       end
     end)

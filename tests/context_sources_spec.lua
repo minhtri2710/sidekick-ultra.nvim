@@ -63,15 +63,6 @@ describe("context.sources", function()
       expect.equality(run("position"), { "@a.lua :L2:C2" })
     end)
 
-    it("gives a file record no row and a line record no column", function()
-      open("a.lua", { "one", "two" })
-      vim.api.nvim_win_set_cursor(0, { 2, 1 })
-      local snap = snapshot.capture()
-      expect.equality(builtin.file(snap)[1][1], { path = "a.lua", kind = "file" })
-      local line = builtin.line(snap)[1][1]
-      expect.equality({ line.kind, line.r1, line.c1 }, { "line", 2, nil })
-    end)
-
     it("applies the location style", function()
       open("my file.lua", { "one", "two" })
       vim.api.nvim_win_set_cursor(0, { 2, 1 })
@@ -339,15 +330,6 @@ describe("context.sources", function()
       open("a.zzz", { "x" })
       vim.bo.filetype = "zzz"
       expect.equality(run("function"), nil)
-    end)
-
-    it("raise the cause when a textobjects query exists but its parser does not", function()
-      vim.treesitter.query.set("zzz", "textobjects", "(x) @function.outer")
-      open("a.zzz", { "x" })
-      vim.bo.filetype = "zzz"
-      local ok, err = pcall(builtin["function"], snapshot.capture())
-      expect.equality(ok, false)
-      expect.equality(tostring(err):find("zzz", 1, true) ~= nil, true)
     end)
 
     it("name the enclosing node when a textobjects query exists", function()

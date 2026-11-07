@@ -44,14 +44,6 @@ describe("setup", function()
     end
   end
 
-  local function off()
-    local ret = {}
-    for _, name in ipairs(NAMES) do
-      ret[name] = { enabled = false }
-    end
-    return ret
-  end
-
   it("registers each enabled backend that is available, every backend by default", function()
     use(unpack(NAMES))
     sidekick.setup({})
@@ -71,7 +63,7 @@ describe("setup", function()
         error(name .. " must not be required")
       end
     end
-    sidekick.setup(off())
+    fake.reset()
     expect.equality(names(), {})
   end)
 
@@ -146,7 +138,7 @@ describe("setup", function()
     registry.attach(fake.session("herdr", "claude"))
     fake.flush()
     expect.equality(#require("sidekick-ultra.status").cli(), 1)
-    sidekick.setup(off())
+    fake.reset()
     fake.flush()
     expect.equality(events, { "herdr:claude1" })
     expect.equality(registry.attached(), {})

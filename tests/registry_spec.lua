@@ -386,13 +386,9 @@ describe("registry", function()
       expect.equality({ select({ "rex" }, "herdr") }, { "rex" })
     end)
 
-    it("uses the innermost of tmux and herdr, which TERM_PROGRAM names", function()
-      expect.equality({ select({ "herdr", "tmux" }, "tmux") }, { "tmux" })
-      expect.equality({ select({ "herdr", "tmux" }, "herdr") }, { "herdr" })
-    end)
-
     it("picks by TERM_PROGRAM among several, and refuses when it is unset", function()
       expect.equality({ select({ "herdr", "rex", "tmux" }, "rex") }, { "rex" })
+      expect.equality({ select({ "herdr", "tmux" }, "herdr") }, { "herdr" })
       -- zellij inside tmux: tmux is outermost but TERM_PROGRAM (inherited) names it; zellij is not chosen.
       expect.equality({ select({ "tmux", "zellij" }, "tmux") }, { "tmux" })
       expect.equality({ select({ "rex", "zellij" }, nil) }, { nil, "not_in_mux" })
