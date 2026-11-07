@@ -12,7 +12,7 @@ describe("tools", function()
   ---@param name string
   ---@param cmd string
   local function matches(name, cmd)
-    return tools.matches(tools.get(name), { pid = 1, cmd = cmd })
+    return tools.get(name).is_proc({ pid = 1, cmd = cmd })
   end
 
   describe("built-ins", function()
@@ -89,6 +89,14 @@ describe("tools", function()
       expect.equality(matches("claude", "claude"), true)
     end)
 
+    it("keeps a built-in's own program as its match when cmd is overridden", function()
+      tools.setup({ claude = { cmd = { "/opt/bin/wrapper", "--x" } }, mine = { cmd = { "/opt/bin/wrapper" } } })
+      expect.equality(tools.get("claude").cmd, { "/opt/bin/wrapper", "--x" })
+      expect.equality(matches("claude", "claude"), true)
+      expect.equality(matches("claude", "wrapper"), false)
+      expect.equality(matches("mine", "wrapper"), true)
+    end)
+
     it("removes a tool with false", function()
       tools.setup({ aider = false })
       expect.equality(tools.get("aider"), nil)
@@ -101,8 +109,8 @@ describe("tools", function()
       expect.equality(tool.location, "plain")
       expect.equality(tool.mux_focus, false)
       expect.equality(tool.env, {})
-      expect.equality(tools.matches(tool, { pid = 1, cmd = "/opt/bin/my.tool" }), true)
-      expect.equality(tools.matches(tool, { pid = 1, cmd = "myXtool" }), false)
+      expect.equality(matches("mine", "/opt/bin/my.tool"), true)
+      expect.equality(matches("mine", "myXtool"), false)
     end)
 
     it("takes is_proc as a Vim regex or a function", function()
@@ -117,8 +125,8 @@ describe("tools", function()
       })
       expect.equality(matches("claude", "foo1"), true)
       expect.equality(matches("claude", "claude"), false)
-      expect.equality(tools.matches(tools.get("mine"), { pid = 42, cmd = "x" }), true)
-      expect.equality(tools.matches(tools.get("mine"), { pid = 1, cmd = "mine" }), false)
+      expect.equality(tools.get("mine").is_proc({ pid = 42, cmd = "x" }), true)
+      expect.equality(tools.get("mine").is_proc({ pid = 1, cmd = "mine" }), false)
     end)
 
     it("setup() with nothing restores the built-ins", function()
@@ -129,71 +137,39 @@ describe("tools", function()
     end)
   end)
 
+  describe("check", function()
+    it("accepts a built-in entry without cmd, false, and a complete new tool", function()
+      expect.equality(tools.check("claude", { env = { A = "1" } }), nil)
+      expect.equality(tools.check("claude", false), nil)
+      expect.equality(tools.check("mine", { cmd = { "mine" }, is_proc = "\\<mine\\>", location = "claude" }), nil)
+    end)
+
+    it("names the path and what was expected", function()
+      expect.equality(tools.check("mine", {}), {
+        path = "tools.mine.cmd",
+        expected = "non-empty list of strings (required for a new tool)",
+      })
+      expect.equality(tools.check("claude", { mux_focus = "yes" }), {
+        path = "tools.claude.mux_focus",
+        expected = "boolean",
+        got = "yes",
+      })
+      expect.equality(tools.check("claude", { location = "md" }).expected, "one of: plain, claude, escaped")
+      expect.equality(tools.check("claude", { is_proc = "\\(" }).expected, "valid Vim regex")
+    end)
+
+    it("lists the allowed fields for an unknown key", function()
+      expect.equality(tools.check("claude", { nope = "x" }), {
+        path = "tools.claude.nope",
+        allowed = { "cmd", "env", "is_proc", "location", "mux_focus", "url" },
+      })
+    end)
+  end)
+
   describe("installed", function()
     it("checks that cmd[1] is executable", function()
       expect.equality(tools.installed({ cmd = { "sh" } }), true)
       expect.equality(tools.installed({ cmd = { "sku-no-such-binary" } }), false)
-    end)
-  end)
-
-  describe("location", function()
-    local function loc(fields)
-      return vim.tbl_extend("force", { path = "a.lua" }, fields)
-    end
-
-    it("plain", function()
-      expect.equality(tools.location(loc({ kind = "file" })), "@a.lua")
-      expect.equality(tools.location(loc({ kind = "line", r1 = 3 }), "plain"), "@a.lua :L3")
-      expect.equality(tools.location(loc({ kind = "line", r1 = 3, r2 = 3 })), "@a.lua :L3")
-      expect.equality(tools.location(loc({ kind = "line", r1 = 3, r2 = 5 })), "@a.lua :L3-L5")
-      expect.equality(tools.location(loc({ kind = "position", r1 = 3, c1 = 4 })), "@a.lua :L3:C4")
-      expect.equality(tools.location(loc({ kind = "position", r1 = 3, c1 = 4, r2 = 3, c2 = 4 })), "@a.lua :L3:C4")
-      expect.equality(tools.location(loc({ kind = "position", r1 = 3, c1 = 4, r2 = 3, c2 = 9 })), "@a.lua :L3:C4-C9")
-      expect.equality(tools.location(loc({ kind = "position", r1 = 3, c1 = 4, r2 = 5, c2 = 2 })), "@a.lua :L3:C4-L5:C2")
-    end)
-
-    it("claude", function()
-      expect.equality(tools.location(loc({ kind = "file" }), "claude"), "@a.lua")
-      expect.equality(tools.location(loc({ kind = "line", r1 = 10, r2 = 20 }), "claude"), "@a.lua#L10-20")
-      expect.equality(tools.location(loc({ kind = "line", r1 = 10 }), "claude"), "@a.lua#L10")
-      expect.equality(tools.location(loc({ kind = "position", r1 = 10, c1 = 5 }), "claude"), "@a.lua#L10 :C5")
-      expect.equality(
-        tools.location(loc({ kind = "position", r1 = 10, c1 = 5, r2 = 10, c2 = 8 }), "claude"),
-        "@a.lua#L10 :C5-C8"
-      )
-      expect.equality(
-        tools.location(loc({ kind = "position", r1 = 1, c1 = 2, r2 = 3, c2 = 4 }), "claude"),
-        "@a.lua#L1-3"
-      )
-    end)
-
-    it("claude quotes a path with unusual characters", function()
-      expect.equality(tools.location(loc({ path = "my file.lua", kind = "file" }), "claude"), '@"my file.lua"')
-      expect.equality(
-        tools.location(loc({ path = "a(1).lua", kind = "line", r1 = 2, r2 = 4 }), "claude"),
-        '@"a(1).lua"#L2-4'
-      )
-      expect.equality(
-        tools.location(loc({ path = "dir/sub-1/a_b.lua", kind = "file" }), "claude"),
-        "@dir/sub-1/a_b.lua"
-      )
-    end)
-
-    it("escaped backslash-escapes every unusual path character", function()
-      expect.equality(
-        tools.location(loc({ path = "my file(1).lua", kind = "file" }), "escaped"),
-        "@my\\ file\\(1\\).lua"
-      )
-      expect.equality(tools.location(loc({ path = "[No Name]", kind = "file" }), "escaped"), "@\\[No\\ Name\\]")
-      expect.equality(
-        tools.location(loc({ path = "a b.lua", kind = "line", r1 = 3, r2 = 5 }), "escaped"),
-        "@a\\ b.lua :L3-L5"
-      )
-      expect.equality(tools.location(loc({ kind = "position", r1 = 3, c1 = 4 }), "escaped"), "@a.lua :L3:C4")
-    end)
-
-    it("plain leaves the path alone", function()
-      expect.equality(tools.location(loc({ path = "my file.lua", kind = "file" }), "plain"), "@my file.lua")
     end)
   end)
 end)

@@ -587,7 +587,7 @@ describe("actions", function()
       expect.equality(methods(), { "send", "submit", "focus" })
     end)
 
-    it("warns nothing_to_send for a prompt that renders empty, and sends nothing", function()
+    it("does not list a prompt that renders empty", function()
       fake.reset({ claude = { cmd = fake.INSTALLED } }, {
         prompts = {
           blank = function()
@@ -596,10 +596,11 @@ describe("actions", function()
         },
       })
       attached({ "claude" })
-      pick.choose = choose("blank")
+      pick.choose = choose("changes")
       actions.prompt({})
-      expect.equality(cap.ids(), { "nothing_to_send" })
-      expect.equality(backend.calls, {})
+      expect.equality(vim.tbl_contains(names(pick.selects[1].items), "blank"), false)
+      expect.equality(vim.tbl_contains(names(pick.selects[1].items), "changes"), true)
+      expect.equality(cap.calls, {})
     end)
 
     it("uses the selection of a ranged :SidekickUltra prompt, and leaves visual mode", function()
@@ -808,6 +809,12 @@ describe("actions", function()
       vim.cmd("normal! ggVj")
       expect.equality(actions.render({ msg = "{selection}" }), "alpha\nbeta")
       expect.equality(vim.fn.mode(), "n")
+    end)
+
+    it("returns an empty text, and no error, when there is nothing to render", function()
+      attached({ "claude" })
+      expect.equality({ actions.render({}) }, { "" })
+      expect.equality(cap.calls, {})
     end)
 
     it("returns the rendered text without sending", function()

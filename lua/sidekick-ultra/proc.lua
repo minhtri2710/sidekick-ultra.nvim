@@ -9,7 +9,6 @@
 ---them, as it says nothing about which tool runs. The script is tried last, and only when no other word matched.
 local exec = require("sidekick-ultra.exec")
 local procname = require("sidekick-ultra.procname")
-local tools = require("sidekick-ultra.tools")
 
 local M = {}
 
@@ -27,7 +26,7 @@ end
 ---@param cmd string
 ---@return boolean
 function M.matches(tool, pid, cmd)
-  return cmd ~= "" and tools.matches(tool, { pid = pid, cmd = cmd })
+  return cmd ~= "" and tool.is_proc({ pid = pid, cmd = cmd }) == true
 end
 
 ---The first tool, in name order, that one of `cmds` satisfies.

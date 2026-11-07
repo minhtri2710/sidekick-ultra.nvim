@@ -1,11 +1,12 @@
----Built-in placeholders. Each source takes a snapshot and returns lines, or nothing.
-local snapshot = require("sidekick-ultra.context.snapshot")
+---The placeholders: one source per name, built in or added by the user's `context` option. A source takes the
+---snapshot and returns nothing, a string, or a list of lines; it reads buffers, diagnostics and the quickfix list as
+---they are when it runs. A line is a string, or a list of strings and location records (`location.format` writes
+---them in the target tool's style when the text is sent).
+local location = require("sidekick-ultra.location")
 
----A rendered line is a string, or a list of strings and location records. Records are written in the target
----tool's location style only when the text is sent (`tools.format`), so a source never knows the style.
 ---@alias sidekick_ultra.Line string|(string|sidekick_ultra.Location)[]
 
----@alias sidekick_ultra.Source fun(snap: sidekick_ultra.Snapshot): sidekick_ultra.Line[]?
+---@alias sidekick_ultra.Source fun(snap: sidekick_ultra.Snapshot): string|sidekick_ultra.Line[]?
 
 local M = {}
 
@@ -25,10 +26,10 @@ end
 ---@param kind "file"|"line"|"position"
 ---@return sidekick_ultra.Line[]?
 local function located(snap, kind)
-  if not snapshot.is_file(snap.buf) then
+  if not location.is_file(snap.buf) then
     return
   end
-  local loc = { path = snapshot.path(snap.buf, snap.cwd), kind = kind }
+  local loc = { path = location.path(snap.buf, snap.cwd), kind = kind }
   local sel = snap.selection
   if sel then
     loc.r1, loc.r2 = sel.from[1], sel.to[1]
@@ -56,11 +57,23 @@ function M.builtin.line(snap)
   return located(snap, "line")
 end
 
+---What `{this}` stands for: `{position}` in a file buffer; elsewhere the word "this", with `{selection}` after the
+---whole message. It rewrites the message instead of yielding a value, because the selection goes at the end of it.
+---@param snap sidekick_ultra.Snapshot
+---@return string replacement
+---@return string? tail appended to the message
+function M.this(snap)
+  if M.builtin.position(snap) then
+    return "{position}"
+  end
+  return "this", "\n\n{selection}"
+end
+
 function M.builtin.buffers(snap)
   local ret = {}
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if snapshot.is_file(buf) then
-      local loc = { path = snapshot.path(buf, snap.cwd), kind = "file" }
+    if location.is_file(buf) then
+      local loc = { path = location.path(buf, snap.cwd), kind = "file" }
       table.insert(ret, { "- ", loc })
     end
   end
@@ -172,11 +185,13 @@ local function diagnostics(snap, all)
 
   local ret = {}
   for _, d in ipairs(list) do
-    local r1, c1 = d.lnum + 1, d.col + 1
-    local r2 = (d.end_lnum or d.lnum) + 1
-    local c2 = d.end_col or c1
-    c2 = math.max(c2, r2 == r1 and c1 or 1)
-    local loc = { path = snapshot.path(d.bufnr, snap.cwd), kind = "position", r1 = r1, c1 = c1, r2 = r2, c2 = c2 }
+    local loc = location.position(
+      location.path(d.bufnr, snap.cwd),
+      d.lnum + 1,
+      d.col + 1,
+      d.end_lnum and d.end_lnum + 1,
+      d.end_col
+    )
     local msg = vim.split(d.message, "\n", { plain = true })
     local head = { ("[%s] %s"):format(vim.diagnostic.severity[d.severity] or "?", msg[1]) }
     for _, extra in ipairs({ d.source, d.code }) do
@@ -208,17 +223,17 @@ function M.builtin.quickfix(snap)
     table.insert(ret, "Quickfix: " .. qf.title)
   end
   for _, item in ipairs(qf.items) do
-    local named = item.bufnr > 0 and vim.api.nvim_buf_get_name(item.bufnr) ~= ""
-    local loc = { path = named and snapshot.path(item.bufnr, snap.cwd) or "[No Name]", kind = "file" }
+    local path = item.bufnr > 0 and location.path(item.bufnr, snap.cwd) or location.NO_NAME
+    local loc = { path = path, kind = "file" }
     if item.lnum > 0 then
-      loc.kind = "position"
-      loc.r1, loc.c1 = item.lnum, math.max(item.col, 1)
-      loc.r2, loc.c2 = loc.r1, loc.c1
-      if item.end_lnum > 0 then
-        loc.r2 = item.end_lnum
-        loc.c2 = item.end_col > 0 and item.end_col or loc.c1
-        loc.c2 = (loc.r2 == loc.r1) and math.max(loc.c2, loc.c1) or loc.c2
-      end
+      local has_end = item.end_lnum > 0
+      loc = location.position(
+        path,
+        item.lnum,
+        math.max(item.col, 1),
+        has_end and item.end_lnum or nil,
+        has_end and item.end_col > 0 and item.end_col or nil
+      )
     end
     local msg = vim.split(item.text:gsub("%s+$", ""), "\n", { plain = true })
     local tail = (item.type ~= "" and " [" .. item.type:upper() .. "]" or "") .. " " .. msg[1]
@@ -289,7 +304,7 @@ local function textobject(word)
     local name = M.node_name(node, function(n)
       return vim.treesitter.get_node_text(n, snap.buf)
     end)
-    local loc = { path = snapshot.path(snap.buf, snap.cwd), kind = "position", r1 = srow + 1, c1 = scol + 1 }
+    local loc = { path = location.path(snap.buf, snap.cwd), kind = "position", r1 = srow + 1, c1 = scol + 1 }
     return { M.describe(word, name, loc) }
   end
 end

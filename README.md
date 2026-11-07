@@ -62,7 +62,7 @@ or call `require("sidekick-ultra").setup({})` yourself. `setup()` validates the 
 }
 ```
 
-Tool fields: `cmd` (non-empty list), `env`, `url`, `is_proc` (Vim regex or a function of `{pid, cmd}`; the default matches the command name as a word), `mux_focus` (send a focus-in event before input), `location` (`plain`, `claude` or `escaped`: how file locations are written in sent text).
+Tool fields: `cmd` (non-empty list), `env`, `url`, `is_proc` (Vim regex or a function of `{pid, cmd}`; the default matches the basename of `cmd[1]` as a word, and a built-in keeps its own program name when you change its `cmd`), `mux_focus` (send a focus-in event before input), `location` (`plain`, `claude` or `escaped`: how file locations are written in sent text).
 
 Built-in tools: aider, amazon_q, claude, codex, copilot, crush, cursor, gemini, grok, opencode, pi, qwen.
 
@@ -158,7 +158,7 @@ A message is text with `{name}` placeholders. `{a|b}` uses the first alternative
 | `{quickfix}` | the quickfix list |
 | `{function}` `{class}` | the enclosing function or class (needs `nvim-treesitter-textobjects`) |
 
-Built-in prompts: changes, diagnostics, diagnostics_all, document, explain, fix, optimize, review, tests, plus one per placeholder.
+Built-in prompts: changes, diagnostics, diagnostics_all, document, explain, fix, optimize, review, tests, plus one per placeholder except `{this}`.
 
 ## Statusline
 

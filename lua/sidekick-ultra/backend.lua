@@ -46,7 +46,7 @@
 ---Whether nvim itself runs inside this mux. Pure environment check; no external command.
 ---@field inside fun(): boolean
 ---List the sessions of the given tools. Keep only sessions whose foreground program is one of `tools`
----(`tools.matches(tool, {pid = ..., cmd = ...})`, or the backend's own detection). `{}` is a valid answer.
+---(`proc.matches(tool, pid, cmd)`, or the backend's own detection). `{}` is a valid answer.
 ---@field list fun(tools: table<string, sidekick_ultra.Tool>): sidekick_ultra.Session[]?, sidekick_ultra.Error?
 ---Create a pane or block beside nvim's own, without taking focus, running `tool.cmd`. Only called when `inside()`
 ---is true. Returns the new session. Its `pid` and `proc_name` are those of the new pane or block's current

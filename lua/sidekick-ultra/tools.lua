@@ -1,6 +1,19 @@
+---The tools the plugin can drive: the built-in specs, the user's `tools` config merged over them, the validation of
+---that config, and how a tool is recognised among running processes.
+local location = require("sidekick-ultra.location")
+
+---What `is_proc` is asked about; proc.lua builds it and defines `cmd`.
 ---@class sidekick_ultra.ProcInfo
----@field pid integer
----@field cmd string the backend's best identifier for the foreground program
+---@field pid? integer absent only for zellij, which reports none
+---@field cmd string one program name
+
+---@class sidekick_ultra.ToolConfig
+---@field cmd? string[] non-empty; required for a tool that is not built in
+---@field env? table<string, string>
+---@field url? string
+---@field is_proc? string|fun(proc: sidekick_ultra.ProcInfo): boolean Vim regex or predicate; default: the basename of `cmd[1]` as a word
+---@field mux_focus? boolean send a focus-in sequence before input
+---@field location? sidekick_ultra.LocationStyle
 
 ---@class sidekick_ultra.Tool
 ---@field name string
@@ -8,49 +21,43 @@
 ---@field env table<string, string>
 ---@field url? string
 ---@field is_proc fun(proc: sidekick_ultra.ProcInfo): boolean
----@field mux_focus boolean send a focus-in sequence before input
+---@field mux_focus boolean
 ---@field location sidekick_ultra.LocationStyle
-
----@alias sidekick_ultra.LocationStyle "plain"|"claude"|"escaped"
-
----A structured file location; `tools.location` turns it into sent text.
----@class sidekick_ultra.Location
----@field path string path as shown after `@`
----@field kind "file"|"line"|"position"
----@field r1? integer 1-based first row
----@field c1? integer 1-based first column (position kind)
----@field r2? integer
----@field c2? integer
 
 local M = {}
 
----@param word string
+---@param re string Vim regex
 ---@return fun(proc: sidekick_ultra.ProcInfo): boolean
-local function word_match(word)
-  local re = vim.regex("\\<" .. word .. "\\>")
+local function matcher(re)
+  local compiled = vim.regex(re)
   return function(proc)
-    return re:match_str(proc.cmd) ~= nil
+    return compiled:match_str(proc.cmd) ~= nil
   end
 end
 
----@param spec table
----@return table
-local function builtin(spec)
-  spec.env = spec.env or {}
-  spec.location = spec.location or "plain"
-  spec.mux_focus = spec.mux_focus or false
-  spec.is_proc = word_match(spec.proc or spec.cmd[1])
-  spec.proc = nil
-  return spec
+---@param program string
+---@return fun(proc: sidekick_ultra.ProcInfo): boolean
+local function word(program)
+  return matcher("\\<" .. vim.fn.escape(program, "\\.*~[]^$/") .. "\\>")
 end
 
----@type table<string, table>
+local copilot = word("copilot")
+
+---@type table<string, sidekick_ultra.ToolConfig>
 local BUILTIN = {
   aider = { cmd = { "aider" }, url = "https://github.com/Aider-AI/aider" },
-  amazon_q = { cmd = { "q" }, proc = "qchat", url = "https://github.com/aws/amazon-q-developer-cli" },
+  -- Installed as `q`, runs as `qchat`.
+  amazon_q = { cmd = { "q" }, is_proc = "\\<qchat\\>", url = "https://github.com/aws/amazon-q-developer-cli" },
   claude = { cmd = { "claude" }, url = "https://github.com/anthropics/claude-code", location = "claude" },
   codex = { cmd = { "codex" }, url = "https://github.com/openai/codex" },
-  copilot = { cmd = { "copilot", "--banner" }, url = "https://github.com/github/copilot-cli" },
+  copilot = {
+    cmd = { "copilot", "--banner" },
+    url = "https://github.com/github/copilot-cli",
+    -- It also runs a language server whose command line contains "copilot".
+    is_proc = function(proc)
+      return copilot(proc) and not proc.cmd:find("language-server", 1, true)
+    end,
+  },
   crush = { cmd = { "crush" }, url = "https://github.com/charmbracelet/crush" },
   cursor = { cmd = { "cursor-agent" }, url = "https://cursor.com/cli" },
   gemini = { cmd = { "gemini" }, url = "https://github.com/google-gemini/gemini-cli", location = "escaped" },
@@ -60,61 +67,147 @@ local BUILTIN = {
   qwen = { cmd = { "qwen" }, url = "https://github.com/QwenLM/qwen-code", location = "escaped", mux_focus = true },
 }
 
----@return table<string, sidekick_ultra.Tool>
-local function builtins()
-  local ret = {}
-  for name, spec in pairs(BUILTIN) do
-    local tool = builtin(vim.deepcopy(spec))
-    tool.name = name
-    ret[name] = tool
+---@type string[] sorted
+local FIELDS = { "cmd", "env", "is_proc", "location", "mux_focus", "url" }
+local ALLOWED = {}
+for _, field in ipairs(FIELDS) do
+  ALLOWED[field] = true
+end
+
+---The first problem in a `tools` entry, or nil. `path` is the full key path. A key that is not allowed has `allowed`
+---(the allowed keys); any other problem has `expected` and the offending `got`.
+---@param path string
+---@param value any
+---@param allowed? table<string, true> nil allows any string key
+---@return sidekick_ultra.Problem?
+local function check_map(path, value, allowed)
+  if type(value) ~= "table" then
+    return { path = path, expected = "table", got = value }
   end
-  -- copilot also runs a language server whose command line contains "copilot".
-  local copilot = word_match("copilot")
-  ret.copilot.is_proc = function(proc)
-    return copilot(proc) and not proc.cmd:find("language-server", 1, true)
+  local names = vim.tbl_keys(value)
+  table.sort(names, function(a, b)
+    return tostring(a) < tostring(b)
+  end)
+  for _, key in ipairs(names) do
+    if type(key) ~= "string" then
+      return { path = path .. "." .. tostring(key), expected = "string key", got = key }
+    elseif allowed and not allowed[key] then
+      return { path = path .. "." .. key, allowed = FIELDS }
+    end
   end
-  return ret
+end
+
+---Check one entry of the user's `tools` option: `false` removes a tool, a table is merged over the built-in of that
+---name or defines a new tool, which needs a `cmd`.
+---@param name string
+---@param spec any
+---@return sidekick_ultra.Problem?
+function M.check(name, spec)
+  if spec == false then
+    return
+  end
+  local path = "tools." .. name
+  local problem = check_map(path, spec, ALLOWED)
+  if problem then
+    return problem
+  end
+  if spec.cmd == nil then
+    if not BUILTIN[name] then
+      return { path = path .. ".cmd", expected = "non-empty list of strings (required for a new tool)" }
+    end
+  elseif not vim.islist(spec.cmd) or #spec.cmd == 0 then
+    return { path = path .. ".cmd", expected = "non-empty list of strings", got = spec.cmd }
+  else
+    for i, arg in ipairs(spec.cmd) do
+      if type(arg) ~= "string" or (i == 1 and arg == "") then
+        return { path = ("%s.cmd[%d]"):format(path, i), expected = "string", got = arg }
+      end
+    end
+  end
+  if spec.env ~= nil then
+    problem = check_map(path .. ".env", spec.env)
+    if problem then
+      return problem
+    end
+    for key, value in pairs(spec.env) do
+      if type(value) ~= "string" then
+        return { path = path .. ".env." .. key, expected = "string", got = value }
+      end
+    end
+  end
+  if spec.url ~= nil and type(spec.url) ~= "string" then
+    return { path = path .. ".url", expected = "string", got = spec.url }
+  end
+  if spec.mux_focus ~= nil and type(spec.mux_focus) ~= "boolean" then
+    return { path = path .. ".mux_focus", expected = "boolean", got = spec.mux_focus }
+  end
+  if spec.location ~= nil and not vim.tbl_contains(location.styles, spec.location) then
+    return {
+      path = path .. ".location",
+      expected = "one of: " .. table.concat(location.styles, ", "),
+      got = spec.location,
+    }
+  end
+  local is_proc = spec.is_proc
+  if type(is_proc) == "string" then
+    if not pcall(vim.regex, is_proc) then
+      return { path = path .. ".is_proc", expected = "valid Vim regex", got = is_proc }
+    end
+  elseif is_proc ~= nil and type(is_proc) ~= "function" then
+    return { path = path .. ".is_proc", expected = "Vim regex string or function", got = is_proc }
+  end
+end
+
+---Fill in a tool's defaults. A tool without `is_proc` matches the basename of its `cmd[1]` as a word. The default is
+---fixed when the tool is first defined, so a user's `cmd` for a built-in changes how it starts, not what it is
+---recognised by.
+---@param name string
+---@param spec table fields of a `sidekick_ultra.ToolConfig`; `is_proc` may be a function already
+---@return sidekick_ultra.Tool
+local function build(name, spec)
+  local is_proc = spec.is_proc
+  if type(is_proc) == "string" then
+    is_proc = matcher(is_proc)
+  elseif is_proc == nil then
+    is_proc = word(vim.fs.basename(spec.cmd[1]))
+  end
+  return {
+    name = name,
+    cmd = spec.cmd,
+    env = spec.env or {},
+    url = spec.url,
+    is_proc = is_proc,
+    mux_focus = spec.mux_focus or false,
+    location = spec.location or location.DEFAULT_STYLE,
+  }
 end
 
 ---@type table<string, sidekick_ultra.Tool>
-local tools = builtins()
-
----Names of the built-in tools.
----@return string[]
-function M.builtin_names()
-  return vim.tbl_keys(BUILTIN)
+local builtin = {}
+for name, spec in pairs(BUILTIN) do
+  builtin[name] = build(name, spec)
 end
 
----Rebuild the tool table from the built-ins and the user's `tools` config (already validated).
----A user entry merges field by field over the built-in one (`env` merges key by key); `false` removes a tool.
----@param user? table<string, table|false>
+---@type table<string, sidekick_ultra.Tool>
+local tools = {}
+
+---Rebuild the tool table from the built-ins and the user's `tools` config (already checked). A user entry merges
+---field by field over the built-in one (`env` merges key by key); `false` removes a tool.
+---@param user? table<string, sidekick_ultra.ToolConfig|false>
 function M.setup(user)
-  tools = builtins()
+  tools = vim.deepcopy(builtin)
   for name, spec in pairs(user or {}) do
     if spec == false then
       tools[name] = nil
     else
-      local tool = tools[name] or { name = name, env = {}, location = "plain", mux_focus = false }
-      for key, value in pairs(spec) do
-        if key == "env" then
-          tool.env = vim.tbl_extend("force", tool.env, value)
-        elseif key == "is_proc" and type(value) == "string" then
-          local re = vim.regex(value)
-          tool.is_proc = function(proc)
-            return re:match_str(proc.cmd) ~= nil
-          end
-        else
-          tool[key] = value
-        end
-      end
-      if not tools[name] then
-        -- A new tool without `is_proc` matches the basename of its command as a word.
-        tool.is_proc = tool.is_proc or word_match(vim.fn.escape(vim.fs.basename(tool.cmd[1]), "\\.*~[]^$/"))
-        tools[name] = tool
-      end
+      local base = tools[name] or {}
+      local vars = vim.tbl_extend("force", base.env or {}, spec.env or {})
+      tools[name] = build(name, vim.tbl_extend("force", base, spec, { env = vars }))
     end
   end
 end
+
+M.setup()
 
 ---@param name string
 ---@return sidekick_ultra.Tool?
@@ -141,84 +234,6 @@ end
 ---@return boolean
 function M.installed(tool)
   return vim.fn.executable(tool.cmd[1]) == 1
-end
-
----@param tool sidekick_ultra.Tool
----@param proc sidekick_ultra.ProcInfo
----@return boolean
-function M.matches(tool, proc)
-  return tool.is_proc(proc) == true
-end
-
-local SAFE = "[^A-Za-z0-9/_.-]"
-
----@param loc sidekick_ultra.Location
----@return string rows
-local function rows(loc)
-  if not loc.r2 or loc.r2 == loc.r1 then
-    return "L" .. loc.r1
-  end
-  return ("L%d-L%d"):format(loc.r1, loc.r2)
-end
-
----@param loc sidekick_ultra.Location
----@return string
-local function plain_suffix(loc)
-  if loc.kind == "file" then
-    return ""
-  elseif loc.kind == "line" then
-    return " :" .. rows(loc)
-  end
-  local r2, c2 = loc.r2 or loc.r1, loc.c2 or loc.c1
-  if r2 == loc.r1 and c2 == loc.c1 then
-    return (" :L%d:C%d"):format(loc.r1, loc.c1)
-  elseif r2 == loc.r1 then
-    return (" :L%d:C%d-C%d"):format(loc.r1, loc.c1, c2)
-  end
-  return (" :L%d:C%d-L%d:C%d"):format(loc.r1, loc.c1, r2, c2)
-end
-
----Write a location the way `style` wants it in sent text.
----  plain:   `@path :L10-L20`, `@path :L10:C5`, `@path :L10:C5-C8`, `@path :L1:C2-L3:C4`
----  claude:  `@path#L10-20`, `@path#L10 :C5`, `@path#L10 :C5-C8`; a multi-line position keeps only its rows
----           (`#L1-3`); a path with unusual characters is double-quoted
----  escaped: plain, with every unusual path character backslash-escaped
----@param loc sidekick_ultra.Location
----@param style? sidekick_ultra.LocationStyle
----@return string
-function M.location(loc, style)
-  style = style or "plain"
-  if style == "escaped" then
-    return "@" .. loc.path:gsub(SAFE, "\\%0") .. plain_suffix(loc)
-  elseif style == "plain" then
-    return "@" .. loc.path .. plain_suffix(loc)
-  end
-
-  local path = loc.path:find(SAFE) and ('"' .. loc.path .. '"') or loc.path
-  local text = "@" .. path
-  if loc.kind == "file" then
-    return text
-  end
-  local r2 = loc.r2 or loc.r1
-  local range = r2 == loc.r1 and tostring(loc.r1) or ("%d-%d"):format(loc.r1, r2)
-  text = text .. "#L" .. range
-  if loc.kind == "position" and r2 == loc.r1 then
-    local c2 = loc.c2 or loc.c1
-    text = text .. (c2 == loc.c1 and (" :C%d"):format(loc.c1) or (" :C%d-C%d"):format(loc.c1, c2))
-  end
-  return text
-end
-
----Text of rendered output: strings as they are, location records written in `style`.
----@param segments (string|sidekick_ultra.Location)[]
----@param style? sidekick_ultra.LocationStyle
----@return string
-function M.format(segments, style)
-  local out = {}
-  for i, segment in ipairs(segments) do
-    out[i] = type(segment) == "string" and segment or M.location(segment, style)
-  end
-  return table.concat(out)
 end
 
 return M

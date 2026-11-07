@@ -1,6 +1,5 @@
 ---Reload files the agent edits: while a session is attached, watch the directories of the open file buffers and run
 ---`checktime` when anything in them changes.
-local config = require("sidekick-ultra.config")
 local registry = require("sidekick-ultra.registry")
 
 local M = {}
@@ -117,15 +116,16 @@ function M.stop()
   state = { handles = {}, timers = {}, active = false }
 end
 
----Start from a stopped state and follow the attach and detach events: watch while a session is attached and the
----`watch` option is on.
-function M.setup()
+---Start from a stopped state and follow the attach and detach events: watch while a session is attached and
+---`enabled` (the `watch` option) is true.
+---@param enabled boolean
+function M.setup(enabled)
   M.stop()
   vim.api.nvim_create_autocmd("User", {
     group = vim.api.nvim_create_augroup(SUBSCRIPTION, { clear = true }),
     pattern = { registry.ATTACH, registry.DETACH },
     callback = function()
-      if #registry.attached() > 0 and config.get().watch then
+      if #registry.attached() > 0 and enabled then
         start()
       else
         M.stop()
