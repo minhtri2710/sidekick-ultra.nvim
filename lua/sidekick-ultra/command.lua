@@ -17,10 +17,6 @@ local SUBS = {
 }
 local ORDER = { "select", "send", "prompt", "focus", "close" }
 
----The subcommands that render editor context. With a range they run in the last visual selection, which their
----capture then leaves; the others never enter visual mode.
-local SELECTION = { send = true, prompt = true }
-
 ---@param id sidekick_ultra.ErrorId
 ---@param msg string
 ---@param extra? table
@@ -119,8 +115,8 @@ function M.parse(line)
   return sub, opts
 end
 
----Run `:SidekickUltra`. `range` is the command's range count; with a range, `SELECTION` subcommands first restore the
----last visual selection so `{selection}` works from `:'<,'>SidekickUltra send ...`.
+---Run `:SidekickUltra`. `range` is the command's range count, which the actions that capture the editor (`send`,
+---`prompt`) take as their second argument.
 ---@param line string
 ---@param range? integer
 function M.run(line, range)
@@ -129,10 +125,7 @@ function M.run(line, range)
     errors.notify(opts)
     return
   end
-  if range and range > 0 and SELECTION[sub] then
-    vim.cmd("normal! gv")
-  end
-  actions[sub](opts)
+  actions[sub](opts, range)
 end
 
 ---@param arglead string
@@ -140,7 +133,7 @@ end
 ---@param cursorpos integer
 ---@return string[]
 function M.complete(arglead, cmdline, cursorpos)
-  local rest = cmdline:sub(1, cursorpos):match(NAME .. "!?%s+(.*)$")
+  local rest = cmdline:sub(1, cursorpos):match(NAME .. "%s+(.*)$")
   if not rest then
     return {}
   end

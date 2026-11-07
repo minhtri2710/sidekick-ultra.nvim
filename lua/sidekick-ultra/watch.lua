@@ -27,7 +27,6 @@ local function debounce(fn)
   end
 end
 
----Directories that hold a loaded, listed, normal file buffer whose file exists.
 ---@return table<string, true>
 local function wanted()
   local dirs = {}
@@ -73,18 +72,6 @@ local function sync()
   end
 end
 
----@return boolean
-function M.active()
-  return state.active
-end
-
----@return string[] directories currently watched, sorted
-function M.dirs()
-  local dirs = vim.tbl_keys(state.handles)
-  table.sort(dirs)
-  return dirs
-end
-
 local function start()
   if state.active then
     return
@@ -104,8 +91,6 @@ function M.stop()
   if not state.active then
     return
   end
-  state.active = false
-  pcall(vim.api.nvim_del_augroup_by_name, GROUP)
   for _, timer in ipairs(state.timers) do
     timer:stop()
     timer:close()
@@ -114,18 +99,23 @@ function M.stop()
     handle:close()
   end
   state = { handles = {}, timers = {}, active = false }
+  vim.api.nvim_del_augroup_by_name(GROUP)
 end
 
----Start from a stopped state and follow the attach and detach events: watch while a session is attached and
----`enabled` (the `watch` option) is true.
+---Start from a stopped state and, when `enabled` (the `watch` option) is true, follow the attach and detach events:
+---watch while a session is attached.
 ---@param enabled boolean
 function M.setup(enabled)
   M.stop()
+  local group = vim.api.nvim_create_augroup(SUBSCRIPTION, { clear = true })
+  if not enabled then
+    return
+  end
   vim.api.nvim_create_autocmd("User", {
-    group = vim.api.nvim_create_augroup(SUBSCRIPTION, { clear = true }),
+    group = group,
     pattern = { registry.ATTACH, registry.DETACH },
     callback = function()
-      if #registry.attached() > 0 and enabled then
+      if #registry.attached() > 0 then
         start()
       else
         M.stop()

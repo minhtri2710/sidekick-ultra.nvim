@@ -1,4 +1,6 @@
 ---sidekick-ultra.nvim: drive AI CLIs that run in the panes or blocks of a terminal multiplexer (the backends).
+local actions = require("sidekick-ultra.actions")
+
 local M = {}
 
 ---Validate the options, register the enabled and available backends, create `:SidekickUltra` and define the default
@@ -10,7 +12,6 @@ function M.setup(opts)
   require("sidekick-ultra.tools").setup(cfg.tools)
   require("sidekick-ultra.context.render").setup(cfg.prompts, cfg.context)
   local registry = require("sidekick-ultra.registry")
-  registry.detach_all()
   registry.reset()
   for _, info in ipairs(require("sidekick-ultra.backends").all) do
     if cfg[info.name].enabled then
@@ -29,42 +30,11 @@ function M.setup(opts)
   require("sidekick-ultra.watch").setup(cfg.watch)
 end
 
----Render a message or prompt and send it to the target session. See `sidekick_ultra.ActionOpts`.
----@param opts? sidekick_ultra.ActionOpts
-function M.send(opts)
-  require("sidekick-ultra.actions").send(opts)
-end
-
----Pick the target session, then a prompt from the library, and send it to that session.
----@param opts? sidekick_ultra.ActionOpts
-function M.prompt(opts)
-  require("sidekick-ultra.actions").prompt(opts)
-end
-
----Pick a session or tool and attach it. A tool that is started is focused unless `focus = false`.
----@param opts? sidekick_ultra.ActionOpts
-function M.select(opts)
-  require("sidekick-ultra.actions").select(opts)
-end
-
----Focus the target session's pane or block.
----@param opts? sidekick_ultra.ActionOpts
-function M.focus(opts)
-  require("sidekick-ultra.actions").focus(opts)
-end
-
----Detach attached sessions. The tool keeps running.
----@param opts? sidekick_ultra.ActionOpts
-function M.close(opts)
-  require("sidekick-ultra.actions").close(opts)
-end
-
----Render without sending.
----@param opts? sidekick_ultra.ActionOpts
----@return string? text
----@return sidekick_ultra.Error? err
-function M.render(opts)
-  return require("sidekick-ultra.actions").render(opts)
-end
+M.send = actions.send
+M.prompt = actions.prompt
+M.select = actions.select
+M.focus = actions.focus
+M.close = actions.close
+M.render = actions.render
 
 return M

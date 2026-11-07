@@ -95,8 +95,8 @@ describe("command", function()
       orig = {}
       for _, sub in ipairs({ "select", "send", "prompt", "focus", "close" }) do
         orig[sub] = actions[sub]
-        actions[sub] = function(opts)
-          table.insert(calls, { sub, opts, vim.fn.mode() })
+        actions[sub] = function(opts, range)
+          table.insert(calls, { sub, opts, range, vim.fn.mode() })
         end
       end
     end)
@@ -111,8 +111,8 @@ describe("command", function()
     it("dispatches to the action with the parsed options", function()
       command.run("send msg=hi submit=true")
       command.run("close all=true name=claude")
-      expect.equality(calls[1], { "send", { msg = "hi", submit = true }, "n" })
-      expect.equality(calls[2], { "close", { all = true, name = "claude" }, "n" })
+      expect.equality(calls[1], { "send", { msg = "hi", submit = true }, nil, "n" })
+      expect.equality(calls[2], { "close", { all = true, name = "claude" }, nil, "n" })
     end)
 
     it("notifies the error id and runs nothing", function()
@@ -123,23 +123,21 @@ describe("command", function()
       expect.equality(calls, {})
     end)
 
-    it("restores the last visual selection first when called with a range", function()
-      vim.api.nvim_buf_set_lines(0, 0, -1, false, { "a", "b", "c" })
-      vim.cmd("normal! ggVj\27")
-      expect.equality(vim.fn.mode(), "n")
+    it("passes the range count to the action, and enters no mode itself", function()
       command.run("send msg=x", 2)
-      expect.equality(calls[1][3], "V")
-      vim.cmd("normal! \27")
       command.run("send msg=x", 0)
-      expect.equality(calls[2][3], "n")
+      command.run("send msg=x")
+      expect.equality({ calls[1][3], calls[1][4] }, { 2, "n" })
+      expect.equality({ calls[2][3], calls[2][4] }, { 0, "n" })
+      expect.equality({ calls[3][3], calls[3][4] }, { nil, "n" })
     end)
 
-    it("enters visual mode only for the subcommands that read the selection, and leaves none in it", function()
+    it("leaves no subcommand given a range in visual mode", function()
       vim.api.nvim_buf_set_lines(0, 0, -1, false, { "a", "b", "c" })
-      for _, sub in ipairs({ "select", "focus", "close" }) do
+      for _, sub in ipairs({ "select", "send", "prompt", "focus", "close" }) do
         vim.cmd("normal! ggVj\27")
         vim.cmd("'<,'>SidekickUltra " .. sub)
-        expect.equality({ sub, vim.fn.mode() }, { sub, "n" })
+        expect.equality({ sub, calls[#calls][3], calls[#calls][4], vim.fn.mode() }, { sub, 2, "n", "n" })
       end
     end)
 
@@ -149,7 +147,7 @@ describe("command", function()
       vim.cmd("normal! ggVj\27")
       vim.cmd("'<,'>SidekickUltra send msg=hi")
       vim.cmd("SidekickUltra close all=true")
-      expect.equality(calls[1], { "send", { msg = "hi" }, "V" })
+      expect.equality(calls[1], { "send", { msg = "hi" }, 2, "n" })
       expect.equality(calls[2][1], "close")
     end)
   end)
@@ -179,6 +177,10 @@ describe("command", function()
 
     it("completes nothing for an unknown subcommand", function()
       expect.equality(complete("SidekickUltra nope "), {})
+    end)
+
+    it("completes nothing after a bang, which the command does not take", function()
+      expect.equality(complete("SidekickUltra! se"), {})
     end)
   end)
 

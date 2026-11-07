@@ -1,8 +1,6 @@
 ---The prompt picker: `vim.ui.select` over prompt items, sized for snacks.nvim, whose `select` preset hides the preview.
 ---Other pickers ignore the `snacks` options. The size rules: the box fits its content, never grows wider than snacks'
 ---own `select` picker, and its preview takes up to half the screen.
-local render = require("sidekick-ultra.context.render")
-
 local M = {}
 
 local PICKER_MIN_WIDTH = 40
@@ -15,12 +13,13 @@ local NUMBER_MIN = 4 -- the preview's number column, which snacks leaves on (`nu
 
 ---@class sidekick_ultra.PromptItem
 ---@field name string prompt name
+---@field display string the prompt as written (a template, or `<function>`), shown beside the name
 ---@field preview { text: string } the exact text that would be sent
 
 ---@param item sidekick_ultra.PromptItem
 ---@return string
 local function label(item)
-  return ("%-18s %s"):format(item.name, (render.display(item.name):gsub("\n", "\\n")))
+  return ("%-18s %s"):format(item.name, (item.display:gsub("\n", "\\n")))
 end
 
 ---Size the snacks `select` box to the longest listed prompt. snacks sizes a picker once, when it opens, so the box fits

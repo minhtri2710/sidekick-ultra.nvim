@@ -1,4 +1,3 @@
-local fake = require("tests.helpers.fake")
 local picker = require("sidekick-ultra.picker")
 local ui = require("tests.helpers.ui")
 
@@ -8,7 +7,6 @@ describe("picker", function()
   local pick, orig_columns, orig_lines
 
   before_each(function()
-    fake.reset()
     pick = ui.capture(function() end)
     orig_columns, orig_lines = vim.o.columns, vim.o.lines
     vim.o.columns, vim.o.lines = 80, 24
@@ -18,14 +16,17 @@ describe("picker", function()
     pick.restore()
   end)
 
-  ---Open the picker over `prompts` (name -> template, or a function giving the text) and return what it asked for.
+  ---Open the picker over `prompts` (name -> text, or a function giving the text, shown as `<function>`) and return what
+  ---it asked for.
   local function open(prompts)
-    fake.reset({}, { prompts = prompts })
     local names = vim.tbl_keys(prompts)
     table.sort(names)
     local items = vim.tbl_map(function(name)
       local prompt = prompts[name]
-      return { name = name, preview = { text = type(prompt) == "function" and prompt() or prompt } }
+      if type(prompt) == "function" then
+        return { name = name, display = "<function>", preview = { text = prompt() } }
+      end
+      return { name = name, display = prompt, preview = { text = prompt } }
     end, names)
     picker.select(items, function() end)
     return pick.selects[#pick.selects]
@@ -58,7 +59,7 @@ describe("picker", function()
     expect.equality(snacks.layout.hidden, nil)
   end)
 
-  it("labels an item with its name and the raw template, newlines shown as \\n", function()
+  it("labels an item with its name and its display text, newlines shown as \\n", function()
     local select = open({ diagnostics_all = "Can you help me fix these diagnostics?\n{diagnostics_all}" })
     expect.equality(
       select.opts.format_item(select.items[1]),
@@ -66,23 +67,12 @@ describe("picker", function()
     )
   end)
 
-  it("labels a table prompt with its msg and a function prompt as <function>", function()
-    fake.reset({}, { prompts = { tabled = { msg = "from table" }, dyn = function() end } })
-    picker.select(
-      { { name = "dyn", preview = { text = "" } }, { name = "tabled", preview = { text = "" } } },
-      function() end
-    )
-    local select = pick.selects[#pick.selects]
-    expect.equality(select.opts.format_item(select.items[1]):match("^dyn%s+(.*)$"), "<function>")
-    expect.equality(select.opts.format_item(select.items[2]):match("^tabled%s+(.*)$"), "from table")
-  end)
-
   it("passes the user's choice on", function()
     local chosen
     pick.choose = function(items)
       return items[1]
     end
-    picker.select({ { name = "a", preview = { text = "Hi" } } }, function(item)
+    picker.select({ { name = "a", display = "Hi", preview = { text = "Hi" } } }, function(item)
       chosen = item.name
     end)
     expect.equality(chosen, "a")

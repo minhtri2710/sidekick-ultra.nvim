@@ -6,7 +6,6 @@ local registry = require("sidekick-ultra.registry")
 local render = require("sidekick-ultra.context.render")
 local snapshot = require("sidekick-ultra.context.snapshot")
 local target = require("sidekick-ultra.target")
-local tools = require("sidekick-ultra.tools")
 
 local M = {}
 
@@ -40,9 +39,15 @@ local function focus_of(opts)
   return opts.focus == true, opts.focus ~= false
 end
 
----Capture the editor state, leaving visual mode once a selection is recorded: no action keeps the editor in it.
+---Capture the editor state, leaving visual mode once a selection is recorded: no action keeps the editor in it. With a
+---`range` (the `:SidekickUltra` range count) it first restores the last visual selection, so `{selection}` works
+---from `:'<,'>SidekickUltra send ...`.
+---@param range? integer
 ---@return sidekick_ultra.Snapshot
-local function capture()
+local function capture(range)
+  if range and range > 0 then
+    vim.cmd("normal! gv")
+  end
   local snap = snapshot.capture()
   if snap.selection then
     vim.cmd("normal! \27")
@@ -69,16 +74,14 @@ local function call(session, method, ...)
   return true
 end
 
----Write the segments to the session in its tool's location style: [focus-in, wait], text and LF, [Enter]. Stops at
----the first refusal, which is notified.
----@param session sidekick_ultra.Session
----@param tool sidekick_ultra.Tool the session's tool
+---@param state sidekick_ultra.State the target
 ---@param segments (string|sidekick_ultra.Location)[]
 ---@param submit? boolean
 ---@return boolean delivered every step was accepted
-local function deliver(session, tool, segments, submit)
-  local text = location.format(segments, tool.location)
-  if tool.mux_focus then
+local function deliver(state, segments, submit)
+  local session = state.session
+  local text = location.format(segments, state.tool.location)
+  if state.tool.mux_focus then
     if not call(session, "send", FOCUS_IN) then
       return false
     end
@@ -93,21 +96,21 @@ end
 ---Render a message or prompt against the current context and send it to the target session. A tool this starts is
 ---focused before the text, and `focus = true` focuses the session again after a delivery.
 ---@param opts? sidekick_ultra.ActionOpts
-function M.send(opts)
+---@param range? integer the command's range count
+function M.send(opts, range)
   opts = opts or {}
-  local segments, err = render.build(opts, capture())
+  local segments, err = render.build(opts, capture(range))
   if not segments then
     errors.notify(err or errors.new("nothing_to_send", "nothing to send"))
     return
   end
-  target.with_target({ filter = filter_of(opts), attach = true }, function(sessions, started)
-    local session = sessions[1]
+  target.with_target({ filter = filter_of(opts), attach = true }, function(state, started)
     local always, on_start = focus_of(opts)
     if started and on_start then
-      call(session, "focus")
+      call(state.session, "focus")
     end
-    if deliver(session, tools.get(session.tool), segments, opts.submit) and always then
-      call(session, "focus")
+    if deliver(state, segments, opts.submit) and always then
+      call(state.session, "focus")
     end
   end)
 end
@@ -117,9 +120,10 @@ end
 ---starts is focused once the picker closes (not before, which would take the keys from it), and `focus = true` focuses
 ---the session after a delivery; either way it is focused once.
 ---@param opts? sidekick_ultra.ActionOpts
-function M.prompt(opts)
+---@param range? integer the command's range count
+function M.prompt(opts, range)
   opts = opts or {}
-  local snap = capture()
+  local snap = capture(range)
   if opts.msg then
     local _, err = render.build({ msg = opts.msg }, snap)
     if err then
@@ -141,17 +145,19 @@ function M.prompt(opts)
     picker.select({}, function() end)
     return
   end
-  target.with_target({ filter = filter_of(opts), attach = true }, function(sessions, started)
-    local session = sessions[1]
-    local tool = tools.get(session.tool)
+  target.with_target({ filter = filter_of(opts), attach = true }, function(state, started)
     local items = vim.tbl_map(function(name)
-      return { name = name, preview = { text = location.format(renders[name], tool.location) } }
+      return {
+        name = name,
+        display = render.display(name),
+        preview = { text = location.format(renders[name], state.tool.location) },
+      }
     end, listed)
     picker.select(items, function(item)
-      local delivered = item ~= nil and deliver(session, tool, renders[item.name], opts.submit)
+      local delivered = item ~= nil and deliver(state, renders[item.name], opts.submit)
       local always, on_start = focus_of(opts)
       if (delivered and always) or (started and on_start) then
-        call(session, "focus")
+        call(state.session, "focus")
       end
     end)
   end)
@@ -175,10 +181,8 @@ end
 ---@param opts? sidekick_ultra.ActionOpts
 function M.focus(opts)
   opts = opts or {}
-  target.with_target({ filter = filter_of(opts), attach = true }, function(sessions)
-    for _, session in ipairs(sessions) do
-      call(session, "focus")
-    end
+  target.with_target({ filter = filter_of(opts), attach = true }, function(state)
+    call(state.session, "focus")
   end)
 end
 
@@ -186,13 +190,16 @@ end
 ---@param opts? sidekick_ultra.ActionOpts
 function M.close(opts)
   opts = opts or {}
-  target.with_target({ filter = filter_of(opts), all = opts.all }, function(sessions)
-    for _, session in ipairs(sessions) do
-      if registry.detach(session.id) then
-        errors.info("Detached from " .. session.tool)
-      end
+  local function detach(state)
+    if registry.detach(state.session.id) then
+      errors.info("Detached from " .. state.session.tool)
     end
-  end)
+  end
+  if opts.all then
+    target.with_attached(filter_of(opts), detach)
+  else
+    target.with_target({ filter = filter_of(opts) }, detach)
+  end
 end
 
 ---Render without sending.

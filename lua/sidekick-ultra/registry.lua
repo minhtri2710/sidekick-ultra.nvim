@@ -37,19 +37,19 @@ function M.backend(name)
   end
 end
 
----Forget all backends and attached sessions, without events. `setup` detaches first, so the events fire.
+---Detach every attached session, firing the detach events, and forget all backends.
 function M.reset()
+  M.detach_all()
   backends = {}
-  attached = {}
 end
 
 ---Whether the session still runs: the rule is in `backend.lua`.
----@param session sidekick_ultra.Session
+---@param session sidekick_ultra.Session session of a registered backend
 ---@return boolean
 function M.is_running(session)
-  local backend = M.backend(session.backend)
-  if backend and backend.is_running then
-    return backend.is_running(session)
+  local is_running = M.backend(session.backend).is_running
+  if is_running then
+    return is_running(session)
   end
   return proc.name(session.pid) == session.proc_name
 end

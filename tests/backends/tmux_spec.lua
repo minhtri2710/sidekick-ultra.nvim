@@ -461,6 +461,7 @@ describe("tmux backend", function()
     end)
 
     it("keeps a session whose liveness is the interpreter's process name, as registry.is_running reads it", function()
+      registry.register(tmux)
       local list = discover("node", "node /x/bin/gemini")
       expect.equality(registry.is_running(list[1]), true)
       use_procs({ [58100] = { name = "zsh" } })
@@ -742,6 +743,7 @@ describe("tmux backend", function()
         pane = "%5",
       })
       -- registry.is_running reads the process through nvim: the record matches what nvim reports now, not later.
+      registry.register(tmux)
       expect.equality(registry.is_running(session), true)
       use_procs({ [58500] = { name = "other" } })
       expect.equality(registry.is_running(session), false)

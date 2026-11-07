@@ -63,6 +63,7 @@ describe("status", function()
   end)
 
   it("serves the cache for 5 s, then refreshes and auto-detaches dead sessions", function()
+    registry.register(fake.backend("herdr"))
     local s = fake.session("herdr", "claude")
     registry.attach(s)
     fake.flush()

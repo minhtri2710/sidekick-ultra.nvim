@@ -557,6 +557,38 @@ describe("actions", function()
       expect.equality(pick.selects[1].opts.prompt, "sidekick-ultra prompt")
     end)
 
+    it("gives each item the prompt as written: a template, a table's msg, or <function>", function()
+      fake.reset({ claude = { cmd = fake.INSTALLED } }, {
+        prompts = {
+          greet = "hello\nthere",
+          tabled = { msg = "from table" },
+          dyn = function()
+            return "from function"
+          end,
+        },
+      })
+      attached({ "claude" })
+      pick.choose = function() end
+      actions.prompt({})
+      local display = {}
+      for _, item in ipairs(pick.selects[1].items) do
+        display[item.name] = item.display
+      end
+      expect.equality({ display.greet, display.tabled, display.dyn }, { "hello\nthere", "from table", "<function>" })
+    end)
+
+    it("reports a chosen prompt whose session's backend is no longer registered", function()
+      attached({ "claude" })
+      pick.choose = function(items)
+        local item = choose("changes")(items)
+        registry.reset()
+        return item
+      end
+      actions.prompt({})
+      expect.equality(cap.ids(), { "backend_error" })
+      expect.equality(cap.calls[1].msg, "backend not registered: herdr")
+    end)
+
     it("delivers to the session picked first when several are attached, with no second pick", function()
       file_buffer()
       attached({ "claude", "gemini" })
@@ -705,6 +737,22 @@ describe("actions", function()
       end)
     end)
 
+    it("attaches nothing, and breaks no later action, when a setup ran while its picker was open", function()
+      backend = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
+      registry.register(backend)
+      pick.choose = function(items)
+        fake.reset({ claude = { cmd = fake.INSTALLED } })
+        return vim.tbl_filter(function(item)
+          return item.session ~= nil
+        end, items)[1]
+      end
+      actions.select({ focus = false })
+      expect.equality({ cap.ids(), registry.attached() }, { { "backend_error" }, {} })
+      pick.choose = function() end
+      expect.no_error(actions.focus, {})
+      expect.no_error(require("sidekick-ultra.status").cli)
+    end)
+
     it("applies the name filter to the picker", function()
       backend = fake.backend("herdr", { sessions = { fake.session("herdr", "claude") } })
       registry.register(backend)
@@ -720,7 +768,7 @@ describe("actions", function()
   end)
 
   describe("focus", function()
-    it("focuses every target session through its backend", function()
+    it("focuses the target session through its backend", function()
       attached({ "claude" })
       actions.focus({})
       expect.equality(backend.calls, { { "focus", "herdr:claude1" } })
@@ -779,6 +827,12 @@ describe("actions", function()
       )
       actions.close({ all = true })
       expect.equality(registry.attached(), {})
+    end)
+
+    it("detaches every attached session with all=true, without a picker", function()
+      attached({ "claude", "codex" })
+      actions.close({ all = true })
+      expect.equality({ registry.attached(), #pick.selects, #cap.calls }, { {}, 0, 2 })
     end)
 
     it("honors the name filter", function()

@@ -1,4 +1,3 @@
-local actions = require("sidekick-ultra.actions")
 local fake = require("tests.helpers.fake")
 local keys = require("sidekick-ultra.keys")
 local sidekick = require("sidekick-ultra")
@@ -70,15 +69,15 @@ describe("keys", function()
     calls = {}
     orig = {}
     for _, name in ipairs({ "select", "send", "prompt", "focus", "close" }) do
-      orig[name] = actions[name]
-      actions[name] = function(...)
+      orig[name] = sidekick[name]
+      sidekick[name] = function(...)
         table.insert(calls, { name, ... })
       end
     end
   end)
   after_each(function()
     for name, fn in pairs(orig) do
-      actions[name] = fn
+      sidekick[name] = fn
     end
     keys.setup(false)
     for _, lhs in ipairs({ "<leader>Zz", "<leader>as", "<Tab>" }) do
