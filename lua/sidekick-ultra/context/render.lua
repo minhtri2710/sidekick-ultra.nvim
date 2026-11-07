@@ -25,8 +25,7 @@ for name in pairs(sources.builtin) do
   M.default_prompts[name] = M.default_prompts[name] or "{" .. name .. "}"
 end
 
----The first problem in a `prompts` entry, or nil: `path` is the full key path, `expected` what was wanted, `got` the
----offending value.
+---The first problem in a `prompts` entry, or nil.
 ---@param name string
 ---@param prompt any
 ---@return sidekick_ultra.Problem?
@@ -77,7 +76,7 @@ end
 ---@param snap sidekick_ultra.Snapshot
 ---@return string? text
 ---@return sidekick_ultra.Error? err
-function M.template(name, snap)
+local function template(name, snap)
   local prompt = prompts[name]
   if prompt == nil then
     return nil, errors.new("unknown_prompt", ("unknown prompt: %s"):format(name), { names = { name } })
@@ -113,7 +112,7 @@ end
 local function alternatives(expr)
   local names = vim.split(expr, "|", { plain = true })
   for _, name in ipairs(names) do
-    if not name:match("^[%w_]+$") then
+    if not sources.is_name(name) then
       return
     end
   end
@@ -184,7 +183,7 @@ function M.build(opts, snap)
     table.insert(parts, msg)
   end
   if opts.prompt then
-    local text, err = M.template(opts.prompt, snap)
+    local text, err = template(opts.prompt, snap)
     if not text then
       return nil, err
     end

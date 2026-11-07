@@ -3,9 +3,12 @@ local backends = require("sidekick-ultra.backends")
 local config = require("sidekick-ultra.config")
 local exec = require("sidekick-ultra.exec")
 local registry = require("sidekick-ultra.registry")
+local sources = require("sidekick-ultra.context.sources")
 local tools = require("sidekick-ultra.tools")
 
 local M = {}
+
+local NVIM_FLOOR = "0.11.2"
 
 ---Report the version `<bin> <flag>` prints, and warn when it is older than the backend's minimum.
 ---@param name string
@@ -60,11 +63,7 @@ local function report_backend(info, cfg)
     end
     if binary_key then
       health.error(("%s: %s.%s = %q is missing or not executable"):format(name, name, binary_key, own[binary_key]), {
-        ("Fix or remove `%s.%s`: a configured binary has no fallback to PATH or the bundled %s"):format(
-          name,
-          binary_key,
-          name
-        ),
+        ("Fix or remove `%s.%s`: a configured binary has no fallback to PATH"):format(name, binary_key),
       })
     else
       health.error(
@@ -85,8 +84,7 @@ local function report_backend(info, cfg)
       )
     end
   end
-  local inside = ok and mod.inside()
-  health.info(("%s: nvim %s inside %s"):format(name, inside and "runs" or "does not run", name))
+  health.info(("%s: nvim %s inside %s"):format(name, mod.inside() and "runs" or "does not run", name))
   local keys = vim.tbl_keys(info.options)
   table.sort(keys)
   for _, key in ipairs(keys) do
@@ -105,10 +103,10 @@ function M.check()
   local cfg = config.get()
 
   health.start("sidekick-ultra")
-  if vim.fn.has("nvim-0.11.2") == 1 then
-    health.ok("Neovim >= 0.11.2")
+  if vim.fn.has("nvim-" .. NVIM_FLOOR) == 1 then
+    health.ok("Neovim >= " .. NVIM_FLOOR)
   else
-    health.error("Neovim >= 0.11.2 is required")
+    health.error(("Neovim >= %s is required"):format(NVIM_FLOOR))
   end
 
   health.start("backends")
@@ -123,10 +121,16 @@ function M.check()
   end
 
   health.start("context")
-  if #vim.api.nvim_get_runtime_file("queries/*/textobjects.scm", false) > 0 then
+  local textobjects = sources.textobjects
+  if #vim.api.nvim_get_runtime_file(("queries/*/%s.scm"):format(textobjects.query), false) > 0 then
     health.ok("nvim-treesitter-textobjects queries found")
   else
-    health.warn("nvim-treesitter-textobjects is missing; {function} and {class} stay empty")
+    local placeholders = vim.tbl_map(function(name)
+      return "{" .. name .. "}"
+    end, textobjects.sources)
+    health.warn(
+      ("nvim-treesitter-textobjects is missing; %s fail to render"):format(table.concat(placeholders, " and "))
+    )
   end
 
   health.start("tools")

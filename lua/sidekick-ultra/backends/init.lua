@@ -5,18 +5,21 @@
 local M = {}
 
 ---@class sidekick_ultra.BackendOption
----@field type "string"
----@field non_empty? boolean an empty string is rejected
+---@field type "string"|"boolean" a string option is never empty
 ---@field binary? boolean the option names the backend's binary: when that binary is unusable there is no fallback
 ---@field report? { set: string, unset: string } the `:checkhealth` row, after `<backend>: `, for set and unset
 
 ---@class sidekick_ultra.BackendInfo
 ---@field name string
----@field options table<string, sidekick_ultra.BackendOption> besides `enabled`
+---@field options table<string, sidekick_ultra.BackendOption> besides the common ones
 ---@field version? { flag: string, min?: integer[] } the flag that prints the version, and the oldest `{major, minor}`
 ---   that works: health warns below it
 ---@field server_vars? string[] variables with which the backend's program finds its server; health reports only
 ---   whether they are set
+
+---The options every backend takes.
+---@type table<string, sidekick_ultra.BackendOption>
+M.common = { enabled = { type = "boolean" } }
 
 ---In the order health reports them.
 ---@type sidekick_ultra.BackendInfo[]
@@ -41,7 +44,6 @@ M.all = {
     options = {
       socket = {
         type = "string",
-        non_empty = true,
         report = {
           set = "socket is configured (tmux.socket); every call uses -S",
           unset = "tmux.socket is not configured; calls go to the server of $TMUX, else the default server",

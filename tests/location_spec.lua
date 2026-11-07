@@ -180,6 +180,22 @@ describe("location", function()
     end)
   end)
 
+  describe("file and line", function()
+    it("builds a file record from the path alone", function()
+      expect.equality(location.file("a"), { path = "a", kind = "file" })
+    end)
+
+    it("ends a line record on its first row when no last row is given", function()
+      expect.equality(location.line("a", 3), { path = "a", kind = "line", r1 = 3, r2 = 3 })
+      expect.equality(location.line("a", 3, 5), { path = "a", kind = "line", r1 = 3, r2 = 5 })
+    end)
+
+    it("builds records that is_location accepts", function()
+      expect.equality(location.is_location(location.file("a")), true)
+      expect.equality(location.is_location(location.line("a", 3)), true)
+    end)
+  end)
+
   describe("position", function()
     it("ends where it starts when no end is given", function()
       expect.equality(location.position("a", 3, 4), { path = "a", kind = "position", r1 = 3, c1 = 4, r2 = 3, c2 = 4 })
