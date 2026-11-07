@@ -54,10 +54,28 @@ describe("exec", function()
     expect.equality(exec.env_prefix({}), {})
   end)
 
-  it("keeps no output: none of the loaded modules holds what a command printed", function()
+  it("keeps no output: no module holds what a command or a process line printed", function()
     local secret = require("tests.helpers.backend").SECRET
+    -- Every backend and proc are loaded, so the scan below sees them in a narrowed run too.
+    for _, name in ipairs(require("sidekick-ultra.backends").names()) do
+      require("sidekick-ultra.backends." .. name)
+    end
     local res = exec.run({ "/bin/sh", "-c", "echo " .. secret })
     expect.equality(res.stdout, secret .. "\n")
+    -- A `ps` line with the secret goes through proc, which parses it.
+    local orig = exec.run
+    MiniTest.finally(function()
+      exec.run = orig
+    end)
+    exec.run = function()
+      return { code = 0, stdout = "node /x/bin/pi --api-key " .. secret .. "\n", stderr = "" }
+    end
+    local pi = {
+      is_proc = function()
+        return false
+      end,
+    }
+    require("sidekick-ultra.proc").tool_of("tmux", { pi = pi }, 1, { "node" })
     for name, mod in pairs(package.loaded) do
       if type(name) == "string" and name:find("^sidekick%-ultra") then
         expect.equality({ name, vim.inspect(mod):find(secret, 1, true) }, { name, nil })

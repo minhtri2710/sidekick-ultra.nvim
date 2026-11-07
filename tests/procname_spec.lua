@@ -85,12 +85,12 @@ describe("procname", function()
     end)
 
     it(
-      "node and bun: -r, --require, --import, --loader, --experimental-loader, --conditions skip their value",
+      "node and bun: --require, --import, --loader, --experimental-loader, --conditions skip their value, each time",
       function()
         for _, flag in ipairs({ "--require", "--import", "--loader", "--experimental-loader", "--conditions" }) do
           check({ { "node " .. flag .. " ./hook.js /x/bin/gemini", "gemini" } })
         end
-        check({ { "node -r a -r b /x/bin/gemini", "gemini" }, { "node --require a", "" } })
+        check({ { "node --require a --require b /x/bin/gemini", "gemini" }, { "node --require a", "" } })
       end
     )
 

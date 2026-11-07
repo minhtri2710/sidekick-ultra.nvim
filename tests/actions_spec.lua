@@ -361,6 +361,7 @@ describe("actions", function()
     end)
 
     for _, case in ipairs({
+      { tool = "codex", text = "@my file.lua" },
       { tool = "claude", text = '@"my file.lua"' },
       { tool = "gemini", text = "@my\\ file.lua" },
     }) do

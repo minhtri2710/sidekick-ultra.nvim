@@ -82,6 +82,9 @@ describe("health", function()
     end
     fake.reset()
     check()
+    for _, name in ipairs(NAMES) do
+      expect.equality(package.loaded["sidekick-ultra.backends." .. name], nil)
+    end
     expect.equality(has("info", "herdr: disabled"), true)
     expect.equality(has("info", "rex: disabled"), true)
     expect.equality(has("info", "tmux: disabled"), true)

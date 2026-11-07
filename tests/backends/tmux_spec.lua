@@ -210,6 +210,7 @@ describe("tmux backend", function()
       local res, err = tmux.submit({ pane = "%99" })
       expect.equality(res, nil)
       expect.equality({ err.id, err.backend, err.cmd, err.code }, { "backend_error", "tmux", "send-keys", 1 })
+      expect.equality(err.msg, "tmux exited with 1: can't find pane: %99")
     end)
 
     it("returns the error of a command that could not be spawned", function()

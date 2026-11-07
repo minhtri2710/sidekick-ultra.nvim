@@ -607,6 +607,7 @@ describe("rex backend", function()
       expect.equality(rec.subs[1], { "block", "call", "-s", SID, "-b", "block:a2", "program_status" })
       expect.equality(rec.subs[2], { "send", "-s", SID, "-b", "block:a2", "--", "hello\n" })
       expect.equality(#rec.subs, 2)
+      expect.equality(rec.calls[2].opts.stdin, nil)
     end)
 
     it("keeps an option-shaped or multi-line text as a single element", function()

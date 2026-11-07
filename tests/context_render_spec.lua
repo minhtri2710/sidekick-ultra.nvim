@@ -67,6 +67,10 @@ describe("context.render", function()
         "selection",
         "tests",
       })
+      -- Placeholders derive a bare `{name}` prompt only where no explicit text exists.
+      expect.equality(render.prompts().file, "{file}")
+      expect.equality(render.prompts().diagnostics, "Can you help me fix the diagnostics in {file}?\n{diagnostics}")
+      expect.equality(render.prompts().diagnostics_all, "Can you help me fix these diagnostics?\n{diagnostics_all}")
     end)
 
     it("merges user prompts: string, table and function; false removes", function()
