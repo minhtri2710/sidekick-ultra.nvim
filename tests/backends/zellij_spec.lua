@@ -691,16 +691,11 @@ describe("zellij backend", function()
 
     local function bound_error_names_everything(err)
       expect.equality(err.id, "backend_error")
-      for _, part in ipairs({ "claude", "terminal_6", "skuA", "left open", "never showed" }) do
-        expect.equality({ part, err.msg:find(part, 1, true) ~= nil }, { part, true })
-      end
       expect.equality(
         err.msg,
         "pane terminal_6 of session skuA: its program never showed as claude; "
           .. "pane terminal_6 of session skuA was left open"
       )
-      -- Not even the program's basename is echoed.
-      expect.equality(err.msg:find("node", 1, true), nil)
     end
 
     it("returns on the first poll, without waiting, when the pane already shows the tool", function()

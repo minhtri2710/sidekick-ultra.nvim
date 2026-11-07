@@ -302,7 +302,7 @@ describe("context.render", function()
       local text, err = run({ msg = "{full} {none} {none|none} {full}" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(says(err, { "none|none" }, { "full" }), true)
+      expect.equality(says(err, { "for: none, none|none" }, { "full" }), true)
     end)
 
     it("fails the whole render when one placeholder is empty", function()
@@ -335,16 +335,16 @@ describe("context.render", function()
       expect.equality(says(err, { "(function: ", "zzz" }), true)
     end)
 
-    it("counts a throwing source as empty and keeps the cause", function()
+    it("counts a throwing source as empty and keeps the first line of the cause", function()
       render.setup(nil, {
         boom = function()
-          error("kaput")
+          error("kaput\nsecond line")
         end,
       })
       local text, err = run({ msg = "{boom}" })
       expect.equality(text, nil)
       expect.equality(err.id, "render_failed")
-      expect.equality(says(err, { "(boom: ", "kaput" }), true)
+      expect.equality(says(err, { "(boom: ", "kaput" }, { "second line", "\n" }), true)
     end)
 
     it("counts a source returning a malformed list as empty and keeps the cause", function()
