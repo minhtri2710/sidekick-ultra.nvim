@@ -202,6 +202,9 @@ describe("context.render", function()
         blank = function()
           return { "" }
         end,
+        wrong = function()
+          return 5
+        end,
         foo = function()
           return "FOO"
         end,
@@ -209,7 +212,7 @@ describe("context.render", function()
           return "BAR"
         end,
       })
-      expect.equality(run({ msg = "{empty|blank|foo|bar}" }), "FOO")
+      expect.equality(run({ msg = "{empty|blank|wrong|foo|bar}" }), "FOO")
       expect.equality(run({ msg = "{bar|foo}" }), "BAR")
     end)
 
@@ -363,10 +366,31 @@ describe("context.render", function()
 
       local _, twice = run({ msg = "{boom} {boom|none}" })
       expect.equality(select(2, twice.msg:gsub("kaput", "")), 1)
+
+      local _, later = run({ msg = "{none|boom}" })
+      expect.equality(says(later, { "for: none|boom", "(boom: ", "kaput" }), true)
     end)
 
-    it("counts a source returning a malformed list as empty and keeps the cause", function()
+    it("counts false and an empty list as nothing, with no cause", function()
+      for name, value in pairs({ off = false, no_lines = {} }) do
+        render.setup(nil, {
+          [name] = function()
+            return value
+          end,
+        })
+        local text, err = run({ msg = "{" .. name .. "}" })
+        expect.equality(text, nil)
+        expect.equality(err.id, "render_failed")
+        expect.equality(says(err, { "for: " .. name }, { "(" .. name .. ": " }), true)
+      end
+    end)
+
+    it("counts a source returning a malformed value as empty and keeps the cause", function()
       local bad = {
+        number = 5,
+        yes = true,
+        dict = { lnum = 1 },
+        func = function() end,
         numbers = { 1, 2 },
         empty_table = { { {} } },
         no_kind = { { { path = "x" } } },

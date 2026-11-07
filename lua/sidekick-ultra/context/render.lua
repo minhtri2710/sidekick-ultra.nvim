@@ -138,16 +138,20 @@ local function is_empty(segments)
   return table.concat(segments) == ""
 end
 
----A source's value as flat output segments (lines joined by "\n"), or nil when it yields nothing. Raises when a
----line is not a string or a list of strings and location records.
----@param value any string, or a list of lines
+---A source's value as flat output segments (lines joined by "\n"), or nil when it yields nothing. The value is nil
+---or `false` (nothing), a string (split into lines), or a list of lines (an empty list is nothing). Raises on any
+---other value, and when a line is not a string or a list of strings and location records.
+---@param value any
 ---@return (string|sidekick_ultra.Location)[]?
 local function as_segments(value)
+  if not value then
+    return nil
+  end
   local lines = value
   if type(value) == "string" then
     lines = vim.split(value, "\n", { plain = true })
-  elseif type(value) ~= "table" then
-    return nil
+  elseif type(value) ~= "table" or not vim.islist(value) then
+    error("source must return a string, a list of lines, or nothing, got " .. type(value))
   end
   local segments = {}
   for i, line in ipairs(lines) do
