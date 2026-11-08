@@ -157,7 +157,7 @@ function M.list(configured)
     end
     return nil, err
   end
-  local ret = {}
+  local ret, listed = {}, {}
   for _, row in ipairs(vim.split(res.stdout, "\n", { plain = true, trimempty = true })) do
     local f = vim.split(row, "\t", { plain = true })
     local root = tonumber(f[2])
@@ -165,7 +165,10 @@ function M.list(configured)
       return nil, errors.new("backend_error", "tmux printed an unexpected pane list")
     end
     local cwd = table.concat(f, "\t", 5)
-    if f[4] ~= "1" then
+    -- A linked window lists its panes once per session that links it (seen live); the first row wins.
+    local again = listed[f[1]]
+    listed[f[1]] = true
+    if f[4] ~= "1" and not again then
       local name, pid, proc_name, find_err = find_tool(root, configured)
       if find_err then
         return nil, find_err
