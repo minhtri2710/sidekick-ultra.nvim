@@ -346,6 +346,20 @@ describe("tmux backend", function()
       expect.equality(list[1].cwd, "/private/tmp/sku-live-tmux/a\tb")
     end)
 
+    it("lists a pane of a linked window once, under its first session, and walks its tree once", function()
+      rec = record({ ["list-panes"] = fixture("list_panes_linked") })
+      local visits = use_procs(TREE)
+      local list, err = tmux.list(tools.all())
+      expect.equality(err, nil)
+      expect.equality(
+        vim.tbl_map(function(s)
+          return { s.id, s.tmux_session }
+        end, list),
+        { { "tmux:%1", "main" }, { "tmux:%2", "other" } }
+      )
+      expect.equality(visits[58100], 1)
+    end)
+
     it("lists nothing for an empty server", function()
       rec = record({ ["list-panes"] = fixture("list_panes_empty") })
       expect.equality({ tmux.list(tools.all()) }, { {} })

@@ -57,6 +57,12 @@ Settled by the live run at 58637a7 (reviews/d8-tmux-58637a7.log, 56 checks passe
                             backslash form appeared, and cat's output had the SGR sequence consumed by the terminal.
                             tmux 3.7 is the floor (README, `lua/sidekick-ultra/backends/init.lua`, health warning).
 
+Settled by the U20 probe (reviews/u20-probe-tmux-linked.log, tmux 3.8, private server, no client):
+  list_panes_linked.txt     after `link-window -s a:0 -t b:5`, `list-panes -a` printed the pane `%0` twice, same pid, once
+                            per session that links its window (`%0 a`, `%1 b`, `%0 b`). The fixture is hand-written in
+                            that shape with the plugin's five fields. `list` keeps the first row of a pane id. Which
+                            session tmux lists first for a pane was seen for one link only; the code does not depend on it.
+
 Not settled; a live run must still show:
   display_session.txt       `display-message -p -t $TMUX_PANE '#{session_name}'` output, and `switch-client -t %N`
                             from a pane in another session. No client is attached to the private server, so the live
