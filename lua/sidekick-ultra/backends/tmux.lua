@@ -6,6 +6,12 @@
 ---and `pgrep` itself (`vim._os_proc_info`, `vim._os_proc_children`). On top of that, a process whose name is a node or
 ---python interpreter costs one plugin `ps` call, to read the script it runs (see proc); no other argv and no environment
 ---is read.
+---
+---A pane is kept only when the matched process is its foreground program: the matched pid's kernel short name
+---(`ps -o ucomm=`, one call per matched pane) must equal `#{pane_current_command}`, which tmux reports in the same
+---form. A tool that is suspended or in the background, or runs inside another program's terminal, is not listed. `send`
+---makes the same check again before it pastes, since an attached session outlives the tool's time in the foreground.
+---`#{pane_current_command}` and `ucomm` were compared on macOS only; Linux is unverified.
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
 local proc = require("sidekick-ultra.proc")
@@ -21,6 +27,7 @@ local LIST_FORMAT = table.concat({
   "#{pane_pid}",
   "#{session_name}",
   "#{pane_dead}",
+  "#{pane_current_command}",
   "#{?pane_current_path,#{pane_current_path},#{pane_start_path}}",
 }, "\t")
 local START_FORMAT = "#{pane_id}\t#{pane_pid}"
@@ -164,10 +171,10 @@ function M.list(configured)
   for _, row in ipairs(vim.split(res.stdout, "\n", { plain = true, trimempty = true })) do
     local f = vim.split(row, "\t", { plain = true })
     local root = tonumber(f[2])
-    if #f < 5 or not f[1]:match("^%%%d+$") or not root then
+    if #f < 6 or not f[1]:match("^%%%d+$") or not root then
       return nil, errors.new("backend_error", "tmux printed an unexpected pane list")
     end
-    local cwd = table.concat(f, "\t", 5)
+    local cwd = table.concat(f, "\t", 6)
     -- A linked window lists its panes once per session that links it (seen live); the first row wins.
     local again = listed[f[1]]
     listed[f[1]] = true
@@ -178,10 +185,17 @@ function M.list(configured)
         return nil, find_err
       end
       if name then
-        if cwd == "" then
-          return nil, errors.new("backend_error", "tmux printed no working directory for pane " .. f[1])
+        local ucomm, ucomm_err = proc.ucomm(pid)
+        if ucomm_err then
+          return nil, ucomm_err
         end
-        table.insert(ret, session_of(name, f[1], cwd, pid, proc_name, f[3]))
+        -- A vanished pid (nil ucomm) or a tool that is not the foreground program is no session.
+        if ucomm == f[5] then
+          if cwd == "" then
+            return nil, errors.new("backend_error", "tmux printed no working directory for pane " .. f[1])
+          end
+          table.insert(ret, session_of(name, f[1], cwd, pid, proc_name, f[3]))
+        end
       end
     end
   end
@@ -254,10 +268,11 @@ end
 ---whether `copy-mode -q` is harmless on a pane in no mode, so the mode count is read first (`#{pane_in_mode}`) and
 ---`copy-mode -q`, which cancels every mode, runs only when it is above zero.
 ---@param pane string
----@return true? ok
+---@param format string
+---@return string? out the trimmed answer of `display-message -p`
 ---@return sidekick_ultra.Error? err
-local function leave_mode(pane)
-  local res, err = run({ "display-message", "-p", "-t", pane, "#{pane_in_mode}" })
+local function display(pane, format)
+  local res, err = run({ "display-message", "-p", "-t", pane, format })
   if not res then
     return nil, err
   end
@@ -265,6 +280,17 @@ local function leave_mode(pane)
   -- tmux 3.8 answers a pane that does not exist with exit 0 and no output (seen live), not with an error.
   if out == "" then
     return nil, errors.new("backend_error", ("tmux pane %s not found"):format(pane))
+  end
+  return out
+end
+
+---@param pane string
+---@return true? ok
+---@return sidekick_ultra.Error? err
+local function leave_mode(pane)
+  local out, err = display(pane, "#{pane_in_mode}")
+  if not out then
+    return nil, err
   end
   local modes = tonumber(out)
   if not modes then
@@ -279,6 +305,39 @@ local function leave_mode(pane)
   return true
 end
 
+---The tool of an attached session may have been suspended or sent to the background since discovery; its pid still
+---passes the registry's liveness check. Text pasted then would reach the shell, which runs it. So before a send the
+---session's pid must still be the pane's foreground program (the rule `list` applies): one `display-message` and one
+---`ps`.
+---@param session sidekick_ultra.Session
+---@return true? ok
+---@return sidekick_ultra.Error? err
+local function require_foreground(session)
+  local command, err = display(session.pane, "#{pane_current_command}")
+  if not command then
+    return nil, err
+  end
+  local ucomm, ucomm_err = proc.ucomm(session.pid)
+  if ucomm_err then
+    return nil, ucomm_err
+  end
+  if not ucomm then
+    return nil, errors.new("backend_error", ("tmux pane %s: the tool's process is gone"):format(session.pane))
+  end
+  if ucomm ~= command then
+    return nil,
+      errors.new(
+        "backend_error",
+        ("tmux pane %s: the tool is not the foreground program (pane runs %s, the tool is %s)"):format(
+          session.pane,
+          command,
+          ucomm
+        )
+      )
+  end
+  return true
+end
+
 ---Raw text through a named paste buffer: `-r` keeps LF as LF, so no Enter is sent, `-S` stops tmux from passing the
 ---buffer through vis(3) (the default since tmux 3.7, which would turn an ESC byte into the text `\033`), and `-d`
 ---deletes the buffer.
@@ -287,6 +346,10 @@ end
 ---@return sidekick_ultra.ExecResult? ok
 ---@return sidekick_ultra.Error? err
 function M.send(session, text)
+  local foreground, foreground_err = require_foreground(session)
+  if not foreground then
+    return nil, foreground_err
+  end
   local left, mode_err = leave_mode(session.pane)
   if not left then
     return nil, mode_err
@@ -306,6 +369,7 @@ function M.send(session, text)
   return pasted
 end
 
+---No foreground check: an Enter alone into a shell runs nothing new (the text it would run was refused by `send`).
 ---@param session sidekick_ultra.Session
 ---@return sidekick_ultra.ExecResult? ok
 ---@return sidekick_ultra.Error? err

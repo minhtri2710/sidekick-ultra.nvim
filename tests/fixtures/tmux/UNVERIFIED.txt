@@ -65,6 +65,19 @@ Settled by the U20 probe (reviews/u20-probe-tmux-linked.log, tmux 3.8, private s
                             `focus` uses the kept session to decide on `switch-client`, which is still unsettled
                             (see display_session.txt).
 
+Settled by the U24 probes (reviews/a2-probe-tmux-fg.log, reviews/a2-probe2-tmux-title.log, tmux 3.8, private server):
+  list_panes*.txt           the fifth field `#{pane_current_command}` is the foreground program: `sleep` while it
+                            runs in the foreground, the shell while it is suspended (C-z) or run with `&`. It is the
+                            kernel short name (`ucomm`): a node that set `process.title` shows `node`, and `sleep`
+                            started through a symlink named `claude` shows `sleep`. `list` keeps a pane only when
+                            `ps -o ucomm= -p <matched pid>` equals it. list_panes_foreground.txt is hand-written: two
+                            panes at a shell, one at node, one at Claude Code, whose `claude` symlink points to the
+                            executable `2.1.322` (ucomm `2.1.322`, plugin name `claude`). The ps answers in the
+                            specs are hand-written too; no live run has checked the rule end to end. `send` applies
+                            the same equality before it pastes. Probed on macOS only: on Linux tmux may read the
+                            name from /proc/<pid>/cmdline while `ucomm` is the kernel `comm`, so the two may differ
+                            there (unverified).
+
 Not settled; a live run must still show:
   display_session.txt       `display-message -p -t $TMUX_PANE '#{session_name}'` output, and `switch-client -t %N`
                             from a pane in another session. No client is attached to the private server, so the live

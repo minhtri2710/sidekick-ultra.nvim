@@ -1,1 +1,1 @@
-%1	58100	main	0	/private/tmp/sku-live-tmux/a	b
+%1	58100	main	0	claude	/private/tmp/sku-live-tmux/a	b
