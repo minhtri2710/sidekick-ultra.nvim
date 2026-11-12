@@ -110,12 +110,11 @@ end
 ---@return string
 local function cut(line, d1, d2)
   local out, before = {}, 0
-  local starts = vim.str_utf_pos(line)
-  for i, first in ipairs(starts) do
-    local last = (starts[i + 1] or #line + 1) - 1
-    local after = before + vim.fn.strdisplaywidth(line:sub(first, last), before)
+  -- "\\zs" splits into the characters Vim draws, keeping composing marks and emoji sequences whole.
+  for _, ch in ipairs(vim.fn.split(line, "\\zs")) do
+    local after = before + vim.fn.strdisplaywidth(ch, before)
     if after >= d1 and (not d2 or before + 1 <= d2) then
-      table.insert(out, line:sub(first, last))
+      table.insert(out, ch)
     end
     before = after
   end
@@ -257,8 +256,8 @@ function M.builtin.quickfix(snap)
         item.lnum,
         math.max(item.col, 1),
         has_end and item.end_lnum or nil,
-        -- The quickfix end column is 1-based and exclusive; the position's is inclusive.
-        has_end and item.end_col > 0 and math.max(item.end_col - 1, 1) or nil
+        -- The quickfix end column is 1-based and exclusive; the position's is inclusive and clamps itself.
+        has_end and item.end_col > 0 and item.end_col - 1 or nil
       )
     end
     local msg = vim.split(item.text:gsub("%s+$", ""), "\n", { plain = true })

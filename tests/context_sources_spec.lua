@@ -158,6 +158,19 @@ describe("context.sources", function()
       expect.equality(run("selection"), { "xé" })
     end)
 
+    it("keeps combining marks and joined emoji with their character", function()
+      local nfd = "cafe" .. vim.fn.nr2char(0x301) .. " x"
+      local zwj = vim.fn.nr2char(0x1F468) .. vim.fn.nr2char(0x200D) .. vim.fn.nr2char(0x1F469) .. " x"
+      open("a.lua", { nfd, zwj })
+      vim.cmd("normal! gg0v$h")
+      expect.equality(run("selection"), { nfd })
+      vim.cmd("normal! \27G0v$h")
+      expect.equality(run("selection"), { zwj })
+      vim.cmd("normal! \27G$\22k")
+      -- the joined emoji line puts its x on column 4, which is where the block starts on the NFD line too
+      expect.equality(run("selection"), { "e" .. vim.fn.nr2char(0x301) .. " x", "x" })
+    end)
+
     it("cuts the same display columns on every line of a block", function()
       open("a.lua", { "abcdef", "ghijkl", "mnopqr" })
       vim.api.nvim_win_set_cursor(0, { 1, 1 })
@@ -203,6 +216,11 @@ describe("context.sources", function()
         expect.equality(run("selection"), { "a", "g", "m" })
         vim.cmd("normal! \27gg0ll\22jjh")
         expect.equality(run("selection"), { "bc", "hi", "no" })
+        -- the end mark's tab starts inside the columns the start mark covers, so no column may be dropped
+        vim.cmd("normal! \27")
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, { "abcdefghij", "\tx" })
+        vim.cmd("normal! gg0\22j")
+        expect.equality(run("selection"), { "abcdefgh", "        " })
       end)
     end)
 
