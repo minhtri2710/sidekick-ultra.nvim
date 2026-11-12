@@ -5,6 +5,7 @@
 ---@field kind "char"|"line"|"block"
 ---@field from integer[] {row, col}, 1-based, the earlier mark
 ---@field to integer[] {row, col}, 1-based, the later mark
+---@field to_eol boolean the cursor was moved with `$`: a block runs to the end of every line
 
 ---@class sidekick_ultra.Snapshot
 ---@field buf integer
@@ -34,7 +35,7 @@ function M.capture()
     if from[1] > to[1] or (from[1] == to[1] and from[2] > to[2]) then
       from, to = to, from
     end
-    snap.selection = { kind = kind, from = from, to = to }
+    snap.selection = { kind = kind, from = from, to = to, to_eol = vim.fn.winsaveview().curswant == vim.v.maxcol }
   end
   return snap
 end

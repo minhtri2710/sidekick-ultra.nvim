@@ -158,6 +158,19 @@ describe("context.sources", function()
       expect.equality(run("selection"), { "xé" })
     end)
 
+    it("keeps combining marks and joined emoji with their character", function()
+      local nfd = "cafe" .. vim.fn.nr2char(0x301) .. " x"
+      local zwj = vim.fn.nr2char(0x1F468) .. vim.fn.nr2char(0x200D) .. vim.fn.nr2char(0x1F469) .. " x"
+      open("a.lua", { nfd, zwj })
+      vim.cmd("normal! gg0v$h")
+      expect.equality(run("selection"), { nfd })
+      vim.cmd("normal! \27G0v$h")
+      expect.equality(run("selection"), { zwj })
+      vim.cmd("normal! \27G$\22k")
+      -- the joined emoji line puts its x on column 4, which is where the block starts on the NFD line too
+      expect.equality(run("selection"), { "e" .. vim.fn.nr2char(0x301) .. " x", "x" })
+    end)
+
     it("cuts the same display columns on every line of a block", function()
       open("a.lua", { "abcdef", "ghijkl", "mnopqr" })
       vim.api.nvim_win_set_cursor(0, { 1, 1 })
@@ -170,6 +183,45 @@ describe("context.sources", function()
       vim.cmd("normal! gg0\22j")
       -- the first mark covers display columns 1-2 of the wide character
       expect.equality(run("selection"), { "日", "ab" })
+    end)
+
+    it("takes each line of a block to its end after $", function()
+      open("a.lua", { "ab", "abcdefgh", "abc" })
+      vim.cmd("normal! gg0\22jj$")
+      expect.equality(run("selection"), { "ab", "abcdefgh", "abc" })
+    end)
+
+    describe("with selection=exclusive", function()
+      before_each(function()
+        vim.o.selection = "exclusive"
+      end)
+
+      after_each(function()
+        vim.o.selection = "inclusive"
+      end)
+
+      it("leaves out the character under the end of a char selection", function()
+        open("a.lua", { "hello world", "ab", "cd" })
+        vim.cmd("normal! 0vw")
+        expect.equality(run("selection"), { "hello " })
+        vim.cmd("normal! \27gg0v")
+        expect.equality(run("selection"), { "h" })
+        vim.cmd("normal! \0272Gvj")
+        expect.equality(run("selection"), { "ab", "" })
+      end)
+
+      it("leaves out the end column of a block only when the end mark holds the right edge", function()
+        open("a.lua", { "abcdef", "ghijkl", "mnopqr" })
+        vim.cmd("normal! gg0\22jjl")
+        expect.equality(run("selection"), { "a", "g", "m" })
+        vim.cmd("normal! \27gg0ll\22jjh")
+        expect.equality(run("selection"), { "bc", "hi", "no" })
+        -- the end mark's tab starts inside the columns the start mark covers, so no column may be dropped
+        vim.cmd("normal! \27")
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, { "abcdefghij", "\tx" })
+        vim.cmd("normal! gg0\22j")
+        expect.equality(run("selection"), { "abcdefgh", "        " })
+      end)
     end)
 
     it("handles blank lines in a char selection", function()
@@ -292,7 +344,9 @@ describe("context.sources", function()
         title = "Grep",
         items = {
           { filename = file, lnum = 2, col = 3, text = "oops   ", type = "e" },
-          { filename = file, lnum = 1, col = 0, end_lnum = 2, end_col = 2, text = "range" },
+          { filename = file, lnum = 1, col = 0, end_lnum = 2, end_col = 3, text = "range" },
+          { filename = file, lnum = 1, col = 2, end_lnum = 1, end_col = 4, text = "same line" },
+          { filename = file, lnum = 2, col = 1, end_lnum = 2, end_col = 1, text = "empty end" },
           { filename = file, text = "whole file" },
           { text = "nameless" },
         },
@@ -301,6 +355,8 @@ describe("context.sources", function()
         "Quickfix: Grep",
         "- @a.lua :L2:C3 [E] oops",
         "- @a.lua :L1:C1-L2:C2 range",
+        "- @a.lua :L1:C2-C3 same line",
+        "- @a.lua :L2:C1 empty end",
         "- @a.lua whole file",
         "- @[No Name] nameless",
       })
