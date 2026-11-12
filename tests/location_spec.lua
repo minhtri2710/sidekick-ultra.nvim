@@ -82,6 +82,11 @@ describe("location", function()
       expect.equality(location.text(loc({ kind = "position", r1 = 3, c1 = 4 }), "escaped"), "@a.lua :L3:C4")
     end)
 
+    it("escaped leaves the bytes of a multibyte character whole", function()
+      expect.equality(location.text(loc({ path = "café.md", kind = "file" }), "escaped"), "@café.md")
+      expect.equality(location.text(loc({ path = "日本 語/a.md", kind = "file" }), "escaped"), "@日本\\ 語/a.md")
+    end)
+
     it("plain leaves the path alone", function()
       expect.equality(location.text(loc({ path = "my file.lua", kind = "file" }), "plain"), "@my file.lua")
     end)
