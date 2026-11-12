@@ -61,7 +61,9 @@ Settled by the U20 probe (reviews/u20-probe-tmux-linked.log, tmux 3.8, private s
   list_panes_linked.txt     after `link-window -s a:0 -t b:5`, `list-panes -a` printed the pane `%0` twice, same pid, once
                             per session that links its window (`%0 a`, `%1 b`, `%0 b`). The fixture is hand-written in
                             that shape with the plugin's five fields. `list` keeps the first row of a pane id. Which
-                            session tmux lists first for a pane was seen for one link only; the code does not depend on it.
+                            session tmux lists first for a pane was seen for one link only; `list` does not depend on it;
+                            `focus` uses the kept session to decide on `switch-client`, which is still unsettled
+                            (see display_session.txt).
 
 Not settled; a live run must still show:
   display_session.txt       `display-message -p -t $TMUX_PANE '#{session_name}'` output, and `switch-client -t %N`

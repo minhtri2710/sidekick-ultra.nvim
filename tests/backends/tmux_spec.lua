@@ -360,6 +360,31 @@ describe("tmux backend", function()
       expect.equality(visits[58100], 1)
     end)
 
+    it("never lists nvim's own pane or walks its tree, but lists the same id on another server", function()
+      rec = record({ ["list-panes"] = fixture("list_panes") })
+      local visits = use_procs(TREE)
+      vim.env.TMUX, vim.env.TMUX_PANE = "/tmp/t.sock,100,0", "%1"
+      local list = tmux.list(tools.all())
+      expect.equality(
+        vim.tbl_map(function(s)
+          return s.id
+        end, list),
+        { "tmux:%2" }
+      )
+      expect.equality(visits[58100], nil)
+      rec.restore()
+      -- With tmux.socket on another server, $TMUX_PANE names a pane there: nvim is not inside, and %1 is a session.
+      setup({ socket = "/tmp/other.sock" })
+      rec = record({ ["list-panes"] = fixture("list_panes") })
+      list = tmux.list(tools.all())
+      expect.equality(
+        vim.tbl_map(function(s)
+          return s.id
+        end, list),
+        { "tmux:%1", "tmux:%2" }
+      )
+    end)
+
     it("lists nothing for an empty server", function()
       rec = record({ ["list-panes"] = fixture("list_panes_empty") })
       expect.equality({ tmux.list(tools.all()) }, { {} })

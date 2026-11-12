@@ -49,7 +49,8 @@ function M.run(argv, opts)
   end
   local res = proc:wait()
   -- vim.system reports a timeout as exit 124 after killing the process: SIGTERM, or SIGKILL when it ignores that.
-  if res.code == 124 and res.signal ~= 0 then
+  -- After SIGKILL it can return nil when a child keeps the pipes open: that is the timeout too.
+  if res == nil or (res.code == 124 and res.signal ~= 0) then
     return nil, failure(("%s timed out after %d ms"):format(argv[1], timeout))
   end
   return { code = res.code, stdout = res.stdout or "", stderr = res.stderr or "" }

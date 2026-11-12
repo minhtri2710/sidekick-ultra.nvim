@@ -92,6 +92,21 @@ describe("exec", function()
     expect.equality(err.id, "backend_error")
   end)
 
+  it("maps a wait that returns nothing (a child kept the pipes open after SIGKILL) to the timeout error", function()
+    local system = vim.system
+    MiniTest.finally(function()
+      vim.system = system
+    end)
+    vim.system = function()
+      return {
+        wait = function() end,
+      }
+    end
+    local res, err = exec.run({ "tool" }, { timeout_ms = 100 })
+    expect.equality(res, nil)
+    expect.equality({ err.id, err.msg }, { "backend_error", "tool timed out after 100 ms" })
+  end)
+
   it("maps a missing executable to backend_error", function()
     local res, err = exec.run({ "/nonexistent/sku-binary" })
     expect.equality(res, nil)
