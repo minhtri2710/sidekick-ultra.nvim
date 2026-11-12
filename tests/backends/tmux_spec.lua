@@ -49,6 +49,17 @@ local function ucomm_call(pid)
   return { "ps", "-o", "ucomm=", "-p", tostring(pid) }
 end
 
+---The `display-message` answers of a send or submit: `command` answers `#{pane_current_command}` (the foreground check
+---of send), `modes` answers `#{pane_in_mode}`.
+---@param command string|table
+---@param modes string|table
+---@return fun(n: integer, argv: string[]): string|table
+local function pane_answers(command, modes)
+  return function(_, argv)
+    return argv[#argv] == "#{pane_current_command}" and command or modes
+  end
+end
+
 ---Replace `exec.run`. `routes` maps the subcommand (the first argument after an optional `-S <socket>`, or `ps` for a
 ---`ps` call) to its answer (see the recorder in tests/helpers/backend.lua). A subcommand without a route fails the
 ---case.
@@ -214,19 +225,23 @@ describe("tmux backend", function()
       setup({ socket = "/tmp/sku.sock" })
       rec = record({
         ["list-panes"] = fixture("list_panes_empty"),
-        ["display-message"] = "0\n",
+        ["display-message"] = pane_answers("claude\n", "0\n"),
+        ps = ps_answers(nil, "claude\n"),
         ["send-keys"] = "",
         ["load-buffer"] = "",
         ["paste-buffer"] = "",
         ["select-window"] = "",
       })
-      local s = { pane = "%1" }
+      local s = { pane = "%1", pid = 7 }
       expect.equality(type(tmux.list(tools.all())), "table")
       expect.equality(tmux.send(s, "x") ~= nil, true)
       expect.equality(tmux.submit(s) ~= nil, true)
       expect.equality(tmux.focus(s) ~= nil, true)
       for _, argv in ipairs(rec.argvs()) do
-        expect.equality(vim.list_slice(argv, 1, 3), { "tmux", "-S", "/tmp/sku.sock" })
+        -- ps is not a tmux call: no socket flag (see "interpreters").
+        if argv[1] ~= "ps" then
+          expect.equality(vim.list_slice(argv, 1, 3), { "tmux", "-S", "/tmp/sku.sock" })
+        end
       end
     end)
 
@@ -461,7 +476,8 @@ describe("tmux backend", function()
     end)
 
     -- A pane is kept only when the matched process is its foreground program: ps's ucomm of the matched pid equals
-    -- #{pane_current_command}. Panes %1 and %2 of the fixture sit at a shell, %3 runs node, %4 runs a retitled tool.
+    -- #{pane_current_command}. Panes %1 and %2 of the fixture sit at a shell, %3 runs node, %4 runs `claude`, a symlink to
+    -- the executable `2.1.322` (the plugin's name for it is `claude`, its ucomm `2.1.322`).
     describe("foreground", function()
       local PANES = "list_panes_foreground"
 
@@ -488,7 +504,7 @@ describe("tmux backend", function()
         expect.equality(#rec.calls, 2)
       end)
 
-      it("lists a retitled tool in the foreground: ucomm is compared with ucomm, not with the plugin's name", function()
+      it("lists a tool started through a symlink: ucomm is compared with ucomm, not with the name", function()
         rec = record({ ["list-panes"] = fixture(PANES), ps = ps_answers(nil, { [58400] = "2.1.322\n" }) })
         use_procs({ [58400] = { name = "claude" } })
         local list, err = tmux.list(tools.all())
@@ -937,38 +953,58 @@ describe("tmux backend", function()
   end)
 
   describe("send", function()
+    -- The tool (pid 7) runs in the foreground of pane %2: the pane's command and the pid's ucomm are both claude.
+    local SESSION = { pane = "%2", pid = 7 }
+    local FOREGROUND = "#{pane_current_command}"
+
+    ---The routes of a send whose tool is in the foreground; `modes` answers `#{pane_in_mode}`.
+    ---@param modes string|table
+    ---@param more? table
+    ---@return table
+    local function routes_of(modes, more)
+      return vim.tbl_extend(
+        "error",
+        { ["display-message"] = pane_answers("claude\n", modes), ps = ps_answers(nil, "claude\n") },
+        more or {}
+      )
+    end
+
+    ---The tmux subcommands of the recorded calls (`ps` for the ps call).
+    ---@return string[]
+    local function keys()
+      return rec.keys
+    end
+
     it(
-      "checks the pane's mode, loads the text from stdin into a named buffer, pastes it raw and deletes the buffer",
+      "checks the foreground, then the pane's mode, loads the text from stdin into a named buffer, pastes it raw and "
+        .. "deletes the buffer",
       function()
-        rec = record({ ["display-message"] = "0\n", ["load-buffer"] = "", ["paste-buffer"] = "" })
+        rec = record(routes_of("0\n", { ["load-buffer"] = "", ["paste-buffer"] = "" }))
         local text = "line one\nline two\n  indented"
-        expect.equality(tmux.send({ pane = "%2" }, text) ~= nil, true)
-        local mode, load, paste = rec.argvs()[1], rec.argvs()[2], rec.argvs()[3]
-        local buffer = load[4]
+        expect.equality(tmux.send(SESSION, text) ~= nil, true)
+        local argvs = rec.argvs()
+        local buffer = argvs[4][4]
         expect.equality(buffer:match("^sku%-%d+%-%d+$") ~= nil, true)
-        expect.equality(mode, { "tmux", "display-message", "-p", "-t", "%2", "#{pane_in_mode}" })
-        expect.equality(load, { "tmux", "load-buffer", "-b", buffer, "-" })
-        expect.equality(paste, { "tmux", "paste-buffer", "-b", buffer, "-d", "-r", "-S", "-t", "%2" })
-        expect.equality(rec.calls[2].opts.stdin, text)
+        expect.equality(argvs[1], { "tmux", "display-message", "-p", "-t", "%2", FOREGROUND })
+        expect.equality(argvs[2], ucomm_call(7))
+        expect.equality(argvs[3], { "tmux", "display-message", "-p", "-t", "%2", "#{pane_in_mode}" })
+        expect.equality(argvs[4], { "tmux", "load-buffer", "-b", buffer, "-" })
+        expect.equality(argvs[5], { "tmux", "paste-buffer", "-b", buffer, "-d", "-r", "-S", "-t", "%2" })
+        expect.equality(rec.calls[4].opts.stdin, text)
         -- Nothing else: no copy-mode call for a pane in no mode, and no key, so no Enter.
-        expect.equality(#rec.calls, 3)
+        expect.equality(#rec.calls, 5)
       end
     )
 
     it("leaves copy mode (or any mode) before it loads and pastes", function()
       for _, count in ipairs({ "1\n", "2\n" }) do
-        rec = record({
-          ["display-message"] = count,
-          ["copy-mode"] = "",
-          ["load-buffer"] = "",
-          ["paste-buffer"] = "",
-        })
-        expect.equality(tmux.send({ pane = "%2" }, "x") ~= nil, true)
-        local subs = vim.tbl_map(function(argv)
-          return argv[2]
-        end, rec.argvs())
-        expect.equality(subs, { "display-message", "copy-mode", "load-buffer", "paste-buffer" })
-        expect.equality(rec.argvs()[2], { "tmux", "copy-mode", "-q", "-t", "%2" })
+        rec = record(routes_of(count, { ["copy-mode"] = "", ["load-buffer"] = "", ["paste-buffer"] = "" }))
+        expect.equality(tmux.send(SESSION, "x") ~= nil, true)
+        expect.equality(
+          keys(),
+          { "display-message", "ps", "display-message", "copy-mode", "load-buffer", "paste-buffer" }
+        )
+        expect.equality(rec.argvs()[4], { "tmux", "copy-mode", "-q", "-t", "%2" })
         rec.restore()
       end
       rec = nil
@@ -976,66 +1012,93 @@ describe("tmux backend", function()
 
     it("sends nothing when the mode cannot be read or left", function()
       for _, routes in ipairs({
-        { ["display-message"] = bad(fixture("stderr_missing_pane")) },
-        { ["display-message"] = "1\n", ["copy-mode"] = bad("pane is busy\n") },
+        routes_of(bad(fixture("stderr_missing_pane"))),
+        routes_of("1\n", { ["copy-mode"] = bad("pane is busy\n") }),
       }) do
         rec = record(routes)
-        local res, err = tmux.send({ pane = "%2" }, "x")
+        local res, err = tmux.send(SESSION, "x")
         expect.equality({ res, err.id }, { nil, "backend_error" })
-        expect.equality(
-          vim.tbl_contains(
-            vim.tbl_map(function(argv)
-              return argv[2]
-            end, rec.argvs()),
-            "load-buffer"
-          ),
-          false
-        )
+        expect.equality(vim.tbl_contains(keys(), "load-buffer"), false)
         rec.restore()
       end
       rec = nil
     end)
 
-    it("reports a pane tmux no longer knows (exit 0, empty output) as not found, and loads nothing", function()
+    it("reports a pane tmux no longer knows (exit 0, empty output) as not found, and sends nothing", function()
       -- tmux 3.8 answers display-message -p -t <missing pane> with exit 0 and no output, not an error.
       rec = record({ ["display-message"] = fixture("display_pane_gone") })
-      local res, err = tmux.send({ pane = "%999" }, "x")
+      local res, err = tmux.send({ pane = "%999", pid = 7 }, "x")
       expect.equality({ res, err.id, err.msg }, { nil, "backend_error", "tmux pane %999 not found" })
       expect.equality(#rec.calls, 1)
     end)
 
     it("names an unreadable mode count in the error, and loads nothing", function()
-      rec = record({ ["display-message"] = "yes\n" })
-      local res, err = tmux.send({ pane = "%2" }, "x")
+      rec = record(routes_of("yes\n"))
+      local res, err = tmux.send(SESSION, "x")
       expect.equality({ res, err.msg }, { nil, "tmux printed an unexpected mode count for pane %2: yes" })
-      expect.equality(#rec.calls, 1)
+      expect.equality(keys(), { "display-message", "ps", "display-message" })
     end)
 
     it("uses a different buffer for each send", function()
-      rec = record({ ["display-message"] = "0\n", ["load-buffer"] = "", ["paste-buffer"] = "" })
-      tmux.send({ pane = "%2" }, "a")
-      tmux.send({ pane = "%2" }, "b")
-      expect.no_equality(rec.argvs()[2][4], rec.argvs()[5][4])
+      rec = record(routes_of("0\n", { ["load-buffer"] = "", ["paste-buffer"] = "" }))
+      tmux.send(SESSION, "a")
+      tmux.send(SESSION, "b")
+      expect.no_equality(rec.argvs()[4][4], rec.argvs()[9][4])
     end)
 
     it("stops when the buffer cannot be loaded, without pasting", function()
-      rec = record({ ["display-message"] = "0\n", ["load-buffer"] = bad("no server running\n") })
-      local res, err = tmux.send({ pane = "%2" }, "x")
+      rec = record(routes_of("0\n", { ["load-buffer"] = bad("no server running\n") }))
+      local res, err = tmux.send(SESSION, "x")
       expect.equality({ res, err.id }, { nil, "backend_error" })
-      expect.equality(#rec.calls, 2)
+      expect.equality(keys(), { "display-message", "ps", "display-message", "load-buffer" })
     end)
 
     it("deletes the buffer and reports the pane error when the paste fails", function()
-      rec = record({
-        ["display-message"] = "0\n",
+      rec = record(routes_of("0\n", {
         ["load-buffer"] = "",
         ["paste-buffer"] = bad(fixture("stderr_missing_pane")),
         ["delete-buffer"] = "",
-      })
-      local res, err = tmux.send({ pane = "%99" }, "x")
+      }))
+      local res, err = tmux.send({ pane = "%99", pid = 7 }, "x")
       expect.equality({ res, err.id }, { nil, "backend_error" })
-      local buffer = rec.argvs()[2][4]
-      expect.equality(rec.argvs()[4], { "tmux", "delete-buffer", "-b", buffer })
+      local buffer = rec.argvs()[4][4]
+      expect.equality(rec.argvs()[6], { "tmux", "delete-buffer", "-b", buffer })
+    end)
+
+    describe("when the tool is not the pane's foreground program", function()
+      ---Nothing was sent: the only calls are the foreground check's own display-message and ps.
+      local function expect_nothing_sent()
+        expect.equality(keys(), { "display-message", "ps" })
+      end
+
+      it("refuses a tool that was suspended or sent to the background, naming the pane and both names", function()
+        rec = record({ ["display-message"] = pane_answers("bash\n", "0\n"), ps = ps_answers(nil, "claude\n") })
+        local res, err = tmux.send({ pane = "%3", pid = 7 }, "rm -rf build/\n")
+        expect.equality({ res, err.id }, { nil, "backend_error" })
+        for _, token in ipairs({ "%3", "bash", "claude" }) do
+          expect.equality(err.msg:find(token, 1, true) ~= nil, true)
+        end
+        expect_nothing_sent()
+      end)
+
+      it("refuses a tool whose process is gone", function()
+        rec = record({ ["display-message"] = pane_answers("claude\n", "0\n"), ps = ps_answers(nil, GONE) })
+        local res, err = tmux.send({ pane = "%3", pid = 7 }, "x")
+        expect.equality({ res, err.id }, { nil, "backend_error" })
+        expect.equality(err.msg:find("%3", 1, true) ~= nil, true)
+        expect_nothing_sent()
+      end)
+
+      it("returns the error of a failing ps, and sends nothing", function()
+        rec = record({
+          ["display-message"] = pane_answers("claude\n", "0\n"),
+          ps = ps_answers(nil, { code = 3, stdout = "claude\n", stderr = "ps: boom\n" }),
+        })
+        local res, err = tmux.send({ pane = "%3", pid = 7 }, "x")
+        expect.equality({ res, err.id, err.code }, { nil, "backend_error", 3 })
+        expect.equality(err.msg:find("7", 1, true) ~= nil, true)
+        expect_nothing_sent()
+      end)
     end)
   end)
 

@@ -71,8 +71,12 @@ Settled by the U24 probes (reviews/a2-probe-tmux-fg.log, reviews/a2-probe2-tmux-
                             kernel short name (`ucomm`): a node that set `process.title` shows `node`, and `sleep`
                             started through a symlink named `claude` shows `sleep`. `list` keeps a pane only when
                             `ps -o ucomm= -p <matched pid>` equals it. list_panes_foreground.txt is hand-written: two
-                            panes at a shell, one at node, one at a retitled tool (`2.1.322`). The ps answers in the
-                            specs are hand-written too; no live run has checked the rule end to end.
+                            panes at a shell, one at node, one at Claude Code, whose `claude` symlink points to the
+                            executable `2.1.322` (ucomm `2.1.322`, plugin name `claude`). The ps answers in the
+                            specs are hand-written too; no live run has checked the rule end to end. `send` applies
+                            the same equality before it pastes. Probed on macOS only: on Linux tmux may read the
+                            name from /proc/<pid>/cmdline while `ucomm` is the kernel `comm`, so the two may differ
+                            there (unverified).
 
 Not settled; a live run must still show:
   display_session.txt       `display-message -p -t $TMUX_PANE '#{session_name}'` output, and `switch-client -t %N`
