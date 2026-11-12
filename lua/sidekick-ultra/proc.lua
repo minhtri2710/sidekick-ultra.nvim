@@ -62,16 +62,15 @@ function M.find(configured, pid, cmds)
   end
 end
 
----The name of the script an interpreter process runs, from one `ps` call. The command line is parsed and dropped:
----a failing ps reports the pid, the exit code and the first stderr line, never stdout.
+---One `ps -p <pid>` call. A failing ps reports the pid, the exit code and the first stderr line, never stdout.
 ---`ps -p <pid>` for a pid that no longer exists exits 1 and prints nothing on either stream (seen on macOS; the macOS
 ---man page states no exit status for it). That is a process that ended after nvim read its name, which is ordinary for
----short-lived helpers: it is skipped. Any other failure, and exit 0 with nothing printed, is an error.
+---short-lived helpers: it is skipped. Any other failure is an error.
+---@param argv string[] a `ps` call for `pid`
 ---@param pid integer
----@return string? script "" when the interpreter runs none; nil when the process is gone
+---@return sidekick_ultra.ExecResult? res the answer of a ps that exited 0; nil when the process is gone or ps failed
 ---@return sidekick_ultra.Error? err
-local function script_of(pid)
-  local argv = { "ps", "-ww", "-o", "args=", "-p", tostring(pid) }
+local function ps_of(argv, pid)
   local res, err = exec.run(argv)
   if not res then
     return nil, err
@@ -82,11 +81,43 @@ local function script_of(pid)
   if res.code ~= 0 then
     return nil, exec.result_error(argv, res, ("ps exited with %d for pid %d"):format(res.code, pid))
   end
+  return res
+end
+
+---The name of the script an interpreter process runs, from one `ps` call. The command line is parsed and dropped.
+---@param pid integer
+---@return string? script "" when the interpreter runs none; nil when the process is gone
+---@return sidekick_ultra.Error? err
+local function script_of(pid)
+  local argv = { "ps", "-ww", "-o", "args=", "-p", tostring(pid) }
+  local res, err = ps_of(argv, pid)
+  if not res then
+    return nil, err
+  end
   local script = procname.program(res.stdout)
   if not script then
     return nil, exec.result_error(argv, res, ("ps printed nothing for pid %d"):format(pid))
   end
   return script
+end
+
+---The kernel's short name of process `pid` (`ucomm`), from one `ps` call. It is what a multiplexer reports for a
+---foreground program (tmux's `#{pane_current_command}`), and it is not `M.name`: a program that sets its own process
+---title keeps its executable's name here.
+---@param pid integer
+---@return string? ucomm nil when the process is gone
+---@return sidekick_ultra.Error? err
+function M.ucomm(pid)
+  local argv = { "ps", "-o", "ucomm=", "-p", tostring(pid) }
+  local res, err = ps_of(argv, pid)
+  if not res then
+    return nil, err
+  end
+  local ucomm = res.stdout:gsub("%s+$", "")
+  if ucomm == "" then
+    return nil, exec.result_error(argv, res, ("ps printed nothing for pid %d"):format(pid))
+  end
+  return ucomm
 end
 
 ---The configured tool that process `pid`, known by `words`, runs.

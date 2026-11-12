@@ -6,6 +6,10 @@
 ---and `pgrep` itself (`vim._os_proc_info`, `vim._os_proc_children`). On top of that, a process whose name is a node or
 ---python interpreter costs one plugin `ps` call, to read the script it runs (see proc); no other argv and no environment
 ---is read.
+---
+---A pane is kept only when the matched process is its foreground program: the matched pid's kernel short name
+---(`ps -o ucomm=`, one call per matched pane) must equal `#{pane_current_command}`, which tmux reports in the same
+---form. A tool that is suspended or in the background, or runs inside another program's terminal, is not listed.
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
 local proc = require("sidekick-ultra.proc")
@@ -21,6 +25,7 @@ local LIST_FORMAT = table.concat({
   "#{pane_pid}",
   "#{session_name}",
   "#{pane_dead}",
+  "#{pane_current_command}",
   "#{?pane_current_path,#{pane_current_path},#{pane_start_path}}",
 }, "\t")
 local START_FORMAT = "#{pane_id}\t#{pane_pid}"
@@ -164,10 +169,10 @@ function M.list(configured)
   for _, row in ipairs(vim.split(res.stdout, "\n", { plain = true, trimempty = true })) do
     local f = vim.split(row, "\t", { plain = true })
     local root = tonumber(f[2])
-    if #f < 5 or not f[1]:match("^%%%d+$") or not root then
+    if #f < 6 or not f[1]:match("^%%%d+$") or not root then
       return nil, errors.new("backend_error", "tmux printed an unexpected pane list")
     end
-    local cwd = table.concat(f, "\t", 5)
+    local cwd = table.concat(f, "\t", 6)
     -- A linked window lists its panes once per session that links it (seen live); the first row wins.
     local again = listed[f[1]]
     listed[f[1]] = true
@@ -178,10 +183,17 @@ function M.list(configured)
         return nil, find_err
       end
       if name then
-        if cwd == "" then
-          return nil, errors.new("backend_error", "tmux printed no working directory for pane " .. f[1])
+        local ucomm, ucomm_err = proc.ucomm(pid)
+        if ucomm_err then
+          return nil, ucomm_err
         end
-        table.insert(ret, session_of(name, f[1], cwd, pid, proc_name, f[3]))
+        -- A vanished pid (nil ucomm) or a tool that is not the foreground program is no session.
+        if ucomm == f[5] then
+          if cwd == "" then
+            return nil, errors.new("backend_error", "tmux printed no working directory for pane " .. f[1])
+          end
+          table.insert(ret, session_of(name, f[1], cwd, pid, proc_name, f[3]))
+        end
       end
     end
   end

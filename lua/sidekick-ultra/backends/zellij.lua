@@ -1,7 +1,7 @@
 ---The zellij backend: sessions are terminal panes. zellij 0.45.1 gives no pid for a pane, only `pane_command` (the
 ---running command line), so a pane is matched to a tool by the basename of that command's first word (argv0), or by
 ---the script's name when that word is a node or python interpreter, and liveness is a CLI call instead of the
----in-process pid check. The rest of `pane_command` is never kept, logged, or put into an error or a notify. The shapes
+---pid check that herdr, rex and tmux do through Neovim's proc fallback. The rest of `pane_command` is never kept, logged, or put into an error or a notify. The shapes
 ---were probed against zellij 0.45.1; what is still unverified is listed in tests/fixtures/zellij/UNVERIFIED.txt.
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
