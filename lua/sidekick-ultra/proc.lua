@@ -92,7 +92,8 @@ end
 ---The configured tool that process `pid`, known by `words`, runs.
 ---@param configured table<string, sidekick_ultra.Tool>
 ---@param pid integer
----@param words string[] names of the process, most telling first
+---@param words string[] names of the process, in the order the backend gives them (rex gives argv0 before the name,
+---   because Claude Code's process name is its version while its argv0 is "claude")
 ---@return string? tool_name
 ---@return sidekick_ultra.Error? err a failing ps or `is_proc`
 function M.tool_of(configured, pid, words)
