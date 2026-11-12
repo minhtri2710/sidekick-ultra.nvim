@@ -172,6 +172,40 @@ describe("context.sources", function()
       expect.equality(run("selection"), { "日", "ab" })
     end)
 
+    it("takes each line of a block to its end after $", function()
+      open("a.lua", { "ab", "abcdefgh", "abc" })
+      vim.cmd("normal! gg0\22jj$")
+      expect.equality(run("selection"), { "ab", "abcdefgh", "abc" })
+    end)
+
+    describe("with selection=exclusive", function()
+      before_each(function()
+        vim.o.selection = "exclusive"
+      end)
+
+      after_each(function()
+        vim.o.selection = "inclusive"
+      end)
+
+      it("leaves out the character under the end of a char selection", function()
+        open("a.lua", { "hello world", "ab", "cd" })
+        vim.cmd("normal! 0vw")
+        expect.equality(run("selection"), { "hello " })
+        vim.cmd("normal! \27gg0v")
+        expect.equality(run("selection"), { "h" })
+        vim.cmd("normal! \0272Gvj")
+        expect.equality(run("selection"), { "ab", "" })
+      end)
+
+      it("leaves out the end column of a block only when the end mark holds the right edge", function()
+        open("a.lua", { "abcdef", "ghijkl", "mnopqr" })
+        vim.cmd("normal! gg0\22jjl")
+        expect.equality(run("selection"), { "a", "g", "m" })
+        vim.cmd("normal! \27gg0ll\22jjh")
+        expect.equality(run("selection"), { "bc", "hi", "no" })
+      end)
+    end)
+
     it("handles blank lines in a char selection", function()
       open("a.lua", { "", "abc" })
       vim.cmd("normal! ggvj")
@@ -292,7 +326,9 @@ describe("context.sources", function()
         title = "Grep",
         items = {
           { filename = file, lnum = 2, col = 3, text = "oops   ", type = "e" },
-          { filename = file, lnum = 1, col = 0, end_lnum = 2, end_col = 2, text = "range" },
+          { filename = file, lnum = 1, col = 0, end_lnum = 2, end_col = 3, text = "range" },
+          { filename = file, lnum = 1, col = 2, end_lnum = 1, end_col = 4, text = "same line" },
+          { filename = file, lnum = 2, col = 1, end_lnum = 2, end_col = 1, text = "empty end" },
           { filename = file, text = "whole file" },
           { text = "nameless" },
         },
@@ -301,6 +337,8 @@ describe("context.sources", function()
         "Quickfix: Grep",
         "- @a.lua :L2:C3 [E] oops",
         "- @a.lua :L1:C1-L2:C2 range",
+        "- @a.lua :L1:C2-C3 same line",
+        "- @a.lua :L2:C1 empty end",
         "- @a.lua whole file",
         "- @[No Name] nameless",
       })

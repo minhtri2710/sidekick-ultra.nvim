@@ -115,6 +115,8 @@ function M.path(buf, cwd)
 end
 
 local SAFE = "[^A-Za-z0-9/_.-]"
+-- Bytes >= 0x80 belong to a multibyte character; a backslash before one would split it.
+local ESCAPE = "[^A-Za-z0-9/_.\128-\255-]"
 
 ---@param loc sidekick_ultra.Location
 ---@return string rows
@@ -153,7 +155,7 @@ end
 function M.text(loc, style)
   style = style or M.DEFAULT_STYLE
   if style == "escaped" then
-    return "@" .. loc.path:gsub(SAFE, "\\%0") .. plain_suffix(loc)
+    return "@" .. loc.path:gsub(ESCAPE, "\\%0") .. plain_suffix(loc)
   elseif style == "plain" then
     return "@" .. loc.path .. plain_suffix(loc)
   end

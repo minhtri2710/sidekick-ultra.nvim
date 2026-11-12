@@ -1,7 +1,7 @@
 ---The placeholders: one source per name, built in or added by the user's `context` option. A source takes the
 ---snapshot and returns nothing (nil or `false`), a string, or a list of lines (an empty list is nothing); it reads
----buffers, diagnostics and the quickfix list as they are when it runs. A line is a string, or a list of strings and location records (`location.format` writes
----them in the target tool's style when the text is sent).
+---buffers, diagnostics and the quickfix list as they are when it runs. A line is a string, or a list of strings and
+---location records (`location.format` writes them in the target tool's style when the text is sent).
 local location = require("sidekick-ultra.location")
 
 ---@alias sidekick_ultra.Line string|(string|sidekick_ultra.Location)[]
@@ -113,7 +113,7 @@ local function cut(line, d1, d2)
   local starts = vim.str_utf_pos(line)
   for i, first in ipairs(starts) do
     local last = (starts[i + 1] or #line + 1) - 1
-    local after = vim.fn.strdisplaywidth(line:sub(1, last))
+    local after = before + vim.fn.strdisplaywidth(line:sub(first, last), before)
     if after >= d1 and (not d2 or before + 1 <= d2) then
       table.insert(out, line:sub(first, last))
     end
@@ -146,11 +146,16 @@ local function selected_text(snap)
   end
   local r1, r2 = sel.from[1], sel.to[1]
   local lines = vim.api.nvim_buf_get_lines(snap.buf, r1 - 1, r2, false)
+  local exclusive = vim.o.selection == "exclusive"
 
   if sel.kind == "char" then
     local first, last = lines[1], lines[#lines]
     local d1 = start_dcol(first, sel.from[2])
+    -- An exclusive selection stops before the end mark's character, but never shrinks to nothing.
     local d2 = end_dcol(last, sel.to[2])
+    if exclusive and (r1 ~= r2 or sel.from[2] ~= sel.to[2]) then
+      d2 = start_dcol(last, sel.to[2]) - 1
+    end
     if #lines == 1 then
       lines[1] = (" "):rep(d1 - 1) .. cut(first, d1, d2)
     else
@@ -159,13 +164,16 @@ local function selected_text(snap)
     end
   elseif sel.kind == "block" then
     local from_line, to_line = lines[1], lines[#lines]
-    local d = {
-      start_dcol(from_line, sel.from[2]),
-      start_dcol(to_line, sel.to[2]),
-      end_dcol(from_line, sel.from[2]),
-      end_dcol(to_line, sel.to[2]),
-    }
-    local d1, d2 = math.min(d[1], d[2]), math.max(d[3], d[4])
+    local s1, s2 = start_dcol(from_line, sel.from[2]), start_dcol(to_line, sel.to[2])
+    local e1, e2 = end_dcol(from_line, sel.from[2]), end_dcol(to_line, sel.to[2])
+    local d1, d2 = math.min(s1, s2), e1
+    -- Like Vim: an exclusive selection drops the end mark's column only when that mark holds the right edge.
+    if e2 > e1 then
+      d2 = exclusive and s2 - 1 >= e1 and s2 - 1 or e2
+    end
+    if sel.to_eol then
+      d2 = nil
+    end
     for i, line in ipairs(lines) do
       lines[i] = cut(line, d1, d2)
     end
@@ -249,7 +257,8 @@ function M.builtin.quickfix(snap)
         item.lnum,
         math.max(item.col, 1),
         has_end and item.end_lnum or nil,
-        has_end and item.end_col > 0 and item.end_col or nil
+        -- The quickfix end column is 1-based and exclusive; the position's is inclusive.
+        has_end and item.end_col > 0 and math.max(item.end_col - 1, 1) or nil
       )
     end
     local msg = vim.split(item.text:gsub("%s+$", ""), "\n", { plain = true })
