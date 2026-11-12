@@ -21,7 +21,7 @@
 #                    wrapper) and within 3 s, rediscovery, send, submit. The `new-pane` call is observed: exit code, stdout,
 #                    stderr first line, time and pane counts before and after (never a command line).
 # D9 adds two script stubs in the "scripts" tab: `gemini` (a python script, `#!/usr/bin/python3`) and `qwen` (a node
-# script, `#!/usr/bin/env node`, run by a symlink named node to the mise node binary). They run as their interpreter, so
+# script, `#!/usr/bin/env node`, run by a symlink named node to the SKU_NODE binary). They run as their interpreter, so
 # discovery must read the script name out of pane_command. They read stdin and never print their own arguments. The run
 # prints only the basename of each pane's argv0 (the interpreter, or the script if zellij reports it so), never a command
 # line; the driver checks that discovery finds each stub as its tool, and that the inside phase can start gemini.
@@ -153,11 +153,12 @@ make_stub claude claude 'of="$base.bytes"'
 make_stub codex codex 'of="$base.bytes"'
 make_stub gone claude 'count=1 of=/dev/null'
 
-# Script stubs (D9). The python one runs under the system python3; the node one under the mise node binary, linked as
+# Script stubs (D9). The python one runs under the system python3; the node one under the SKU_NODE binary, linked as
 # `node` into the root's bin. `#!/usr/bin/env node` rather than a literal `#!$R/bin/node`: it is the form npm gives a
 # global bin, so the process is `node <script>` with argv0 `node`, as in real use; the isolated PATH makes env find the
 # link, and the preflight below refuses to go on unless it does.
-NODE_BIN=/Users/beowulf/.local/share/mise/installs/node/lts/bin/node
+NODE_BIN=${SKU_NODE:-}
+case "$NODE_BIN" in /*) ;; *) die "preflight: set SKU_NODE to the absolute path of a node binary" ;; esac
 [ -x "$NODE_BIN" ] || die "preflight: $NODE_BIN is not executable"
 [ -x /usr/bin/python3 ] || die "preflight: /usr/bin/python3 is not executable"
 ln -s "$NODE_BIN" "$R/bin/node" || die "setup: link to node"
@@ -188,7 +189,7 @@ for name in claude codex; do
 done
 
 # Script stub preflight: gemini, qwen and node must resolve to the files made above under the exact isolated PATH; node
-# must be exactly a symlink to the mise node binary; each script must start with the expected interpreter line, and run
+# must be exactly a symlink to the SKU_NODE binary; each script must start with the expected interpreter line, and run
 # and end at once on an empty stdin under the pane environment.
 for name in gemini qwen node; do
   found=$(
