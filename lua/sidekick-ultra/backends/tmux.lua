@@ -2,8 +2,10 @@
 ---against tmux 3.8; what the live run must still settle is listed in tests/fixtures/tmux/UNVERIFIED.txt.
 ---
 ---tmux reports a pane's root process (`pane_pid`), not an agent, so a tool is found by walking that process's tree in
----nvim (`nvim_get_proc_children`, `nvim_get_proc`). Only a process whose name is a node or python interpreter costs a
----`ps` call, to read the script it runs (see proc); no other argv and no environment is read.
+---nvim (`nvim_get_proc_children`, `nvim_get_proc`). On Unix Neovim answers those from its own fallback, which runs `ps`
+---and `pgrep` itself (`vim._os_proc_info`, `vim._os_proc_children`). On top of that, a process whose name is a node or
+---python interpreter costs one plugin `ps` call, to read the script it runs (see proc); no other argv and no environment
+---is read.
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
 local proc = require("sidekick-ultra.proc")
@@ -158,6 +160,7 @@ function M.list(configured)
     return nil, err
   end
   local ret, listed = {}, {}
+  local own_pane = M.inside() and vim.env.TMUX_PANE or nil
   for _, row in ipairs(vim.split(res.stdout, "\n", { plain = true, trimempty = true })) do
     local f = vim.split(row, "\t", { plain = true })
     local root = tonumber(f[2])
@@ -168,7 +171,8 @@ function M.list(configured)
     -- A linked window lists its panes once per session that links it (seen live); the first row wins.
     local again = listed[f[1]]
     listed[f[1]] = true
-    if f[4] ~= "1" and not again then
+    -- nvim's own pane is never a session; it is skipped before its tree is walked.
+    if f[4] ~= "1" and not again and f[1] ~= own_pane then
       local name, pid, proc_name, find_err = find_tool(root, configured)
       if find_err then
         return nil, find_err
