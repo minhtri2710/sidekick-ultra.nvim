@@ -198,6 +198,8 @@ local function main()
   vim.opt.runtimepath:prepend(PLUGIN)
   require("sidekick-ultra").setup({
     herdr = { enabled = false },
+    tmux = { enabled = false },
+    zellij = { enabled = false },
     rex = { bin = REX, server = SOCK },
     tools = { claude = { cmd = { ROOT .. "/bin/claude" } }, codex = { cmd = { ROOT .. "/bin/codex" } } },
   })

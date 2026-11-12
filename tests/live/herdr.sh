@@ -190,7 +190,7 @@ local function real(path)
 end
 
 local function run()
-  require("sidekick-ultra").setup({ rex = { enabled = false } })
+  require("sidekick-ultra").setup({ rex = { enabled = false }, tmux = { enabled = false }, zellij = { enabled = false } })
   local registry = require("sidekick-ultra.registry")
   local tools = require("sidekick-ultra.tools")
   local backend = registry.backend("herdr")
