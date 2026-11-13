@@ -161,6 +161,8 @@ A message is text with `{name}` placeholders. `{a|b}` uses the first alternative
 | `{quickfix}` | the quickfix list |
 | `{function}` `{class}` | the enclosing function or class (needs `nvim-treesitter-textobjects`) |
 
+A NUL byte in sent text (a selected line, a message) is sent as the two characters `^@`.
+
 Built-in prompts: changes, diagnostics, diagnostics_all, document, explain, fix, optimize, review, tests, plus one per placeholder except `{this}`.
 
 ## Statusline

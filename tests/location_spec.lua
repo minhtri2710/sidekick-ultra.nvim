@@ -166,6 +166,10 @@ describe("location", function()
       expect.equality(location.format(segments, "escaped"), "see @a\\ b.lua :L2!")
       expect.equality(location.format({}), "")
     end)
+
+    it("writes every NUL byte as the two characters ^@", function()
+      expect.equality(location.format({ "a\0b", { path = "p", kind = "file" }, "\0" }), "a^@b@p^@")
+    end)
   end)
 
   describe("is_location", function()

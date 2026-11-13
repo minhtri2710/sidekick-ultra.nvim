@@ -28,7 +28,7 @@ describe("context.sources", function()
       return nil
     end
     return vim.tbl_map(function(line)
-      return type(line) == "string" and line or location.format(line, style)
+      return location.format(type(line) == "string" and { line } or line, style)
     end, lines)
   end
 
@@ -224,16 +224,18 @@ describe("context.sources", function()
       end)
     end)
 
-    it("keeps a NUL byte, which Vim draws as two columns, in a char and a block selection", function()
+    it("writes a NUL byte as ^@, two columns, in a char, block and line selection", function()
       open("a.lua", { "x" })
       vim.api.nvim_buf_set_lines(0, 0, -1, false, { "a\0b c", "x\0y z" })
       vim.cmd("normal! gg0v$h")
-      expect.equality(run("selection"), { "a\0b c" })
+      expect.equality(run("selection"), { "a^@b c" })
       expect.equality(run("position"), { "@a.lua :L1:C1-C5" })
       vim.cmd("normal! \27gg0\22jl")
-      expect.equality(run("selection"), { "a\0", "x\0" })
+      expect.equality(run("selection"), { "a^@", "x^@" })
       vim.cmd("normal! \27gg0\22j$")
-      expect.equality(run("selection"), { "a\0b c", "x\0y z" })
+      expect.equality(run("selection"), { "a^@b c", "x^@y z" })
+      vim.cmd("normal! \27ggVj")
+      expect.equality(run("selection"), { "a^@b c", "x^@y z" })
     end)
 
     it("handles blank lines in a char selection", function()
