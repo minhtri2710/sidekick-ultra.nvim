@@ -33,7 +33,8 @@ end
 
 ---The program as one whole word. An edge that is a keyword character keeps `\<` or `\>`; a non-word edge (`c++`) has
 ---no word boundary to anchor on, so it asks only that no keyword character touches it. The edge is read with `\k`,
----the character class `\<` and `\>` use, so the two always agree.
+---the character class `\<` and `\>` use. The edge is read once, with the 'iskeyword' of the buffer current at that
+---time, and the match runs under the current buffer's; the two agree only when both buffers share 'iskeyword'.
 ---@param program string
 ---@return fun(proc: sidekick_ultra.ProcInfo): boolean
 local function word(program)
