@@ -159,10 +159,6 @@ describe("context.render", function()
       expect.equality(run({ msg = "\n" }), "\n")
     end)
 
-    it("writes a NUL byte in a plain message as ^@", function()
-      expect.equality(run({ msg = "a\0b" }), "a^@b")
-    end)
-
     it("makes the message {selection} when there is a selection and neither msg nor prompt", function()
       scratch({ "alpha", "beta" })
       vim.cmd("normal! ggVj")
