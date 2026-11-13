@@ -263,10 +263,8 @@ function M.start(tool, opts)
   return session, session_err
 end
 
----Leave any mode the pane is in (copy mode after a scroll-back). In a mode the pane takes keys and pastes for the mode,
----not for the program, so Enter would end copy mode and the text would not reach the tool. The man page does not say
----whether `copy-mode -q` is harmless on a pane in no mode, so the mode count is read first (`#{pane_in_mode}`) and
----`copy-mode -q`, which cancels every mode, runs only when it is above zero.
+---One `display-message -p -t <pane> <format>`, trimmed. A pane that does not exist is answered with "not found", never
+---with an empty string.
 ---@param pane string
 ---@param format string
 ---@return string? out the trimmed answer of `display-message -p`
@@ -284,6 +282,10 @@ local function display(pane, format)
   return out
 end
 
+---Leave any mode the pane is in (copy mode after a scroll-back). In a mode the pane takes keys and pastes for the mode,
+---not for the program, so Enter would end copy mode and the text would not reach the tool. The man page does not say
+---whether `copy-mode -q` is harmless on a pane in no mode, so the mode count is read first (`#{pane_in_mode}`) and
+---`copy-mode -q`, which cancels every mode, runs only when it is above zero.
 ---@param pane string
 ---@return true? ok
 ---@return sidekick_ultra.Error? err
