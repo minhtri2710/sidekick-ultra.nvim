@@ -144,7 +144,8 @@ local function foreground(sid, bid)
   return { pid = fg.pid, name = fg.name, argv0 = fg.argv0, cwd = fg.cwd }
 end
 
----The configured tool a foreground process runs. argv0 first, then name: Claude Code's `name` is its version while its
+---The configured tool a foreground process runs. argv0 first, then name: Claude Code's `name` is its version (it is
+---started through a symlink "claude" to an executable named by its version; the tool does not retitle itself) while its
 ---`argv0` is "claude". A node or python script tool runs as its interpreter until it sets its own title, so then the
 ---script it runs is tested (see proc).
 ---@param configured table<string, sidekick_ultra.Tool>

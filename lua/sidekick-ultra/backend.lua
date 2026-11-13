@@ -21,7 +21,9 @@ local errors = require("sidekick-ultra.errors")
 ---   `is_running`, which is then the only liveness check and may work without a pid.
 ---@field proc_name string foreground process name. Without a backend `is_running`, it must equal `proc.name(pid)`
 ---   (`sidekick-ultra.proc`), because the liveness rule below compares exactly that. Never copy the mux's own process
----   name (it can differ: truncated on macOS, or retitled by the tool); read it in nvim.
+---   name (it can differ: truncated on macOS, retitled by the tool, or, for a tool started through a symlink, the name
+---   of the file the link points to: Claude Code's `~/.local/bin/claude` points to an executable named by its version);
+---   read it in nvim.
 ---@field state? sidekick_ultra.AgentState last agent state the backend reported
 
 ---@alias sidekick_ultra.AgentState "idle"|"working"|"blocked"|"done"|"unknown"
