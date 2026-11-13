@@ -103,6 +103,14 @@ function M.builtin.buffers(snap)
   return #ret > 0 and ret or nil
 end
 
+---Display width of `text`, a piece of a buffer line. A NUL byte is a Blob to Vimscript, which raises on it; Vim's own
+---string form for a NUL is a newline, which a buffer line never holds, and it draws as two columns (`^@`).
+---@param text string
+---@return integer
+local function dwidth(text)
+  return vim.fn.strdisplaywidth((text:gsub("%z", "\n")))
+end
+
 ---Inclusive 1-based display columns `d1..d2` of `line`; `d2` nil means to the end of the line.
 ---@param line string
 ---@param d1 integer
@@ -111,10 +119,10 @@ end
 local function cut(line, d1, d2)
   local out, before = {}, 0
   -- "\\zs" splits into the characters Vim draws, keeping composing marks and emoji sequences whole.
-  for _, ch in ipairs(vim.fn.split(line, "\\zs")) do
+  for _, ch in ipairs(vim.fn.split((line:gsub("%z", "\n")), "\\zs")) do
     local after = before + vim.fn.strdisplaywidth(ch, before)
     if after >= d1 and (not d2 or before + 1 <= d2) then
-      table.insert(out, ch)
+      table.insert(out, (ch:gsub("\n", "\0")))
     end
     before = after
   end
@@ -123,7 +131,7 @@ end
 
 ---Display column where the character at byte `col` starts.
 local function start_dcol(line, col)
-  return vim.fn.strdisplaywidth(line:sub(1, col - 1)) + 1
+  return dwidth(line:sub(1, col - 1)) + 1
 end
 
 ---Display column where the character at byte `col` ends.
@@ -132,7 +140,7 @@ local function end_dcol(line, col)
     return 0
   end
   col = math.max(1, math.min(col, #line))
-  return vim.fn.strdisplaywidth(line:sub(1, col + vim.str_utf_end(line, col)))
+  return dwidth(line:sub(1, col + vim.str_utf_end(line, col)))
 end
 
 ---The selected text: cut by kind, tabs expanded to `tabstop` spaces, common indent removed.
