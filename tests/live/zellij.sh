@@ -1,5 +1,6 @@
 #!/bin/sh
 # Live run of the zellij backend against a private zellij session and stub agent CLIs. Not part of `make check`.
+# Needs SKU_LIVE=1 and SKU_NODE, the absolute path of a node binary (the run stops at the preflight without it).
 #
 # What it does: creates a background zellij session under the literal root /tmp/sku-live-zellij (own HOME, XDG dirs,
 # config dir, data dir and ZELLIJ_SOCKET_DIR) FROM A LAYOUT FILE and drives headless nvim with the plugin.

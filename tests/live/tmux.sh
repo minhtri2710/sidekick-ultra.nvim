@@ -1,5 +1,6 @@
 #!/bin/sh
 # Live run of the tmux backend against a private tmux server and stub agent CLIs. Not part of `make check`.
+# Needs SKU_LIVE=1 and SKU_NODE, the absolute path of a node binary (the run stops at the preflight without it).
 #
 # What it does: starts a private tmux server on the socket /tmp/sku-live-tmux/tmux.sock (own HOME, TMPDIR and
 # TMUX_TMPDIR, `-f /dev/null`), creates three panes (a stub claude below a shell, a stub codex as the pane's own
