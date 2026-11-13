@@ -75,10 +75,10 @@ describe("actions", function()
   end)
 
   describe("send", function()
-    it("delivers the text followed by LF to the attached session, without submit or focus", function()
+    it("delivers the text followed by a space and LF to the attached session, without submit or focus", function()
       attached({ "claude" })
       actions.send({ msg = "hello" })
-      expect.equality(backend.calls, { { "send", "herdr:claude1", "hello\n" } })
+      expect.equality(backend.calls, { { "send", "herdr:claude1", "hello \n" } })
       expect.equality(cap.calls, {})
     end)
 
@@ -97,7 +97,7 @@ describe("actions", function()
       expect.equality(backend.calls, {
         { "send", "herdr:qwen1", ESC_I },
         { "sleep", 50 },
-        { "send", "herdr:qwen1", "hi\n" },
+        { "send", "herdr:qwen1", "hi \n" },
         { "submit", "herdr:qwen1" },
       })
     end)
@@ -163,6 +163,13 @@ describe("actions", function()
       expect.equality(backend.delivered, { "\n" })
     end)
 
+    it("adds no space to a text that already ends in whitespace", function()
+      attached({ "claude" })
+      actions.send({ msg = "hello " })
+      actions.send({ msg = "hello\t" })
+      expect.equality(backend.delivered, { "hello \n", "hello\t\n" })
+    end)
+
     it("refuses with not_in_mux when no session is attached and no backend is inside", function()
       backend = fake.backend("herdr", { is_inside = false })
       registry.register(backend)
@@ -181,7 +188,7 @@ describe("actions", function()
         end, backend.of("start")),
         { "start" }
       )
-      expect.equality(backend.delivered, { "hi\n" })
+      expect.equality(backend.delivered, { "hi \n" })
       expect.equality(registry.attached()[1].id, "herdr:codexnew1")
     end)
 
@@ -208,7 +215,7 @@ describe("actions", function()
         started_backend()
         actions.send({ msg = "hi", name = "codex", focus = false })
         expect.equality(methods(), { "start", "send" })
-        expect.equality(backend.delivered, { "hi\n" })
+        expect.equality(backend.delivered, { "hi \n" })
       end)
 
       it("notifies a refused focus, keeps the session attached and still delivers", function()
@@ -219,7 +226,7 @@ describe("actions", function()
         end, cap.calls)
         expect.equality({ #failures, failures[1].id }, { 1, "backend_error" })
         expect.equality(registry.attached()[1].id, "herdr:codexnew1")
-        expect.equality(backend.delivered, { "hi\n" })
+        expect.equality(backend.delivered, { "hi \n" })
       end)
     end)
 
@@ -229,7 +236,7 @@ describe("actions", function()
         return items[2]
       end
       actions.send({ msg = "hi" })
-      expect.equality(backend.calls, { { "send", "herdr:codex1", "hi\n" } })
+      expect.equality(backend.calls, { { "send", "herdr:codex1", "hi \n" } })
     end)
 
     it("sends the selection in visual mode when there is no msg or prompt, and leaves visual mode", function()
@@ -238,7 +245,7 @@ describe("actions", function()
       vim.cmd("normal! ggVj")
       expect.equality(vim.fn.mode(), "V")
       actions.send({})
-      expect.equality(backend.delivered, { "alpha\nbeta\n" })
+      expect.equality(backend.delivered, { "alpha\nbeta \n" })
       expect.equality(vim.fn.mode(), "n")
     end)
 
@@ -247,7 +254,7 @@ describe("actions", function()
       scratch({ "alpha", "beta", "gamma" })
       vim.cmd("normal! ggVj\27")
       vim.cmd("'<,'>SidekickUltra send")
-      expect.equality(backend.delivered, { "alpha\nbeta\n" })
+      expect.equality(backend.delivered, { "alpha\nbeta \n" })
       expect.equality(vim.fn.mode(), "n")
     end)
 
@@ -258,19 +265,19 @@ describe("actions", function()
       vim.cmd("edit " .. vim.fn.fnameescape(file))
       attached({ "claude" })
       actions.send({ msg = "{file}" })
-      expect.equality(backend.delivered, { '@"my file.lua"\n' })
+      expect.equality(backend.delivered, { '@"my file.lua" \n' })
 
       backend.delivered = {}
       registry.reset()
       attached({ "gemini" })
       actions.send({ msg = "{file}" })
-      expect.equality(backend.delivered, { "@my\\ file.lua\n" })
+      expect.equality(backend.delivered, { "@my\\ file.lua \n" })
 
       backend.delivered = {}
       registry.reset()
       attached({ "codex" })
       actions.send({ msg = "{file}" })
-      expect.equality(backend.delivered, { "@my file.lua\n" })
+      expect.equality(backend.delivered, { "@my file.lua \n" })
     end)
 
     it("evaluates a user context function once per send", function()
@@ -291,7 +298,7 @@ describe("actions", function()
       attached({ "claude" })
       actions.send({ msg = "{counted} {file}" })
       expect.equality(count, 1)
-      expect.equality(backend.delivered, { 'c @"my file.lua"\n' })
+      expect.equality(backend.delivered, { 'c @"my file.lua" \n' })
     end)
   end)
 
@@ -336,7 +343,7 @@ describe("actions", function()
       -- A scratch buffer has no file, so every prompt that needs {function}, {this}-selection, ... is left out.
       expect.equality(vim.tbl_contains(listed, "explain"), false)
       expect.equality(vim.tbl_contains(listed, "diagnostics"), false)
-      expect.equality(backend.delivered, { DEFAULT_PROMPTS.changes .. "\n" })
+      expect.equality(backend.delivered, { DEFAULT_PROMPTS.changes .. " \n" })
     end)
 
     it("lists every default prompt for a file buffer except the ones with empty sources", function()
@@ -372,7 +379,7 @@ describe("actions", function()
         pick.choose = choose("file")
         actions.prompt({})
         expect.equality(preview("file"), case.text)
-        expect.equality(backend.delivered, { case.text .. "\n" })
+        expect.equality(backend.delivered, { case.text .. " \n" })
       end)
     end
 
@@ -392,7 +399,7 @@ describe("actions", function()
       end
       actions.prompt({})
       expect.equality(preview("file"), "@my\\ file.lua")
-      expect.equality(backend.delivered, { "@my\\ file.lua\n" })
+      expect.equality(backend.delivered, { "@my\\ file.lua \n" })
     end)
 
     it("picks the target before the prompt picker when nothing is attached", function()
@@ -415,7 +422,7 @@ describe("actions", function()
         end, pick.selects),
         { "sidekick-ultra", "sidekick-ultra prompt" }
       )
-      expect.equality(backend.of("send"), { { "send", "herdr:codex1", DEFAULT_PROMPTS.changes .. "\n" } })
+      expect.equality(backend.of("send"), { { "send", "herdr:codex1", DEFAULT_PROMPTS.changes .. " \n" } })
     end)
 
     describe("a tool it starts", function()
@@ -438,7 +445,7 @@ describe("actions", function()
           end, pick.selects),
           { "sidekick-ultra prompt" }
         )
-        expect.equality(backend.of("send"), { { "send", "herdr:codexnew1", DEFAULT_PROMPTS.changes .. "\n" } })
+        expect.equality(backend.of("send"), { { "send", "herdr:codexnew1", DEFAULT_PROMPTS.changes .. " \n" } })
         expect.equality(backend.of("focus"), { { "focus", "herdr:codexnew1" } })
       end)
 
@@ -613,7 +620,7 @@ describe("actions", function()
       end
       actions.prompt({})
       expect.equality(#pick.selects, 2)
-      expect.equality(backend.calls, { { "send", "herdr:gemini1", "@my\\ file.lua\n" } })
+      expect.equality(backend.calls, { { "send", "herdr:gemini1", "@my\\ file.lua \n" } })
     end)
 
     it("applies submit and focus to the delivery", function()
@@ -645,7 +652,7 @@ describe("actions", function()
       vim.cmd("normal! ggVj\27")
       pick.choose = choose("selection")
       vim.cmd("'<,'>SidekickUltra prompt")
-      expect.equality(backend.delivered, { "alpha\nbeta\n" })
+      expect.equality(backend.delivered, { "alpha\nbeta \n" })
       expect.equality(vim.fn.mode(), "n")
     end)
 
@@ -660,7 +667,7 @@ describe("actions", function()
         return pick_selection(items)
       end
       actions.prompt({})
-      expect.equality(backend.delivered, { "alpha\nbeta\n" })
+      expect.equality(backend.delivered, { "alpha\nbeta \n" })
       expect.equality(mode_at_pick, "n")
     end)
   end)

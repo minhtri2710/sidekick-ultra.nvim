@@ -82,7 +82,9 @@ local function deliver(state, segments, submit)
     end
     vim.uv.sleep(FOCUS_WAIT_MS)
   end
-  if not call(session, "send", text == "\n" and text or text .. "\n", state.tool) then
+  -- A trailing space closes a tool's open `@` file-mention completion, which would otherwise take the line feed.
+  local sent = text == "\n" and text or text .. (text:find("%s$") and "" or " ") .. "\n"
+  if not call(session, "send", sent, state.tool) then
     return false
   end
   return not submit or call(session, "submit")
