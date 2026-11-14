@@ -623,6 +623,21 @@ describe("rex backend", function()
       expect.equality(err.msg:find("its command exited; block block:new1 was left open", 1, true) ~= nil, true)
     end)
 
+    it("returns a failing process call at once, leaving the block open", function()
+      rec = record({
+        [split_key] = fixture("split"),
+        [new_process] = { code = 4, stdout = "", stderr = "block not found" },
+      })
+      local session, err = rex.start(claude, opts)
+      expect.equality(session, nil)
+      expect.equality({ err.id, err.code, err.msg:find("block block:new1 was left open", 1, true) ~= nil }, {
+        "backend_error",
+        4,
+        true,
+      })
+      expect.equality({ #rec.subs, clock }, { 2, 0 })
+    end)
+
     it("fails with backend_error when the tool's pid is not visible to nvim", function()
       rec = record({
         [split_key] = fixture("split"),
