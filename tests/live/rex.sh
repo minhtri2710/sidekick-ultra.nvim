@@ -15,7 +15,7 @@
 #     --state-dir, --exit-empty and --config;
 #   HL5: the raw `split --json` answer, the session listing and the new block's `process` right after it (no delay), for
 #     the plugin's starts and two direct splits: is there a cwd;
-#   HL13: a second block the plugin starts, whose stub exits on a `quit` line. `quit` and Enter are typed with the raw
+#   HL13: a second codex block the plugin starts, whose stub exits on a `quit` line. `quit` and Enter are typed with the raw
 #     CLI, then nothing is sent or submitted to that block: rex runs it through a login shell that may outlive the stub.
 #     The block's `process`, `program_status`, recorded pid and the plugin's liveness answer are printed before and after.
 # The binary is printed with its sha256 before the first exec and again at the end. SKU_REX_SHA256, when set, is the
@@ -136,10 +136,9 @@ done
 EOF
   chmod 755 "$ROOT/bin/$1"
 }
-# A line `quit` ends the stub with exit code 7. Only HL13 types it, and only into the block of `quitter`.
+# A line `quit` ends the stub with exit code 7. Only HL13 types it, and only into its own second codex block.
 make_stub claude
 make_stub codex
-make_stub quitter
 
 # Refuse unless the stubs exist: claude and codex must be regular executable files, written above, at the absolute paths
 # $ROOT/bin/claude and $ROOT/bin/codex. rex runs block commands through the user's login shell, which gets the ISO_ENV
@@ -343,6 +342,9 @@ local function main()
   local started, err = registry.start(require("sidekick-ultra.tools").get("codex"))
   if step("start", started, err) then
     log("started %s sid=%s block=%s cwd=%s", started.id, started.session_id, started.block_id, started.cwd)
+    log("started running at once: %s", tostring(registry.is_running(started)))
+    vim.wait(1000)
+    log("started running 1 s later: %s", tostring(registry.is_running(started)))
     local f = assert(io.open(ROOT .. "/out/started", "w"))
     f:write(started.session_id, "\n", started.block_id, "\n")
     f:close()
@@ -356,13 +358,13 @@ local function main()
   end
   vim.wait(500)
 
-  -- HL13: a second block the plugin starts, running the stub that exits on `quit`. After quit nothing goes to it through
+  -- HL13: a second codex block the plugin starts; every stub exits on `quit`. After quit nothing goes to it through
   -- the plugin: no send, no submit (its login shell may still be alive and would run what is typed). The HL5 observer is
   -- taken off first: its extra rex calls would delay the plugin's own foreground read, which is what HL13 measures.
+  -- Validity of the run: the block's screen after quit shows `stub codex quitting` (the codex stub's quit line); without
+  -- it the stub never read `quit` and the after-quit evidence says nothing.
   exec.run = run
-  local quit_tool =
-    vim.tbl_extend("force", require("sidekick-ultra.tools").get("codex"), { cmd = { ROOT .. "/bin/quitter" } })
-  local quitter, quit_err = registry.start(quit_tool)
+  local quitter, quit_err = registry.start(require("sidekick-ultra.tools").get("codex"))
   step("start3", quitter, quit_err)
   if quitter then
     local proc = require("sidekick-ultra.proc")
@@ -377,7 +379,7 @@ local function main()
         label,
         quitter.pid,
         quitter.proc_name,
-        tostring(proc.name(quitter.pid)),
+        proc.name(quitter.pid) or "gone",
         tostring(running),
         tostring(rex.is_running)
       )
@@ -495,6 +497,7 @@ check() { # name, then a command that succeeds when the check holds
 # A bare `got:` line is an empty line the stub read: with `send` pressing Enter, `submit` sends a second, empty one.
 no_empty_submit() { ! printf '%s\n' "$1" | grep -qx 'got:'; }
 log_has() { grep -qF -- "$1" "$ROOT/out/driver.log"; }
+log_lacks() { ! log_has "$1"; }
 screen_has() { printf '%s' "$1" | grep -qF -- "$2"; }
 # The text is typed but not submitted: it is on the screen and the stub has not echoed it back as `got: <text>`.
 # An empty capture fails the first half, so a failed capture cannot pass this.
@@ -516,7 +519,10 @@ check "claude screen was captured before submit" log_has "claude_after_send: exi
 check "send did not press Enter in the claude block" unsubmitted "$claude_sent" "hello from sku"
 check "submit" log_has "submit: ok"
 check "focus" log_has "focus: ok"
+check "driver ran to its end without an error" log_lacks "driver error:"
 check "start" log_has "start: ok"
+check "started session is running at once" log_has "started running at once: true"
+check "started session is still running 1 s later" log_has "started running 1 s later: true"
 check "start of the HL13 block" log_has "start3: ok"
 check "start left the started block unfocused" started_block_unfocused
 check "send2" log_has "send2: ok"

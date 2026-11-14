@@ -1,8 +1,11 @@
 -- The fixtures in tests/fixtures/rex follow the shapes a live rex 0.0.1793377904-ge6592f (Rex Beta build 1696) printed
 -- in D3. What is still unverified is listed in UNVERIFIED.txt there.
 local contract = require("sidekick-ultra.backend")
+local exec = require("sidekick-ultra.exec")
 local fake = require("tests.helpers.fake")
 local helper = require("tests.helpers.backend")
+local proc = require("sidekick-ultra.proc")
+local registry = require("sidekick-ultra.registry")
 local rex = require("sidekick-ultra.backends.rex")
 local tools = require("sidekick-ultra.tools")
 
@@ -493,14 +496,31 @@ describe("rex backend", function()
   end)
 
   describe("start", function()
-    local claude, opts, new_process, split_head, split_key
+    local claude, opts, new_process, split_head, split_key, orig_hrtime, orig_wait, orig_name, clock
     before_each(function()
+      -- `start` polls on a clock that moves only through `vim.wait`: the specs take no real wait.
+      orig_hrtime, orig_wait, orig_name, clock = vim.uv.hrtime, vim.wait, proc.name, 0
+      vim.uv.hrtime = function()
+        return clock * 1e6
+      end
+      -- Only the bare sleep is faked: nvim's own `ps` fallback waits on a condition.
+      vim.wait = function(ms, cond, ...)
+        if cond then
+          return orig_wait(ms, cond, ...)
+        end
+        clock = clock + ms
+        return true
+      end
       claude = vim.tbl_extend("force", tools.get("claude"), { cmd = { "claude", "--resume" } })
       opts = { cwd = "/tmp/sku-proj-a", env = {} }
       new_process = "block call -s session:aaaa -b block:new1 process"
       split_head = "split -s session:aaaa -b block:a1 --split=right -c /tmp/sku-proj-a --focus=false --json --"
       split_key = split_head .. " claude --resume"
       vim.env.TERM_PROGRAM, vim.env.REX_SESSION, vim.env.REX_BLOCK = "rex", SID, "block:a1"
+    end)
+
+    after_each(function()
+      vim.uv.hrtime, vim.wait, proc.name = orig_hrtime, orig_wait, orig_name
     end)
 
     it("splits right of nvim's own block by id, unfocused, with the cwd and the tool command", function()
@@ -546,34 +566,71 @@ describe("rex backend", function()
       expect.equality(session.id, "rex:block:new1")
     end)
 
-    it("records the foreground at that moment, even before the tool runs, with its nvim_get_proc name", function()
-      rec = record({ [split_key] = fixture("split"), [new_process] = live("process_shell") })
-      local pid, name = fake.self_proc()
+    it("records the tool, not the login shell that execs it in the same pid, and the record runs", function()
+      -- The shell and the tool are one pid: rex shows the shell first, then the tool once it has exec'ed.
+      local execed = false
+      proc.name = function()
+        return execed and "claude" or "fish"
+      end
+      rec = record({
+        [split_key] = fixture("split"),
+        [new_process] = function(n)
+          execed = n > 1
+          return live(execed and "process_claude" or "process_shell")
+        end,
+      })
+      local pid = fake.self_proc()
       local session, err = rex.start(claude, opts)
       expect.equality(err, nil)
       expect.equality(
         { session.id, session.tool, session.pid, session.proc_name },
-        { "rex:block:new1", "claude", pid, name }
+        { "rex:block:new1", "claude", pid, "claude" }
       )
-      expect.equality(#rec.subs, 2)
+      expect.equality(#rec.subs, 3)
+      registry.register(rex)
+      expect.equality(registry.is_running(session), true)
     end)
 
-    it("fails with backend_error when the new block has no foreground or the pid is not visible to nvim", function()
-      rec = record({ [split_key] = fixture("split"), [new_process] = fixture("process_none") })
+    it("fails closed, leaving the block open, when the foreground never shows as the tool", function()
+      rec = record({ [split_key] = fixture("split"), [new_process] = live("process_shell") })
       local session, err = rex.start(claude, opts)
       expect.equality(session, nil)
       expect.equality({ err.id, err.msg }, {
         "backend_error",
-        "block block:new1 has no foreground process; block block:new1 was left open",
+        "block block:new1: its foreground never showed as claude (last seen: zsh); block block:new1 was left open",
       })
-      rec.restore()
+      expect.equality(clock, exec.DEFAULT_TIMEOUT_MS)
+      -- The split and the polls only: nothing closed the block.
+      expect.equality(rec.subs[#rec.subs][1], "block")
+    end)
+
+    it("fails closed, naming last_exit, when the block's foreground is gone", function()
       rec = record({
         [split_key] = fixture("split"),
-        [new_process] = live("process_shell", function(fg)
+        [new_process] = '{"last_exit":{"code":3},"home":"/tmp/sku-home"}',
+      })
+      local session, err = rex.start(claude, opts)
+      expect.equality(session, nil)
+      expect.equality({ err.id, err.msg }, {
+        "backend_error",
+        'block block:new1 has no foreground process: its command exited (last_exit {"code":3}); '
+          .. "block block:new1 was left open",
+      })
+      rec.restore()
+      rec = record({ [split_key] = fixture("split"), [new_process] = '{"last_exit":null,"home":"/tmp/sku-home"}' })
+      session, err = rex.start(claude, opts)
+      expect.equality(session, nil)
+      expect.equality(err.msg:find("its command exited; block block:new1 was left open", 1, true) ~= nil, true)
+    end)
+
+    it("fails with backend_error when the tool's pid is not visible to nvim", function()
+      rec = record({
+        [split_key] = fixture("split"),
+        [new_process] = live("process_claude", function(fg)
           fg.pid = 99999999
         end),
       })
-      session, err = rex.start(claude, opts)
+      local session, err = rex.start(claude, opts)
       expect.equality(session, nil)
       expect.equality({ err.id, err.msg }, {
         "backend_error",
@@ -584,7 +641,7 @@ describe("rex backend", function()
     it("says the block was left open when its foreground reports no working directory", function()
       rec = record({
         [split_key] = fixture("split"),
-        [new_process] = live("process_shell", function(fg)
+        [new_process] = live("process_claude", function(fg)
           fg.cwd = nil
         end),
       })
