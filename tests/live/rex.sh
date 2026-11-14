@@ -280,17 +280,26 @@ end
 local function hl5(label, sid, split_out)
   log("EVIDENCE HL5: %s split --json raw: %s", label, split_out)
   local answer = decode(split_out)
+  if type(answer) ~= "table" then
+    log("EVIDENCE HL5: %s cwd n/a (no answer)", label)
+    return
+  end
   log("EVIDENCE HL5: %s split answer cwd %s", label, has_cwd(answer) and "present" or "absent")
   log("EVIDENCE HL5: %s session listing right after: %s", label, (raw("ls", "--json")))
-  local ids = type(answer) == "table" and answer.block_ids
+  local ids = answer.block_ids
   local bid = type(ids) == "table" and ids[1]
   if type(bid) ~= "string" then
-    log("EVIDENCE HL5: %s cwd absent (no block id in the split answer, no process read)", label)
+    log("EVIDENCE HL5: %s process cwd n/a (no block id in the split answer, no process read)", label)
     return
   end
   local process = raw("block", "call", "-s", sid, "-b", bid, "process")
   log("EVIDENCE HL5: %s process right after: %s", label, process)
-  log("EVIDENCE HL5: %s process cwd %s", label, has_cwd(decode(process)) and "present" or "absent")
+  local view = decode(process)
+  if type(view) ~= "table" then
+    log("EVIDENCE HL5: %s process cwd n/a (no answer)", label)
+    return
+  end
+  log("EVIDENCE HL5: %s process cwd %s", label, has_cwd(view) and "present" or "absent")
 end
 
 local function main()
@@ -348,7 +357,9 @@ local function main()
   vim.wait(500)
 
   -- HL13: a second block the plugin starts, running the stub that exits on `quit`. After quit nothing goes to it through
-  -- the plugin: no send, no submit (its login shell may still be alive and would run what is typed).
+  -- the plugin: no send, no submit (its login shell may still be alive and would run what is typed). The HL5 observer is
+  -- taken off first: its extra rex calls would delay the plugin's own foreground read, which is what HL13 measures.
+  exec.run = run
   local quit_tool =
     vim.tbl_extend("force", require("sidekick-ultra.tools").get("codex"), { cmd = { ROOT .. "/bin/quitter" } })
   local quitter, quit_err = registry.start(quit_tool)

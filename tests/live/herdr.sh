@@ -340,11 +340,14 @@ local function run()
         local body = res and res.stdout or ""
         local decoded_ok, decoded = exec.decode(body)
         local agent = decoded_ok and type(decoded) == "table" and type(decoded.result) == "table" and decoded.result.agent
-        local has_cwd = type(agent) == "table"
-          and (type(agent.cwd) == "string" or type(agent.foreground_cwd) == "string")
         log("EVIDENCE HL5: plugin agent start, exit " .. tostring(res and res.code) .. ", raw stdout: " .. body)
         log("EVIDENCE HL5: plugin agent start, stderr: " .. (res and res.stderr or vim.inspect(run_err)))
-        log("EVIDENCE HL5: plugin agent start cwd " .. (has_cwd and "present" or "absent"))
+        if type(agent) ~= "table" then
+          log("EVIDENCE HL5: plugin agent start cwd n/a (no answer)")
+        else
+          local has_cwd = type(agent.cwd) == "string" or type(agent.foreground_cwd) == "string"
+          log("EVIDENCE HL5: plugin agent start cwd " .. (has_cwd and "present" or "absent"))
+        end
       end
       return res, run_err
     end
@@ -533,8 +536,9 @@ has_value() { [ -n "$1" ] && [ "$1" != nil ] && [ "$1" != vim.NIL ]; }
 # HL5 for one direct `agent start`: its raw stdout and whether the agent has a cwd.
 hl5() { # <label> <stdout file>
   echo "EVIDENCE HL5: $1 raw stdout: $(cat "$2")"
-  if [ ! -s "$2" ]; then
-    echo "EVIDENCE HL5: $1 cwd n/a (no stdout)"
+  a=$(jget result.agent <"$2" 2>/dev/null) || a=
+  if [ ! -s "$2" ] || ! has_value "$a"; then
+    echo "EVIDENCE HL5: $1 cwd n/a (no answer)"
     return
   fi
   c=$(jget result.agent.cwd <"$2" 2>/dev/null) || c=
