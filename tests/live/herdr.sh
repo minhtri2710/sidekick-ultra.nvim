@@ -11,8 +11,9 @@
 # Probes (answers for the record, not only checks; each prints `EVIDENCE <item>: ...`):
 #   before the server starts: `--help` of herdr, `pane send-text`, `agent start`, `pane split` and `pane list`, all
 #     through the isolated environment, then a check that the root socket still does not exist;
-#   A9: the plugin sends `-- TODO` and `- @x` (dash-leading text) to the stub claude, then one direct `pane send-text --`;
-#   A10: a direct `agent start --timeout 3000` of a stub that sleeps 6 s, and one of a ready stub, with wall times;
+#   A9: the plugin sends `-- TODO` and `- @x` (dash-leading text) to the stub claude, then one direct `pane send-text --`
+#     whose result is a check (herdr sends the `--` as text);
+#   A10: a direct `agent start --timeout 3001` of a stub that sleeps 6 s, and one of a ready stub, with wall times;
 #   HL5: the raw JSON of every `agent start` (the plugin's inside the mux, the direct ones) and whether it has a cwd.
 # The binary is printed with its sha256 before the first exec and again at the end. SKU_HERDR_SHA256, when set, is the
 # expected hash: a mismatch refuses before any exec. A hash that changed during the run prints `EVIDENCE MIXED`.
@@ -351,7 +352,15 @@ local function run()
       end
       return res, run_err
     end
-    local before = pane_count()
+    local function focused_pane(panes)
+      for _, pane in ipairs(panes) do
+        if pane.focused then
+          return pane.pane_id
+        end
+      end
+    end
+    local before, before_panes = pane_count()
+    local focus_before = focused_pane(before_panes)
     local session, err = registry.start(tools.get("claude"))
     if not session then
       local msg = err and err.msg or ""
@@ -378,7 +387,7 @@ local function run()
       focused[pane.pane_id] = pane.focused
     end
     check("start left the new pane unfocused", focused[session.pane_id] == false, focused)
-    check("start left nvim's pane focused", focused[vim.env.HERDR_PANE_ID] == true, focused)
+    check("start left the focus on the pane that had it", focus_before ~= nil and focused_pane(panes) == focus_before, focused)
     if session.state == "blocked" then
       -- agent_not_ready: the agent is running but blocked during startup, so the guard rightly refuses to send.
       log("UNVERIFIABLE start: agent blocked at startup; rediscovery, send and submit not exercised")
@@ -519,7 +528,10 @@ hx pane report-agent "$PANE_A" --source sku-live --agent claude --state idle
 sleep 1
 nv a9
 
-# A9, direct: one send-text with `--` before the text, as rex and zellij get it. Prints whether herdr accepted it.
+# A9, direct: one send-text with `--` before the text. Run 1 (herdr 0.9.5) sent the `--` as text (the stub got
+# `-- -- TODO2`), which is why the plugin's argv has no `--`. This pins that: a herdr that takes `--` as the end of
+# options (the stub would get `-- TODO2`) or rejects it fails the check. The result goes to the a9direct phase file.
+A9D="$R/out/a9direct.txt"
 say herdr pane send-text "$PANE_A" -- "-- TODO2"
 rc=0
 hx_env "$HERDR" pane send-text "$PANE_A" -- "-- TODO2" >"$R/out/a9-direct.out" 2>"$R/out/a9-direct.err" || rc=$?
@@ -527,10 +539,15 @@ if [ "$rc" = 0 ]; then
   hx pane send-keys "$PANE_A" Enter
   sleep 1
   got=$(hx pane read "$PANE_A" --source recent --lines 80 | grep -F 'got:' | tail -n 3)
-  echo "EVIDENCE A9: direct send-text -- accepted (exit 0), stub got (last lines): $got"
+  if printf '%s\n' "$got" | grep -Eq '^[[:space:]]*got: -- -- TODO2[[:space:]]*$'; then
+    echo "PASS a9: direct send-text sends a leading -- as text" >>"$A9D"
+  else
+    echo "FAIL a9: direct send-text sends a leading -- as text: last got lines: $got" >>"$A9D"
+  fi
 else
-  echo "EVIDENCE A9: direct send-text -- rejected (exit $rc), stderr: $(cat "$R/out/a9-direct.err")"
+  echo "FAIL a9: direct send-text -- was rejected (exit $rc), stderr: $(cat "$R/out/a9-direct.err")" >>"$A9D"
 fi
+echo DONE >>"$A9D"
 
 now() { /usr/bin/perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
 since() { /usr/bin/perl -MTime::HiRes=time -e 'printf "%.2f\n", time - $ARGV[0]' "$1"; }
@@ -581,8 +598,9 @@ for id in "$PANE_SLOW" "$PANE_FAST"; do
   case "$id" in "" | nil) die "could not read a pane id from the probe split responses" ;; esac
 done
 
-# The slow stub sleeps 6 s; herdr is asked to wait 3 s, its shortest accepted wait.
-direct_start slow 3000 "$PANE_SLOW" sku-probe-slow 6
+# The slow stub sleeps 6 s; herdr is asked to wait 3001 ms, its shortest accepted wait (3000 is refused: the timeout
+# must be greater than 3000 ms). The probe is valid only if the screen below shows `SKU-STUB claude args: 6`.
+direct_start slow 3001 "$PANE_SLOW" sku-probe-slow 6
 echo "EVIDENCE A10: slow pane get, right after:"
 hx pane get "$PANE_SLOW" || true
 echo "EVIDENCE A10: agent list, right after:"
@@ -606,7 +624,7 @@ if [ "$HERDR_SHA_END" != "$HERDR_SHA" ]; then
   echo "EVIDENCE MIXED: binary changed"
   fail=1
 fi
-for phase in basic blocked start a9; do
+for phase in basic blocked start a9 a9direct; do
   echo "== $phase"
   cat "$R/out/$phase.txt" 2>/dev/null || {
     echo "FAIL no output for phase $phase"
