@@ -167,8 +167,26 @@ describe("location", function()
       expect.equality(location.format({}), "")
     end)
 
-    it("writes every NUL byte as the two characters ^@", function()
-      expect.equality(location.format({ "a\0b", { path = "p", kind = "file" }, "\0" }), "a^@b@p^@")
+    it("writes every control byte except tab and LF in caret notation", function()
+      local rows = {
+        { "\0", "^@" },
+        { "\8", "^H" },
+        { "\9", "\9" },
+        { "\10", "\10" },
+        { "\11", "^K" },
+        { "\13", "^M" },
+        { "\27", "^[" },
+        { "\31", "^_" },
+        { "\127", "^?" },
+        { "é世", "é世" },
+      }
+      for _, row in ipairs(rows) do
+        expect.equality(location.format({ "a" .. row[1] .. "b", row[1] }), "a" .. row[2] .. "b" .. row[2])
+      end
+    end)
+
+    it("writes a control byte in a Location path in caret notation", function()
+      expect.equality(location.format({ { path = "a\13b.lua", kind = "file" } }), "@a^Mb.lua")
     end)
   end)
 

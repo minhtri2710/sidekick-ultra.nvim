@@ -163,7 +163,7 @@ A message is text with `{name}` placeholders. `{a|b}` uses the first alternative
 | `{quickfix}` | the quickfix list |
 | `{function}` `{class}` | the enclosing function or class (needs `nvim-treesitter-textobjects`) |
 
-A NUL byte in sent text (a selected line, a message) is sent as the two characters `^@`.
+Every control byte in sent text except tab and line feed (selected text, diagnostics, paths, and what you type in a message or prompt template) is sent in caret notation: the byte XOR 0x40 after a `^`, so NUL is `^@`, CR is `^M`, ESC is `^[` and DEL is `^?`. A message or template ending in `\r` therefore no longer submits on tmux (use `submit = true`), and a literal ESC is no longer a key.
 
 Built-in prompts: changes, diagnostics, diagnostics_all, document, explain, fix, optimize, review, tests, plus one per placeholder except `{this}`.
 
