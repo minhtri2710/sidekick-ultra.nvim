@@ -17,7 +17,9 @@
 #     the plugin's starts and two direct splits: is there a cwd;
 #   HL13: a second codex block the plugin starts, whose stub exits on a `quit` line. `quit` and Enter are typed with the raw
 #     CLI, then nothing is sent or submitted to that block: rex runs it through a login shell that may outlive the stub.
-#     The block's `process`, `program_status`, recorded pid and the plugin's liveness answer are printed before and after.
+#     The block's `process`, `program_status` and `capture` (each with exit code and stderr), recorded pid and the plugin's
+#     liveness answer are printed before and after, with `before quit valid=` and, after quit, whether the block id is
+#     still in the session's `session.view`.
 # The binary is printed with its sha256 before the first exec and again at the end. SKU_REX_SHA256, when set, is the
 # expected hash: a mismatch refuses before any exec. A hash that changed during the run prints `EVIDENCE MIXED`.
 #
@@ -252,10 +254,10 @@ local function save(name, ...)
   log("%s: exit %d", name, res.code)
 end
 
----One read-only or raw rex client call now: its stdout and exit code. The same flags as `save`, never the plugin.
+---One read-only or raw rex client call now: its stdout, exit code and stderr. The same flags as `save`, never the plugin.
 local function raw(...)
   local res = vim.system({ REX, "--autostart=false", "-S", SOCK, ... }, { text = true }):wait()
-  return res.stdout or "", res.code
+  return res.stdout or "", res.code, res.stderr or ""
 end
 local function decode(text)
   local ok, value = pcall(vim.json.decode, text, { luanil = { object = true, array = true } })
@@ -361,37 +363,58 @@ local function main()
   -- HL13: a second codex block the plugin starts; every stub exits on `quit`. After quit nothing goes to it through
   -- the plugin: no send, no submit (its login shell may still be alive and would run what is typed). The HL5 observer is
   -- taken off first: its extra rex calls would delay the plugin's own foreground read, which is what HL13 measures.
-  -- Validity of the run: the block's screen after quit shows `stub codex quitting` (the codex stub's quit line); without
-  -- it the stub never read `quit` and the after-quit evidence says nothing.
+  -- Validity of the run (the reader applies it; the log has every input): the run counts only if `before quit valid=true`
+  -- (the foreground pid is the recorded pid, proc.name(pid) is the recorded proc_name, registry.is_running is true), both
+  -- raw sends exit 0, and `after quit` proc.name(pid) is `gone`. Then, the block id absent from the after-quit session.view
+  -- with erroring `process`, `program_status` and `capture` reads means the block closed and no shell is left (observed);
+  -- present means read its `process` for a live shell (the feared form). `stub codex quitting` on the screen is extra
+  -- evidence only. If `before quit valid=false`, every after-quit line is void.
   exec.run = run
   local quitter, quit_err = registry.start(require("sidekick-ultra.tools").get("codex"))
   step("start3", quitter, quit_err)
   if quitter then
     local proc = require("sidekick-ultra.proc")
+    local function read(label, name, ...) -- one read of the block: log its exit code and stderr with its stdout
+      local out, code, err = raw(...)
+      log("EVIDENCE HL13: %s %s: exit %d, stderr [%s], stdout: %s", label, name, code, err, out)
+      return out
+    end
     local function snap(label)
-      local process = raw("block", "call", "-s", quitter.session_id, "-b", quitter.block_id, "process")
-      local status = raw("block", "call", "-s", quitter.session_id, "-b", quitter.block_id, "program_status")
-      log("EVIDENCE HL13: %s process: %s", label, process)
-      log("EVIDENCE HL13: %s program_status: %s", label, status)
+      local sid, bid = quitter.session_id, quitter.block_id
+      local process = read(label, "process", "block", "call", "-s", sid, "-b", bid, "process")
+      read(label, "program_status", "block", "call", "-s", sid, "-b", bid, "program_status")
       local running = registry.is_running(quitter)
+      local name = proc.name(quitter.pid)
       log(
         "EVIDENCE HL13: %s recorded pid=%s proc_name=%s, proc.name(pid)=%s, registry.is_running=%s, backend is_running=%s",
         label,
         quitter.pid,
         quitter.proc_name,
-        proc.name(quitter.pid) or "gone",
+        name or "gone",
         tostring(running),
         tostring(rex.is_running)
       )
-      return decode(process), running
+      read(label, "capture", "capture", "-s", sid, "-b", bid, "--trim")
+      return decode(process), running, name
     end
-    snap("before quit")
+    local before, before_running, before_name = snap("before quit")
+    local fg = type(before) == "table" and type(before.foreground) == "table" and before.foreground.pid or nil
+    log(
+      "EVIDENCE HL13: before quit valid=%s",
+      tostring(fg ~= nil and fg == quitter.pid and before_name ~= nil and before_name == quitter.proc_name and before_running == true)
+    )
     local out, code = raw("send", "-s", quitter.session_id, "-b", quitter.block_id, "--", "quit")
     log("EVIDENCE HL13: raw send quit: exit %d %s", code, out)
     out, code = raw("send-key", "-s", quitter.session_id, "-b", quitter.block_id, "enter")
     log("EVIDENCE HL13: raw send-key enter: exit %d %s", code, out)
     vim.wait(1500)
     local process, running = snap("after quit")
+    local view, view_code, view_err = raw("api", "call", "-s", quitter.session_id, "session.view")
+    log("EVIDENCE HL13: session.view after quit: exit %d, stderr [%s], stdout: %s", view_code, view_err, view)
+    log(
+      "EVIDENCE HL13: block present in session.view after quit: %s",
+      tostring(view_code == 0 and view:find(quitter.block_id, 1, true) ~= nil)
+    )
     local function describe(entry)
       return type(entry) == "table"
           and ("%s (pid %s, argv0 %s)"):format(tostring(entry.name), tostring(entry.pid), tostring(entry.argv0))
@@ -408,7 +431,6 @@ local function main()
     vim.wait(3000)
     snap("after quit +3 s")
     log("EVIDENCE HL13: session listing after quit: %s", (raw("ls", "--json")))
-    log("EVIDENCE HL13: screen of the block after quit: %s", (raw("capture", "-s", quitter.session_id, "-b", quitter.block_id, "--trim")))
   end
 
   -- HL5: two direct splits of the codex block, with the raw CLI.
