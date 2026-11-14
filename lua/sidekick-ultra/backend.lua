@@ -54,7 +54,8 @@ local errors = require("sidekick-ultra.errors")
 ---the tool has started. A backend that defines `is_running` answers true for the new session, and its record may have
 ---no `pid` (zellij records the program it parsed as `proc_name`); otherwise the record's `pid` and `proc_name` are
 ---those of the new pane or block's current foreground (or shell) process, with the name read through
----`proc.name(pid)`. The next discovery replaces the record by id. A start that fails once it has the id of
+---`proc.name(pid)`. The shell allowance holds only where the shell stays for the pane's lifetime; a backend whose
+---shell execs the tool (rex) records the tool, so its start waits until the foreground shows as the tool. The next discovery replaces the record by id. A start that fails once it has the id of
 ---the new pane or block either closes it or says in its error that it was left open.
 ---@field start fun(tool: sidekick_ultra.Tool, opts: sidekick_ultra.StartOpts): sidekick_ultra.Session?, sidekick_ultra.Error?
 ---Deliver `text` as literal input, with no implicit Enter. `tool` is the session's tool. A backend that reads an agent

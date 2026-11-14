@@ -121,11 +121,12 @@ local function block_ids(sid)
 end
 
 ---The block's foreground process: `{pid, name?, argv0?, cwd?}`, or nil without one. Only pid, name and cwd are kept
----(argv0 is read for the tool match and never stored).
+---(argv0 is read for the tool match and never stored). Without one, the third value is the block's `last_exit`.
 ---@param sid string
 ---@param bid string
 ---@return table? fg
 ---@return sidekick_ultra.Error? err
+---@return table? last_exit
 local function foreground(sid, bid)
   local data, err = exec.json(command("block", "call", "-s", sid, "-b", bid, "process"))
   if not data then
@@ -136,7 +137,7 @@ local function foreground(sid, bid)
   end
   local fg = data.foreground
   if fg == nil then
-    return nil
+    return nil, nil, type(data.last_exit) == "table" and data.last_exit or nil
   end
   if type(fg) ~= "table" or type(fg.pid) ~= "number" then
     return nil, errors.new("backend_error", "rex printed an unexpected process view")
@@ -239,25 +240,71 @@ function M.list(configured)
   return ret
 end
 
----The session record of the block `start` just split.
+-- `start` waits for the new block's foreground to show as the tool: a block starts as the user's login shell, which then
+-- execs the tool in the same pid (sometimes through an interpreter stage). Polls are START_STEP_MS apart and none starts
+-- once exec.DEFAULT_TIMEOUT_MS have passed since the split returned.
+local START_STEP_MS = 50
+
+---@return number
+local function now()
+  return vim.uv.hrtime() / 1e6
+end
+
+---Wait until the new block `bid` shows the tool as its foreground, and record that.
 ---@param tool sidekick_ultra.Tool
 ---@param sid string
 ---@param bid string
 ---@return sidekick_ultra.Session? session
 ---@return sidekick_ultra.Error? err
 local function started_session(tool, sid, bid)
-  local fg, fg_err = foreground(sid, bid)
-  if fg_err then
-    return nil, fg_err
+  local own = { [tool.name] = tool }
+  local deadline = now() + exec.DEFAULT_TIMEOUT_MS
+  local seen, last_exit
+  while true do
+    local fg, fg_err, exit = foreground(sid, bid)
+    if fg_err then
+      return nil, fg_err
+    end
+    seen, last_exit = fg, exit
+    if fg then
+      local name, match_err = tool_of(own, fg)
+      if match_err then
+        return nil, match_err
+      end
+      if name then
+        local session, session_err = session_of(tool.name, sid, bid, fg)
+        if not session and not session_err then
+          return nil, errors.new("backend_error", ("block %s is not visible to this nvim"):format(bid))
+        end
+        return session, session_err
+      end
+    end
+    if now() >= deadline then
+      break
+    end
+    vim.wait(START_STEP_MS)
+    if now() >= deadline then
+      break
+    end
   end
-  if not fg then
-    return nil, errors.new("backend_error", ("block %s has no foreground process"):format(bid))
+  if not seen then
+    return nil,
+      errors.new(
+        "backend_error",
+        ("block %s has no foreground process: its command exited%s"):format(
+          bid,
+          last_exit and " (last_exit " .. vim.json.encode(last_exit) .. ")" or ""
+        )
+      )
   end
-  local session, session_err = session_of(tool.name, sid, bid, fg)
-  if not session and not session_err then
-    return nil, errors.new("backend_error", ("block %s is not visible to this nvim"):format(bid))
-  end
-  return session, session_err
+  local what = type(seen.name) == "string" and seen.name
+    or type(seen.argv0) == "string" and vim.fs.basename(seen.argv0)
+    or "an unnamed process"
+  return nil,
+    errors.new(
+      "backend_error",
+      ("block %s: its foreground never showed as %s (last seen: %s)"):format(bid, tool.name, what)
+    )
 end
 
 ---Split a new block to the right of nvim's own block, without focus, running the tool.
