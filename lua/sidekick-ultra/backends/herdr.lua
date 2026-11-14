@@ -1,6 +1,7 @@
 ---The herdr backend: sessions are herdr panes whose detected agent kind is a configured tool. nvim talks to the
 ---server it runs under (`HERDR_SOCKET_PATH` is inherited); no command passes `--session`, `--remote` or `--machine`.
----Only pids, names, ids, cwds and states are read from herdr's answers, never argv, cmdline or environment.
+---Only pids, names, ids, cwds, states and a foreground process's argv0 are read from herdr's answers; argv beyond argv0,
+---cmdline and environment never are.
 local contract = require("sidekick-ultra.backend")
 local errors = require("sidekick-ultra.errors")
 local exec = require("sidekick-ultra.exec")
@@ -248,7 +249,11 @@ local function tool_in_front(pane_id, tool)
   if not process then
     return false, "no foreground process"
   end
-  local front = ("pid %s, argv0 %s, name %s"):format(process.pid, process.argv0, process.name)
+  local front = ("pid %s, argv0 %s, name %s"):format(
+    tostring(process.pid),
+    tostring(process.argv0),
+    tostring(process.name)
+  )
   if type(process.pid) ~= "number" or not proc.name(process.pid) then
     return false, front .. " (not visible to nvim)"
   end
@@ -326,16 +331,27 @@ function M.start(tool, opts)
   local agent, start_err = start_agent(start)
   if not agent then
     -- herdr gave up waiting, but a tool in front is alive and only slow: closing the pane would kill it.
-    if envelope_code(start_err) == "timeout" and tool_in_front(new_id, tool) then
-      return nil,
-        errors.new(
-          "backend_error",
-          ("herdr started %s but it was not ready after %d ms; pane %s was left open and nothing was sent"):format(
-            tool.name,
-            START_TIMEOUT_MS,
-            new_id
+    if envelope_code(start_err) == "timeout" then
+      local in_front, _, check_err = tool_in_front(new_id, tool)
+      if in_front then
+        return nil,
+          errors.new(
+            "backend_error",
+            ("herdr started %s but it was not ready after %d ms; pane %s was left open and nothing was sent"):format(
+              tool.name,
+              START_TIMEOUT_MS,
+              new_id
+            )
           )
+      end
+      -- An unreadable pane gives no evidence that a tool is in front, so it is closed and the check's error is kept.
+      if check_err then
+        start_err.msg = ("%s (checking the foreground of pane %s also failed: %s)"):format(
+          start_err.msg,
+          new_id,
+          check_err.msg
         )
+      end
     end
     return close_failed(new_id, start_err)
   end
@@ -405,7 +421,8 @@ function M.send(session, text, tool)
   return exec.check({ "herdr", "pane", "send-text", session.pane_id, text })
 end
 
--- No foreground check, as on tmux: `deliver` stops on a refused send, so Enter never follows one.
+-- No foreground check, as on tmux: `deliver` stops on a refused send, so Enter never follows one, and no pre-send check
+-- can catch a tool that exits while the sent text is still unread.
 ---@param session sidekick_ultra.Session
 ---@return sidekick_ultra.ExecResult? ok
 ---@return sidekick_ultra.Error? err

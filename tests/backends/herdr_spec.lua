@@ -525,7 +525,12 @@ describe("herdr backend", function()
     end)
 
     it("on a start timeout leaves the pane open when the tool is in front, and closes it when not", function()
-      for _, row in ipairs({ { CLAUDE_PROCESS, false }, { SHELL_PROCESS, true } }) do
+      -- Each row is the process-info answer, whether the pane is closed, and a token the error must carry.
+      for _, row in ipairs({
+        { CLAUDE_PROCESS, false },
+        { SHELL_PROCESS, true },
+        { failing("error"), true, "pane_not_found" },
+      }) do
         install(routes({ ["agent start"] = failing("agent_start_timeout"), ["pane process-info"] = row[1] }))
         local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
         expect.equality(session, nil)
@@ -534,6 +539,7 @@ describe("herdr backend", function()
         expect.equality(rec.argvs()[5], row[2] and { "herdr", "pane", "close", "w1:p4" } or nil)
         expect.equality(#rec.calls, row[2] and 5 or 4)
         expect.equality(err.msg:find("left open", 1, true) ~= nil, not row[2])
+        expect.equality(row[3] == nil or err.msg:find(row[3], 1, true) ~= nil, true)
       end
     end)
 
