@@ -9,6 +9,18 @@
 # `-S unix:///tmp/sku-live-rex/rex.sock`; none relies on REX_SERVER and none touches the default socket.
 # Teardown: the server's own stop call, a signal to the recorded server pid only, then rm -rf of the literal root.
 #
+# Probes (answers for the record, each printed as `EVIDENCE <item>: ...`):
+#   before the server starts: `--help` of rex, `server run`, `split` and, when the root help lists it, `program-status` or
+#     `status`, all through rexc; the run aborts unless the help shows --autostart, -S (or --server), --listen,
+#     --state-dir, --exit-empty and --config;
+#   HL5: the raw `split --json` answer, the session listing and the new block's `process` right after it (no delay), for
+#     the plugin's starts and two direct splits: is there a cwd;
+#   HL13: a second block the plugin starts, whose stub exits on a `quit` line. `quit` and Enter are typed with the raw
+#     CLI, then nothing is sent or submitted to that block: rex runs it through a login shell that may outlive the stub.
+#     The block's `process`, `program_status`, recorded pid and the plugin's liveness answer are printed before and after.
+# The binary is printed with its sha256 before the first exec and again at the end. SKU_REX_SHA256, when set, is the
+# expected hash: a mismatch refuses before any exec. A hash that changed during the run prints `EVIDENCE MIXED`.
+#
 # Needs: jq, nvim, and the rex CLI from the Rex Beta bundle (override with SKU_REX_BIN).
 # What it checks: the `split` and `focus` commands and flags, the shapes of `ls`,
 # `session.view`, `process`, `program_status` and the `split --json` reply, argv0 reporting for a re-exec'd stub,
@@ -63,6 +75,14 @@ if [ ! -x "$REX" ]; then
   echo "refusing: rex CLI not executable: $REX" >&2
   exit 1
 fi
+# The binary's identity, printed and checked before anything runs it.
+REX_SHA=$(/usr/bin/shasum -a 256 "$REX" | cut -d' ' -f1)
+[ -n "$REX_SHA" ] || { echo "refusing: cannot hash $REX" >&2; exit 1; }
+echo "rex binary: $REX sha256 $REX_SHA"
+if [ -n "${SKU_REX_SHA256:-}" ] && [ "$SKU_REX_SHA256" != "$REX_SHA" ]; then
+  echo "refusing: rex sha256 is $REX_SHA, the recipe expects $SKU_REX_SHA256" >&2
+  exit 1
+fi
 NVIM=$(command -v nvim) || { echo "refusing: nvim not found" >&2; exit 1; }
 command -v jq >/dev/null || { echo "refusing: jq not found" >&2; exit 1; }
 
@@ -107,13 +127,19 @@ if [ "\${SKU_STUB:-}" != "$1" ]; then
 fi
 echo "stub $1 ready"
 while IFS= read -r line; do
+  if [ "\$line" = quit ]; then
+    echo "stub $1 quitting"
+    exit 7
+  fi
   echo "got: \$line"
 done
 EOF
   chmod 755 "$ROOT/bin/$1"
 }
+# A line `quit` ends the stub with exit code 7. Only HL13 types it, and only into the block of `quitter`.
 make_stub claude
 make_stub codex
+make_stub quitter
 
 # Refuse unless the stubs exist: claude and codex must be regular executable files, written above, at the absolute paths
 # $ROOT/bin/claude and $ROOT/bin/codex. rex runs block commands through the user's login shell, which gets the ISO_ENV
@@ -131,6 +157,39 @@ for name in claude codex; do
     exit 2
   fi
 done
+
+# Help preflight: `--help` is a run of rex, so it goes through rexc (env -i allowlist, --autostart=false, -S root socket).
+# Residual risk: the first call, the root `--help`, runs before any help has shown that --autostart and -S exist. It
+# carries both flags and asks only for help; the rest of the run starts only after the help shows every flag it needs.
+# rexc prints its own `+ ...` line to stderr first; that line names the flags, so it is cut from the saved help text.
+HELP_FILES=()
+help_of() { # <rex words...>: print and keep the help of `rex <words> --help`
+  local n=${#HELP_FILES[@]} rc=0
+  local out="$ROOT/out/help-$n.txt"
+  rexc "$@" --help >"$out.stdout" 2>"$out.stderr" || rc=$?
+  head -n 1 "$out.stderr" >&2
+  { cat "$out.stdout"; tail -n +2 "$out.stderr"; } >"$out"
+  echo "---- help: rex $* --help (exit $rc)"
+  cat "$out"
+  [ "$rc" = 0 ] || { echo "refusing: rex $* --help exited $rc" >&2; exit 1; }
+  HELP_FILES+=("$out")
+}
+help_of
+help_of server run
+help_of split
+# HL13's second half: a subcommand for the program status, when the root help lists one.
+for sub in program-status status; do
+  if grep -qE "^[[:space:]]+$sub([[:space:]]|\$)" "${HELP_FILES[0]}"; then
+    help_of "$sub"
+  fi
+done
+cat "${HELP_FILES[@]}" >"$ROOT/out/help-all.txt"
+for flag in --autostart --listen --state-dir --exit-empty --config; do
+  grep -qE -- "(^|[^[:alnum:]-])$flag([^[:alnum:]-]|\$)" "$ROOT/out/help-all.txt" ||
+    { echo "refusing: the help does not show $flag" >&2; exit 1; }
+done
+grep -qE -e '(^|[^[:alnum:]-])-S([^[:alnum:]-]|$)' -e '(^|[^[:alnum:]-])--server([^[:alnum:]-]|$)' "$ROOT/out/help-all.txt" ||
+  { echo "refusing: the help does not show -S or --server" >&2; exit 1; }
 
 # Private server, background job with its pid recorded.
 # `env` execs rex, so $! is the server's own pid.
@@ -194,6 +253,55 @@ local function save(name, ...)
   log("%s: exit %d", name, res.code)
 end
 
+---One read-only or raw rex client call now: its stdout and exit code. The same flags as `save`, never the plugin.
+local function raw(...)
+  local res = vim.system({ REX, "--autostart=false", "-S", SOCK, ... }, { text = true }):wait()
+  return res.stdout or "", res.code
+end
+local function decode(text)
+  local ok, value = pcall(vim.json.decode, text, { luanil = { object = true, array = true } })
+  return ok and value or nil
+end
+---Whether any key named cwd, anywhere in the value, holds a non-empty string.
+local function has_cwd(value)
+  if type(value) ~= "table" then
+    return false
+  end
+  for key, child in pairs(value) do
+    if (key == "cwd" and type(child) == "string" and child ~= "") or has_cwd(child) then
+      return true
+    end
+  end
+  return false
+end
+
+---HL5: the raw `split --json` answer of a block, the session listing and the new block's `process` taken at once
+---after it (no delay), and whether each has a cwd. The plugin takes a started block's cwd from `process`.
+local function hl5(label, sid, split_out)
+  log("EVIDENCE HL5: %s split --json raw: %s", label, split_out)
+  local answer = decode(split_out)
+  if type(answer) ~= "table" then
+    log("EVIDENCE HL5: %s cwd n/a (no answer)", label)
+    return
+  end
+  log("EVIDENCE HL5: %s split answer cwd %s", label, has_cwd(answer) and "present" or "absent")
+  log("EVIDENCE HL5: %s session listing right after: %s", label, (raw("ls", "--json")))
+  local ids = answer.block_ids
+  local bid = type(ids) == "table" and ids[1]
+  if type(bid) ~= "string" then
+    log("EVIDENCE HL5: %s process cwd n/a (no block id in the split answer, no process read)", label)
+    return
+  end
+  local process = raw("block", "call", "-s", sid, "-b", bid, "process")
+  log("EVIDENCE HL5: %s process right after: %s", label, process)
+  local view = decode(process)
+  if type(view) ~= "table" then
+    log("EVIDENCE HL5: %s process cwd n/a (no answer)", label)
+    return
+  end
+  log("EVIDENCE HL5: %s process cwd %s", label, has_cwd(view) and "present" or "absent")
+end
+
 local function main()
   vim.opt.runtimepath:prepend(PLUGIN)
   require("sidekick-ultra").setup({
@@ -206,6 +314,17 @@ local function main()
   local registry = require("sidekick-ultra.registry")
   local rex = assert(registry.backend("rex"), "rex backend not registered")
   log("inside=%s", tostring(rex.inside()))
+
+  -- HL5, observation only: after each `split` the plugin runs, log the raw answer and what rex shows at once.
+  local exec = require("sidekick-ultra.exec")
+  local run = exec.run
+  exec.run = function(argv, opts)
+    local res, run_err = run(argv, opts)
+    if argv[5] == "split" then
+      hl5("plugin start", vim.env.REX_SESSION, res and res.stdout or "")
+    end
+    return res, run_err
+  end
 
   local by_tool = {}
   for _, s in ipairs(registry.discover()) do
@@ -236,6 +355,70 @@ local function main()
     step("submit2", rex.submit(started))
   end
   vim.wait(500)
+
+  -- HL13: a second block the plugin starts, running the stub that exits on `quit`. After quit nothing goes to it through
+  -- the plugin: no send, no submit (its login shell may still be alive and would run what is typed). The HL5 observer is
+  -- taken off first: its extra rex calls would delay the plugin's own foreground read, which is what HL13 measures.
+  exec.run = run
+  local quit_tool =
+    vim.tbl_extend("force", require("sidekick-ultra.tools").get("codex"), { cmd = { ROOT .. "/bin/quitter" } })
+  local quitter, quit_err = registry.start(quit_tool)
+  step("start3", quitter, quit_err)
+  if quitter then
+    local proc = require("sidekick-ultra.proc")
+    local function snap(label)
+      local process = raw("block", "call", "-s", quitter.session_id, "-b", quitter.block_id, "process")
+      local status = raw("block", "call", "-s", quitter.session_id, "-b", quitter.block_id, "program_status")
+      log("EVIDENCE HL13: %s process: %s", label, process)
+      log("EVIDENCE HL13: %s program_status: %s", label, status)
+      local running = registry.is_running(quitter)
+      log(
+        "EVIDENCE HL13: %s recorded pid=%s proc_name=%s, proc.name(pid)=%s, registry.is_running=%s, backend is_running=%s",
+        label,
+        quitter.pid,
+        quitter.proc_name,
+        tostring(proc.name(quitter.pid)),
+        tostring(running),
+        tostring(rex.is_running)
+      )
+      return decode(process), running
+    end
+    snap("before quit")
+    local out, code = raw("send", "-s", quitter.session_id, "-b", quitter.block_id, "--", "quit")
+    log("EVIDENCE HL13: raw send quit: exit %d %s", code, out)
+    out, code = raw("send-key", "-s", quitter.session_id, "-b", quitter.block_id, "enter")
+    log("EVIDENCE HL13: raw send-key enter: exit %d %s", code, out)
+    vim.wait(1500)
+    local process, running = snap("after quit")
+    local function describe(entry)
+      return type(entry) == "table"
+          and ("%s (pid %s, argv0 %s)"):format(tostring(entry.name), tostring(entry.pid), tostring(entry.argv0))
+        or "none"
+    end
+    local last_exit = type(process) == "table" and process.last_exit ~= nil and vim.json.encode(process.last_exit) or "none"
+    log(
+      "EVIDENCE HL13: after quit foreground=%s, child=%s, last_exit=%s, is_running=%s",
+      describe(type(process) == "table" and process.foreground or nil),
+      describe(type(process) == "table" and process.child or nil),
+      last_exit,
+      tostring(running)
+    )
+    vim.wait(3000)
+    snap("after quit +3 s")
+    log("EVIDENCE HL13: session listing after quit: %s", (raw("ls", "--json")))
+    log("EVIDENCE HL13: screen of the block after quit: %s", (raw("capture", "-s", quitter.session_id, "-b", quitter.block_id, "--trim")))
+  end
+
+  -- HL5: two direct splits of the codex block, with the raw CLI.
+  local codex = by_tool.codex
+  for i = 1, codex and 2 or 0 do
+    local out = raw(
+      "split", "-s", codex.session_id, "-b", codex.block_id, "--split=down", "-c", ROOT .. "/work",
+      "--focus=false", "--json", "--", ROOT .. "/bin/codex"
+    )
+    hl5("direct split " .. i, codex.session_id, out)
+  end
+  vim.wait(500)
 end
 
 local ok, e = pcall(main)
@@ -251,7 +434,7 @@ EOF
 chmod 755 "$ROOT/run-nvim.sh"
 rexc new live-nvim -c "$ROOT/work" --window nvim --json -- "$ROOT/run-nvim.sh" >/dev/null
 
-for _ in $(seq 1 100); do
+for _ in $(seq 1 160); do
   [ -e "$ROOT/out/done" ] && break
   sleep 0.5
 done
@@ -334,6 +517,7 @@ check "send did not press Enter in the claude block" unsubmitted "$claude_sent" 
 check "submit" log_has "submit: ok"
 check "focus" log_has "focus: ok"
 check "start" log_has "start: ok"
+check "start of the HL13 block" log_has "start3: ok"
 check "start left the started block unfocused" started_block_unfocused
 check "send2" log_has "send2: ok"
 check "started screen was captured before submit" log_has "started_after_send: exit 0"
@@ -344,6 +528,13 @@ check "submit sent the line once in the started block" no_empty_submit "$started
 check "text reached the claude stub" screen_has "$claude_screen" "got: hello from sku"
 check "started block runs the codex stub" screen_has "$started_screen" "stub codex ready"
 check "text reached the started stub" screen_has "$started_screen" "got: second line"
+
+REX_SHA_END=$(/usr/bin/shasum -a 256 "$REX" | cut -d' ' -f1)
+echo "rex binary at the end: $REX sha256 $REX_SHA_END"
+if [ "$REX_SHA_END" != "$REX_SHA" ]; then
+  echo "EVIDENCE MIXED: binary changed"
+  FAILS=$((FAILS + 1))
+fi
 
 if [ "$FAILS" -ne 0 ]; then
   echo "$FAILS check(s) failed" >&2
