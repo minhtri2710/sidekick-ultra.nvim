@@ -138,7 +138,8 @@ ln -s "$HERDR" "$R/bin/herdr"
 # each stub re-execs bash under its own name with `exec -a`. `agent start` waits for the screen state to be idle
 # (src/terminal/state.rs:2262-2269, src/cli/agent.rs:620-622); the stub sets an OSC window title that the claude and
 # codex manifests read as idle (src/detect/manifests/claude.toml:229-235, codex.toml:119-130). Whether that is enough
-# is settled by this run; the start phase reports UNVERIFIABLE, not FAIL, when herdr never sees the stub as ready.
+# is settled by this run; the start phase reports UNVERIFIABLE, not FAIL, when herdr never sees the stub as ready (the
+# plugin then closes the new pane, or leaves it open when the stub is in front; the check counts the panes either way).
 make_stub() { # <name> <osc title>
   # An argument is a number of seconds to sleep before the title and the ready line (A10: a tool slow to become
   # interactive). The stub prints its arguments first, so the log shows whether herdr passed them.
@@ -254,7 +255,7 @@ local function run()
     check("attach", registry.attach(claude) == true)
     check("attached() keeps it", #registry.attached() == 1)
 
-    local ok, err = backend.send(claude, "hello-live")
+    local ok, err = backend.send(claude, "hello-live", tools.get(claude.tool))
     check("send succeeds", ok ~= nil, err)
     vim.wait(800)
     local text = read(os.getenv("SKU_CLAUDE_PANE"))
@@ -283,12 +284,12 @@ local function run()
       return
     end
     check("state is blocked", codex.state == "blocked", codex.state)
-    local ok, err = backend.send(codex, "nope-live")
+    local ok, err = backend.send(codex, "nope-live", tools.get(codex.tool))
     check("send to a blocked pane is refused", ok == nil and err and err.id == "session_blocked", err)
     vim.wait(500)
     check("nothing reached the blocked pane", read(os.getenv("SKU_CODEX_PANE")):find("nope-live", 1, true) == nil)
     local gone = vim.tbl_extend("force", codex, { pane_id = "w999:p999", id = "herdr:w999:p999" })
-    ok, err = backend.send(gone, "nope-live")
+    ok, err = backend.send(gone, "nope-live", tools.get(gone.tool))
     check("send with an unreadable state is refused", ok == nil and err and err.id == "status_unreadable", err)
   elseif phase == "a9" then
     -- A9: text that starts with dashes goes through `herdr pane send-text <pane> <text>` with no `--`. The unsafe
@@ -311,7 +312,7 @@ local function run()
     end
     for _, text in ipairs({ "-- TODO", "- @x" }) do
       local seen = #gots(read(pane))
-      local ok, err = backend.send(claude, text)
+      local ok, err = backend.send(claude, text, tools.get(claude.tool))
       vim.wait(800)
       if ok ~= nil then
         local sok, serr = backend.submit(claude)
@@ -364,12 +365,15 @@ local function run()
     local session, err = registry.start(tools.get("claude"))
     if not session then
       local msg = err and err.msg or ""
-      if
-        err
-        and err.id == "backend_error"
-        and (msg:find('"code":"timeout"', 1, true) or msg:find("agent_start_failed", 1, true))
-      then
-        -- herdr never saw the stub as an interactive agent (it needs the screen state idle); the backend closes the pane.
+      local backend_error = err and err.id == "backend_error"
+      if backend_error and msg:find("left open", 1, true) then
+        -- herdr timed out with the stub in front of the new pane: the backend keeps the pane (closing it would kill the
+        -- tool). The server stop of the teardown ends the pane's process; no step of this driver closes it.
+        log("UNVERIFIABLE start: UNVERIFIABLE with stubs, pane left open: " .. msg)
+        check("timed-out start with the tool in front left exactly one new pane", pane_count() == before + 1)
+      elseif backend_error and (msg:find('"code":"timeout"', 1, true) or msg:find("agent_start_failed", 1, true)) then
+        -- herdr never saw the stub as an interactive agent (it needs the screen state idle) and the stub was not in
+        -- front of the pane (or its foreground could not be read); the backend closes the pane.
         log("UNVERIFIABLE start: UNVERIFIABLE with stubs: " .. msg)
         check("failed start closed the pane it created", pane_count() == before)
       else
@@ -405,7 +409,7 @@ local function run()
       observe("rediscovered session", fresh)
       check("rediscovered session is running", registry.is_running(fresh), fresh)
       check("attached entry survived rediscovery", #registry.attached() == 1)
-      local ok, send_err = backend.send(fresh, "start-live")
+      local ok, send_err = backend.send(fresh, "start-live", tools.get(fresh.tool))
       check("send to the started pane", ok ~= nil, send_err)
       ok, send_err = backend.submit(fresh)
       check("submit to the started pane", ok ~= nil, send_err)
