@@ -12,7 +12,7 @@
 #   before the server starts: `--help` of herdr, `pane send-text`, `agent start`, `pane split` and `pane list`, all
 #     through the isolated environment, then a check that the root socket still does not exist;
 #   A9: the plugin sends `-- TODO` and `- @x` (dash-leading text) to the stub claude, then one direct `pane send-text --`
-#     whose result is a check (herdr sends the `--` as text);
+#     whose result is a PASS/FAIL check, not an EVIDENCE line (herdr sends the `--` as text);
 #   A10: a direct `agent start --timeout 3001` of a stub that sleeps 6 s, and one of a ready stub, with wall times;
 #   HL5: the raw JSON of every `agent start` (the plugin's inside the mux, the direct ones) and whether it has a cwd.
 # The binary is printed with its sha256 before the first exec and again at the end. SKU_HERDR_SHA256, when set, is the
@@ -387,7 +387,11 @@ local function run()
       focused[pane.pane_id] = pane.focused
     end
     check("start left the new pane unfocused", focused[session.pane_id] == false, focused)
-    check("start left the focus on the pane that had it", focus_before ~= nil and focused_pane(panes) == focus_before, focused)
+    check(
+      "start left the focus on the pane that had it",
+      focus_before ~= nil and focused_pane(panes) == focus_before,
+      { focus_before = focus_before, after = focused }
+    )
     if session.state == "blocked" then
       -- agent_not_ready: the agent is running but blocked during startup, so the guard rightly refuses to send.
       log("UNVERIFIABLE start: agent blocked at startup; rediscovery, send and submit not exercised")

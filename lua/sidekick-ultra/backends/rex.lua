@@ -240,9 +240,9 @@ function M.list(configured)
   return ret
 end
 
--- `start` waits for the new block's foreground to show as the tool: a block starts as the user's login shell, which then
--- execs the tool in the same pid (sometimes through an interpreter stage). Polls are START_STEP_MS apart and none starts
--- once exec.DEFAULT_TIMEOUT_MS have passed since the split returned.
+-- `start` waits for the new block's foreground to show as the tool: a block starts as the user's login shell, which
+-- then execs the tool in the same pid (sometimes through an interpreter stage). Polls are START_STEP_MS apart and none
+-- starts once exec.DEFAULT_TIMEOUT_MS have passed since the split returned.
 local START_STEP_MS = 50
 
 ---@return number
