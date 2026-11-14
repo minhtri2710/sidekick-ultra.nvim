@@ -45,6 +45,7 @@ local KINDS = {
 local EXECUTABLE = { cursor = "cursor-agent", kiro = "kiro-cli" }
 
 ---`herdr agent start` waits until the agent is interactive, for at most this long (the server accepts 3 s to 300 s).
+---herdr returns at readiness (about 3.8 s for a ready tool), so a short value such as 3001 would time out every start.
 local START_TIMEOUT_MS = 30000
 
 ---The `error.code` of the error envelope `{id, error = {code, message}}` that a failed herdr command prints on
@@ -75,9 +76,10 @@ local function query(argv, field, timeout_ms)
   return payload
 end
 
+---The foreground process of a pane: the entry whose pid is the foreground process group, else the first entry.
 ---@param info table a `PaneProcessInfo`
----@return integer? pid
-local function foreground_pid(info)
+---@return table? process
+local function foreground(info)
   local processes = type(info.foreground_processes) == "table" and info.foreground_processes or {}
   local chosen = processes[1]
   for _, process in ipairs(processes) do
@@ -86,7 +88,14 @@ local function foreground_pid(info)
       break
     end
   end
-  return type(chosen) == "table" and chosen.pid or nil
+  return type(chosen) == "table" and chosen or nil
+end
+
+---@param info table a `PaneProcessInfo`
+---@return integer? pid
+local function foreground_pid(info)
+  local process = foreground(info)
+  return process and process.pid
 end
 
 ---A pane's process chosen by `pick`, with the name this machine's process table gives that pid: the value the
@@ -221,6 +230,44 @@ local function start_agent(argv)
   return agent, err
 end
 
+---Whether `tool` is the program in front of the pane. The recorded pid cannot say: for a pane `start` made it is the
+---shell, which outlives the tool, and text sent to the shell is run by it. So the answer is read fresh: the foreground
+---process must be visible to nvim, must not be the pane's shell, and must run `tool` (argv0 first, as on rex: a Claude
+---Code `name` is its version).
+---@param pane_id string
+---@param tool sidekick_ultra.Tool
+---@return boolean? in_front
+---@return string? front what is in front, when `in_front` is false
+---@return sidekick_ultra.Error? err the read or the tool's `is_proc` failed
+local function tool_in_front(pane_id, tool)
+  local info, err = query({ "herdr", "pane", "process-info", "--pane", pane_id }, "process_info")
+  if not info then
+    return nil, nil, err
+  end
+  local process = foreground(info)
+  if not process then
+    return false, "no foreground process"
+  end
+  local front = ("pid %s, argv0 %s, name %s"):format(process.pid, process.argv0, process.name)
+  if type(process.pid) ~= "number" or not proc.name(process.pid) then
+    return false, front .. " (not visible to nvim)"
+  end
+  if process.pid == info.shell_pid then
+    return false, front .. " (the pane's shell)"
+  end
+  local words = {}
+  for _, word in ipairs({ type(process.argv0) == "string" and vim.fs.basename(process.argv0), process.name }) do
+    if type(word) == "string" then
+      table.insert(words, word)
+    end
+  end
+  local matched, tool_err = proc.tool_of({ [tool.name] = tool }, process.pid, words)
+  if tool_err then
+    return nil, nil, tool_err
+  end
+  return matched ~= nil, front
+end
+
 ---Close the pane of a start that failed after the split and return `err`, which says when the close failed too.
 ---@param pane_id string
 ---@param err sidekick_ultra.Error
@@ -278,6 +325,18 @@ function M.start(tool, opts)
   end
   local agent, start_err = start_agent(start)
   if not agent then
+    -- herdr gave up waiting, but a tool in front is alive and only slow: closing the pane would kill it.
+    if envelope_code(start_err) == "timeout" and tool_in_front(new_id, tool) then
+      return nil,
+        errors.new(
+          "backend_error",
+          ("herdr started %s but it was not ready after %d ms; pane %s was left open and nothing was sent"):format(
+            tool.name,
+            START_TIMEOUT_MS,
+            new_id
+          )
+        )
+    end
     return close_failed(new_id, start_err)
   end
 
@@ -320,16 +379,33 @@ end
 -- herdr's CLI has no stdin form, so chunk the text here if that ever matters.
 ---@param session sidekick_ultra.Session
 ---@param text string
+---@param tool sidekick_ultra.Tool
 ---@return sidekick_ultra.ExecResult? ok
 ---@return sidekick_ultra.Error? err
-function M.send(session, text)
+function M.send(session, text, tool)
   local ok, err = contract.guard_send(session, is_blocked)
   if not ok then
     return nil, err
   end
+  local in_front, front, front_err = tool_in_front(session.pane_id, tool)
+  if in_front == nil then
+    return nil, front_err
+  end
+  if not in_front then
+    return nil,
+      errors.new(
+        "backend_error",
+        ("herdr pane %s: %s is not the foreground program (in front: %s); nothing was sent"):format(
+          session.pane_id,
+          tool.name,
+          front
+        )
+      )
+  end
   return exec.check({ "herdr", "pane", "send-text", session.pane_id, text })
 end
 
+-- No foreground check, as on tmux: `deliver` stops on a refused send, so Enter never follows one.
 ---@param session sidekick_ultra.Session
 ---@return sidekick_ultra.ExecResult? ok
 ---@return sidekick_ultra.Error? err
