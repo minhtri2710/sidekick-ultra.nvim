@@ -159,6 +159,10 @@ describe("context.render", function()
       expect.equality(run({ msg = "\n" }), "\n")
     end)
 
+    it("writes a control byte typed in a message in caret notation", function()
+      expect.equality(run({ msg = "a\rb\27c" }), "a^Mb^[c")
+    end)
+
     it("makes the message {selection} when there is a selection and neither msg nor prompt", function()
       scratch({ "alpha", "beta" })
       vim.cmd("normal! ggVj")

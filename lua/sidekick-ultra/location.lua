@@ -175,8 +175,10 @@ function M.text(loc, style)
   return text
 end
 
----Text of rendered output: strings as they are, location records written in `style`. A NUL byte becomes the two
----characters `^@` (what Vim draws): a backend cannot carry it (argv cuts at it, tmux types it as Ctrl-@).
+---Text of rendered output: strings as they are, location records written in `style`. Every control byte except tab
+---and LF is written in Vim's caret notation (`^` and the byte XOR 0x40: `^@`, `^M`, `^[`, `^?` for DEL), which is
+---also what Vim draws, two columns each: a backend would take the raw byte as a key (CR submits, ESC is a key) or
+---cannot carry it (argv cuts at NUL).
 ---@param segments (string|sidekick_ultra.Location)[]
 ---@param style? sidekick_ultra.LocationStyle
 ---@return string
@@ -185,7 +187,11 @@ function M.format(segments, style)
   for i, segment in ipairs(segments) do
     out[i] = type(segment) == "string" and segment or M.text(segment, style)
   end
-  return (table.concat(out):gsub("%z", "^@"))
+  return (
+    table.concat(out):gsub("[%z\1-\8\11-\31\127]", function(c)
+      return "^" .. (c == "\127" and "?" or string.char(c:byte() + 64))
+    end)
+  )
 end
 
 return M
