@@ -423,9 +423,12 @@ help_of() { # <name> <herdr args...>: print and keep one help text
   name=$1
   shift
   say herdr "$@"
-  hx_env "$HERDR" "$@" >"$R/out/help-$name.txt" 2>&1 || die "herdr $* failed; see $R/out/help-$name.txt"
-  echo "---- help: herdr $*"
+  rc=0
+  hx_env "$HERDR" "$@" >"$R/out/help-$name.txt" 2>&1 || rc=$?
+  # Printed before the exit check: die's cleanup removes the root, and the text with it.
+  echo "---- help: herdr $* (exit $rc)"
   cat "$R/out/help-$name.txt"
+  [ "$rc" = 0 ] || die "herdr $* exited $rc"
 }
 help_of root --help
 help_of send-text pane send-text --help
