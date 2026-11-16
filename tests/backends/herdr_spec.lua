@@ -509,37 +509,20 @@ describe("herdr backend", function()
     it("closes exactly the pane it just split for every agent start failure, and returns the start error", function()
       for _, row in ipairs({
         { failing("error"), 1 },
+        { failing("agent_start_timeout"), 1 },
         { { code = 2, stdout = "", stderr = "missing required --kind\n" }, 2 },
         { { code = 1, stdout = "", stderr = "" }, 1 },
         { { code = 0, stdout = "not json", stderr = "" }, 0 },
         { { code = 0, stdout = '{"id":"x","result":{"type":"agent_started"}}', stderr = "" } },
         { { run_error = { id = "backend_error", msg = "timed out" } } },
       }) do
-        install(routes({ ["agent start"] = row[1] }))
+        -- The tool is in front of the pane: a timeout still closes it, and no foreground check runs.
+        install(routes({ ["agent start"] = row[1], ["pane process-info"] = CLAUDE_PROCESS }))
         local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
         expect.equality(session, nil)
         expect.equality({ err.id, err.code }, { "backend_error", row[2] })
         expect.equality(rec.argvs()[4], { "herdr", "pane", "close", "w1:p4" })
         expect.equality(#rec.calls, 4)
-      end
-    end)
-
-    it("on a start timeout leaves the pane open when the tool is in front, and closes it when not", function()
-      -- Each row is the process-info answer, whether the pane is closed, and a token the error must carry.
-      for _, row in ipairs({
-        { CLAUDE_PROCESS, false },
-        { SHELL_PROCESS, true },
-        { failing("error"), true, "pane_not_found" },
-      }) do
-        install(routes({ ["agent start"] = failing("agent_start_timeout"), ["pane process-info"] = row[1] }))
-        local session, err = herdr.start(tool(), { cwd = "/work/proj", env = {} })
-        expect.equality(session, nil)
-        expect.equality(err.id, "backend_error")
-        expect.equality(rec.argvs()[4], { "herdr", "pane", "process-info", "--pane", "w1:p4" })
-        expect.equality(rec.argvs()[5], row[2] and { "herdr", "pane", "close", "w1:p4" } or nil)
-        expect.equality(#rec.calls, row[2] and 5 or 4)
-        expect.equality(err.msg:find("left open", 1, true) ~= nil, not row[2])
-        expect.equality(row[3] == nil or err.msg:find(row[3], 1, true) ~= nil, true)
       end
     end)
 
