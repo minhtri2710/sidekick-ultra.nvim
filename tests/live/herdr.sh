@@ -14,7 +14,8 @@
 #   A9: the plugin sends `-- TODO` and `- @x` (dash-leading text) to the stub claude, then one direct `pane send-text --`
 #     whose result is a PASS/FAIL check, not an EVIDENCE line (herdr sends the `--` as text);
 #   A10: a direct `agent start --timeout 3001` of a stub that sleeps 6 s, and one of a ready stub, with wall times;
-#   HL5: the raw JSON of every `agent start` (the plugin's inside the mux, the direct ones) and whether it has a cwd.
+#   HL5: the raw JSON of every `agent start` (the plugin's inside the mux, the direct ones) and whether it has a cwd;
+#   FG: before each plugin send, the pane's shell_pid, foreground group and foreground pid/argv0/name from `pane process-info`, and whether argv0 or name matches the tool.
 # The binary is printed with its sha256 before the first exec and again at the end. SKU_HERDR_SHA256, when set, is the
 # expected hash: a mismatch refuses before any exec. A hash that changed during the run prints `EVIDENCE MIXED`.
 #
@@ -230,6 +231,70 @@ local function real(path)
   return vim.uv.fs_realpath(path) or path
 end
 
+-- Evidence for the foreground check of herdr's `send`: what `herdr pane process-info` reports for the pane a send goes
+-- to (only shell_pid, foreground_process_group_id and each entry's pid, argv0, name; never argv, cmdline, cwd or the
+-- environment), and which word, argv0 or name, matches the tool. The entry is picked as herdr.lua's `foreground` does
+-- (not exported, so repeated here). Runs in the nvim driver, in the isolated environment, through the plugin's exec.
+local function fg_read(label, session)
+  local exec, proc = require("sidekick-ultra.exec"), require("sidekick-ultra.proc")
+  local tool = require("sidekick-ultra.tools").get(session.tool)
+  local head = ("EVIDENCE FG: %s pane %s"):format(label, session.pane_id)
+  if not tool then
+    log(head .. ": no configured tool " .. tostring(session.tool))
+    return
+  end
+  local decoded, err = exec.json({ "herdr", "pane", "process-info", "--pane", session.pane_id })
+  local info = type(decoded) == "table" and type(decoded.result) == "table" and decoded.result.process_info
+  if type(info) ~= "table" then
+    local why = err and ("exit " .. tostring(err.code) .. ", " .. tostring(err.stderr or err.msg)) or "no result.process_info"
+    log(head .. ": process-info read failed: " .. why)
+    return
+  end
+  local processes = type(info.foreground_processes) == "table" and info.foreground_processes or {}
+  local entries = {}
+  for _, process in ipairs(processes) do
+    if type(process) == "table" then
+      table.insert(entries, ("pid %s argv0 %s name %s"):format(tostring(process.pid), tostring(process.argv0), tostring(process.name)))
+    end
+  end
+  local chosen = processes[1]
+  for _, process in ipairs(processes) do
+    if type(process) == "table" and process.pid == info.foreground_process_group_id then
+      chosen = process
+      break
+    end
+  end
+  log(
+    ("%s: shell_pid %s, fg_group %s, foreground [%s]"):format(
+      head,
+      tostring(info.shell_pid),
+      tostring(info.foreground_process_group_id),
+      table.concat(entries, "; ")
+    )
+  )
+  if type(chosen) ~= "table" or type(chosen.pid) ~= "number" then
+    log(("EVIDENCE FG: %s match by argv0 nil, by name nil (no foreground pid)"):format(label))
+    return
+  end
+  local function match(word)
+    if type(word) ~= "string" then
+      return "nil"
+    end
+    local found, match_err = proc.tool_of({ [tool.name] = tool }, chosen.pid, { word })
+    return found or (match_err and "error " .. match_err.msg) or "nil"
+  end
+  local argv0 = type(chosen.argv0) == "string" and vim.fs.basename(chosen.argv0) or nil
+  log(("EVIDENCE FG: %s match by argv0 %s, by name %s"):format(label, match(argv0), match(chosen.name)))
+end
+
+-- Evidence never stops a phase: whatever fg_read throws on an answer it did not expect is logged instead.
+local function fg_evidence(label, session)
+  local ok, thrown = pcall(fg_read, label, session)
+  if not ok then
+    log(("EVIDENCE FG: %s evidence failed: %s"):format(label, tostring(thrown)))
+  end
+end
+
 local function run()
   require("sidekick-ultra").setup({ rex = { enabled = false }, tmux = { enabled = false }, zellij = { enabled = false } })
   local registry = require("sidekick-ultra.registry")
@@ -255,6 +320,7 @@ local function run()
     check("attach", registry.attach(claude) == true)
     check("attached() keeps it", #registry.attached() == 1)
 
+    fg_evidence("send succeeds", claude)
     local ok, err = backend.send(claude, "hello-live", tools.get(claude.tool))
     check("send succeeds", ok ~= nil, err)
     vim.wait(800)
@@ -312,6 +378,7 @@ local function run()
     end
     for _, text in ipairs({ "-- TODO", "- @x" }) do
       local seen = #gots(read(pane))
+      fg_evidence("a9 send " .. text, claude)
       local ok, err = backend.send(claude, text, tools.get(claude.tool))
       vim.wait(800)
       if ok ~= nil then
@@ -404,6 +471,7 @@ local function run()
       observe("rediscovered session", fresh)
       check("rediscovered session is running", registry.is_running(fresh), fresh)
       check("attached entry survived rediscovery", #registry.attached() == 1)
+      fg_evidence("send to the started pane", fresh)
       local ok, send_err = backend.send(fresh, "start-live", tools.get(fresh.tool))
       check("send to the started pane", ok ~= nil, send_err)
       ok, send_err = backend.submit(fresh)
