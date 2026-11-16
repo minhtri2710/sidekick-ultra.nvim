@@ -235,25 +235,33 @@ end
 -- to (only shell_pid, foreground_process_group_id and each entry's pid, argv0, name; never argv, cmdline, cwd or the
 -- environment), and which word, argv0 or name, matches the tool. The entry is picked as herdr.lua's `foreground` does
 -- (not exported, so repeated here). Runs in the nvim driver, in the isolated environment, through the plugin's exec.
-local function fg_evidence(label, session)
+local function fg_read(label, session)
   local exec, proc = require("sidekick-ultra.exec"), require("sidekick-ultra.proc")
   local tool = require("sidekick-ultra.tools").get(session.tool)
   local head = ("EVIDENCE FG: %s pane %s"):format(label, session.pane_id)
+  if not tool then
+    log(head .. ": no configured tool " .. tostring(session.tool))
+    return
+  end
   local decoded, err = exec.json({ "herdr", "pane", "process-info", "--pane", session.pane_id })
-  local info = decoded and decoded.result and decoded.result.process_info
+  local info = type(decoded) == "table" and type(decoded.result) == "table" and decoded.result.process_info
   if type(info) ~= "table" then
     local why = err and ("exit " .. tostring(err.code) .. ", " .. tostring(err.stderr or err.msg)) or "no result.process_info"
     log(head .. ": process-info read failed: " .. why)
     return
   end
   local processes = type(info.foreground_processes) == "table" and info.foreground_processes or {}
-  local entries, chosen = {}, processes[1]
+  local entries = {}
   for _, process in ipairs(processes) do
     if type(process) == "table" then
       table.insert(entries, ("pid %s argv0 %s name %s"):format(tostring(process.pid), tostring(process.argv0), tostring(process.name)))
-      if process.pid == info.foreground_process_group_id then
-        chosen = process
-      end
+    end
+  end
+  local chosen = processes[1]
+  for _, process in ipairs(processes) do
+    if type(process) == "table" and process.pid == info.foreground_process_group_id then
+      chosen = process
+      break
     end
   end
   log(
@@ -277,6 +285,14 @@ local function fg_evidence(label, session)
   end
   local argv0 = type(chosen.argv0) == "string" and vim.fs.basename(chosen.argv0) or nil
   log(("EVIDENCE FG: %s match by argv0 %s, by name %s"):format(label, match(argv0), match(chosen.name)))
+end
+
+-- Evidence never stops a phase: whatever fg_read throws on an answer it did not expect is logged instead.
+local function fg_evidence(label, session)
+  local ok, thrown = pcall(fg_read, label, session)
+  if not ok then
+    log(("EVIDENCE FG: %s evidence failed: %s"):format(label, tostring(thrown)))
+  end
 end
 
 local function run()
