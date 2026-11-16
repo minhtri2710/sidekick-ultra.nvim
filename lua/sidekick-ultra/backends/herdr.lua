@@ -330,29 +330,6 @@ function M.start(tool, opts)
   end
   local agent, start_err = start_agent(start)
   if not agent then
-    -- herdr gave up waiting, but a tool in front is alive and only slow: closing the pane would kill it.
-    if envelope_code(start_err) == "timeout" then
-      local in_front, _, check_err = tool_in_front(new_id, tool)
-      if in_front then
-        return nil,
-          errors.new(
-            "backend_error",
-            ("herdr started %s but it was not ready after %d ms; pane %s was left open and nothing was sent"):format(
-              tool.name,
-              START_TIMEOUT_MS,
-              new_id
-            )
-          )
-      end
-      -- An unreadable pane gives no evidence that a tool is in front, so it is closed and the check's error is kept.
-      if check_err then
-        start_err.msg = ("%s (checking the foreground of pane %s also failed: %s)"):format(
-          start_err.msg,
-          new_id,
-          check_err.msg
-        )
-      end
-    end
     return close_failed(new_id, start_err)
   end
 

@@ -139,7 +139,7 @@ ln -s "$HERDR" "$R/bin/herdr"
 # (src/terminal/state.rs:2262-2269, src/cli/agent.rs:620-622); the stub sets an OSC window title that the claude and
 # codex manifests read as idle (src/detect/manifests/claude.toml:229-235, codex.toml:119-130). Whether that is enough
 # is settled by this run; the start phase reports UNVERIFIABLE, not FAIL, when herdr never sees the stub as ready (the
-# plugin then closes the new pane, or leaves it open when the stub is in front; the check counts the panes either way).
+# plugin then closes the new pane; the check counts the panes).
 make_stub() { # <name> <osc title>
   # An argument is a number of seconds to sleep before the title and the ready line (A10: a tool slow to become
   # interactive). The stub prints its arguments first, so the log shows whether herdr passed them.
@@ -366,14 +366,9 @@ local function run()
     if not session then
       local msg = err and err.msg or ""
       local backend_error = err and err.id == "backend_error"
-      if backend_error and msg:find("left open", 1, true) then
-        -- herdr timed out with the stub in front of the new pane: the backend keeps the pane (closing it would kill the
-        -- tool). The server stop of the teardown ends the pane's process; no step of this driver closes it.
-        log("UNVERIFIABLE start: UNVERIFIABLE with stubs, pane left open: " .. msg)
-        check("timed-out start with the tool in front left exactly one new pane", pane_count() == before + 1)
-      elseif backend_error and (msg:find('"code":"timeout"', 1, true) or msg:find("agent_start_failed", 1, true)) then
-        -- herdr never saw the stub as an interactive agent (it needs the screen state idle) and the stub was not in
-        -- front of the pane (or its foreground could not be read); the backend closes the pane.
+      if backend_error and (msg:find('"code":"timeout"', 1, true) or msg:find("agent_start_failed", 1, true)) then
+        -- herdr never saw the stub as an interactive agent (it needs the screen state idle); the backend closes the
+        -- pane.
         log("UNVERIFIABLE start: UNVERIFIABLE with stubs: " .. msg)
         check("failed start closed the pane it created", pane_count() == before)
       else
